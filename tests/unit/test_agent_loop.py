@@ -487,7 +487,7 @@ def test_amounts_reach_the_page_as_figures(executor: ToolExecutor) -> None:
         [
             Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "checking"}),)),
             Reply(
-                text="Your checking account holds two thousand four hundred eighty three dollars and fifty cents."
+                text="Checking holds two thousand four hundred eighty three dollars and fifty cents."
             ),
         ]
     )
