@@ -31,6 +31,10 @@ DEFAULT_MAX_TURNS = 20
 # How many turns a figure the bank gave stays quotable without a fresh lookup.
 RECALL_TURNS = 6
 
+# What an out-of-date tool result is replaced with. JSON, because that is what
+# the model expects in a tool message.
+STALE = '{"superseded": true, "note": "the account changed after this; look it up again"}'
+
 
 @dataclass
 class Conversation:
@@ -83,6 +87,21 @@ class Conversation:
         """
         cutoff = self.turn_index - within_turns
         return tuple(value for turn, at, value in self.sourced if turn >= cutoff and at == writes)
+
+    def invalidate_tool_results(self) -> None:
+        """Replace earlier tool results, because the account just changed.
+
+        A bill list fetched before a payment still says the bill is unpaid,
+        and a model reading its own context will answer from it. Telling it to
+        look again is advice it follows most of the time, which is the wrong
+        kind of guarantee for a bank. Removing the values is not advice.
+
+        The result of the change itself is appended after this runs, so it
+        survives -- it is the only one that is still true.
+        """
+        for message in self.messages:
+            if message.get("role") == "tool":
+                message["content"] = STALE
 
     def trim(self, max_turns: int = DEFAULT_MAX_TURNS) -> None:
         """Bound the history to whole turns, keeping the system prompt pinned.
@@ -156,7 +175,10 @@ class Agent:
         """
         self._ensure_system(conversation)
         pending = self.executor.pending
+        before = self.executor.writes
         outcome = self.executor.confirm() if confirmed else self.executor.cancel()
+        if self.executor.writes != before:
+            conversation.invalidate_tool_results()
 
         # A real tool name and a fresh id: duplicate ids across a session, or
         # a name absent from the schemas, are the kind of thing a stricter
@@ -212,7 +234,10 @@ class Agent:
                 break
 
             for call in reply.tool_calls:
+                before = self.executor.writes
                 outcome = self.executor.execute(call)
+                if self.executor.writes != before:
+                    conversation.invalidate_tool_results()
                 calls.append(call)
                 outcomes.append(outcome)
                 conversation.remember(outcome.sourced_cents, self.executor.writes)

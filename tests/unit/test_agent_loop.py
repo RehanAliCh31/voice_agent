@@ -495,3 +495,69 @@ def test_amounts_reach_the_page_as_figures(executor: ToolExecutor) -> None:
     assert out.guard_hit is False
     assert "$2,483.50" in out.text
     assert "thousand" not in out.text
+
+
+# --- a change makes every earlier lookup out of date ------------------------
+
+
+def test_paying_a_bill_invalidates_the_earlier_list(bank: SqliteBank) -> None:
+    """Reported in use: a bill paid, then still shown as unpaid.
+
+    The database was right; the model was reading the `list_bills` result
+    still sitting in its context from before the payment. Asking it to look
+    again is advice it follows most of the time, which is the wrong kind of
+    guarantee for a bank. The stale result is now removed from what it sees.
+    """
+    executor = ToolExecutor(bank)
+    conversation = Conversation("s1")
+    client = FakeLLMClient(
+        [
+            Reply(tool_calls=(ToolCall("c1", "list_bills", {}),)),
+            Reply(text="You have five unpaid bills."),
+            Reply(tool_calls=(ToolCall("c2", "pay_bill", {"bill": "electricity"}),)),
+            Reply(text="Pay your electricity bill — are you sure?"),
+            Reply(text="Done, your electricity bill is paid."),
+        ]
+    )
+    agent = Agent(client, executor)
+    agent.handle("what bills do I have?", conversation)
+    agent.handle("pay electricity", conversation)
+    agent.resolve_pending(True, conversation)
+
+    tool_messages = [m for m in conversation.messages if m["role"] == "tool"]
+    stale = [m for m in tool_messages if "superseded" in m["content"]]
+    assert stale, "the pre-payment bill list was still readable"
+    assert "electricity" not in stale[0]["content"], "the stale values survived"
+
+
+def test_the_result_of_the_change_itself_is_not_invalidated(bank: SqliteBank) -> None:
+    executor = ToolExecutor(bank)
+    conversation = Conversation("s1")
+    client = FakeLLMClient([Reply(text="Done.")])
+    executor.execute(ToolCall("c1", "pay_bill", {"bill": "electricity"}))
+
+    Agent(client, executor).resolve_pending(True, conversation)
+
+    last_tool = [m for m in conversation.messages if m["role"] == "tool"][-1]
+    assert "superseded" not in last_tool["content"]
+    assert "done" in last_tool["content"]
+
+
+def test_a_read_only_lookup_does_not_invalidate_anything(bank: SqliteBank) -> None:
+    executor = ToolExecutor(bank)
+    conversation = Conversation("s1")
+    client = FakeLLMClient(
+        [
+            Reply(tool_calls=(ToolCall("c1", "list_bills", {}),)),
+            Reply(text="Five unpaid."),
+            Reply(tool_calls=(ToolCall("c2", "list_accounts", {}),)),
+            Reply(text="Two accounts."),
+        ]
+    )
+    agent = Agent(client, executor)
+    agent.handle("bills?", conversation)
+    agent.handle("accounts?", conversation)
+
+    assert not [
+        m for m in conversation.messages if m["role"] == "tool" and "superseded" in m["content"]
+    ]
