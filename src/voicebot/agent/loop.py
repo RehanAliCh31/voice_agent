@@ -28,6 +28,9 @@ log = get_logger("agent.loop")
 DEFAULT_MAX_TOOL_ROUNDS = 4
 DEFAULT_MAX_TURNS = 20
 
+# How many turns a figure the bank gave stays quotable without a fresh lookup.
+RECALL_TURNS = 6
+
 
 @dataclass
 class Conversation:
@@ -36,6 +39,11 @@ class Conversation:
     session_id: str
     messages: list[dict[str, Any]] = field(default_factory=list)
     turn_index: int = 0
+    # Figures the bank has reported in this conversation, with the turn they
+    # came from, so the bot can restate a balance it looked up a moment ago
+    # without querying again. Only tool results land here -- never the model's
+    # own words, or an invented figure could launder itself by repetition.
+    sourced: list[tuple[int, int, int]] = field(default_factory=list)
 
     def append_user(self, text: str) -> None:
         self.messages.append({"role": "user", "content": text})
@@ -60,6 +68,21 @@ class Conversation:
         self.messages.append(
             {"role": "tool", "tool_call_id": call_id, "content": json.dumps(result)}
         )
+
+    def remember(self, cents: Sequence[int], writes: int) -> None:
+        """Record figures the bank gave on this turn, and what it knew then."""
+        self.sourced.extend((self.turn_index, writes, value) for value in cents)
+
+    def recall(self, writes: int, within_turns: int = RECALL_TURNS) -> tuple[int, ...]:
+        """Figures still worth repeating: recent, and not made stale by a write.
+
+        A balance reported before a transfer is not true after it. Quoting it
+        would be the bot stating a confident, wrong figure -- the exact failure
+        the guard exists to prevent, arriving by another road -- so anything
+        recorded before the latest write is dropped.
+        """
+        cutoff = self.turn_index - within_turns
+        return tuple(value for turn, at, value in self.sourced if turn >= cutoff and at == writes)
 
     def trim(self, max_turns: int = DEFAULT_MAX_TURNS) -> None:
         """Bound the history to whole turns, keeping the system prompt pinned.
@@ -145,6 +168,7 @@ class Agent:
             arguments=dict(pending.arguments) if pending else {},
         )
         conversation.append_assistant(Reply(tool_calls=(injected,)))
+        conversation.remember(outcome.sourced_cents, self.executor.writes)
         conversation.append_tool_result(call_id, outcome.result)
         conversation.trim(self.max_turns)
         # The injected call travels with its outcome, so the confirmed
@@ -191,6 +215,7 @@ class Agent:
                 outcome = self.executor.execute(call)
                 calls.append(call)
                 outcomes.append(outcome)
+                conversation.remember(outcome.sourced_cents, self.executor.writes)
                 conversation.append_tool_result(call.id, outcome.result)
 
         conversation.trim(self.max_turns)
@@ -205,7 +230,12 @@ class Agent:
         # someone who just said "transfer $400" is quoting them, not inventing
         # a fact -- and refusing to left the bot unable to take an instruction
         # at all, since every confirmation restated the amount.
-        allowed = sourced + _quoted(conversation) + _pending(self.executor)
+        allowed = (
+            sourced
+            + conversation.recall(self.executor.writes)
+            + _quoted(conversation)
+            + _pending(self.executor)
+        )
         checked, hit = guard(
             spoken,
             [o.result for o in outcomes],

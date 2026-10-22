@@ -100,6 +100,11 @@ class ToolExecutor:
         self.bank = bank
         self.ttl_s = ttl_s
         self.pending: PendingAction | None = None
+        # Counts balance-changing writes. A figure reported before a write is
+        # stale after it, and the count is how a caller knows. Kept here
+        # rather than in the agent so it cannot be bypassed -- the Yes button
+        # reaches the executor directly.
+        self.writes = 0
 
     # --- the public surface --------------------------------------------------
 
@@ -367,6 +372,7 @@ class ToolExecutor:
     def _transfer_money(self, arguments: dict[str, Any]) -> ToolOutcome:
         sent = arguments["amount_cents"]
         remaining = self.bank.transfer(sent, arguments["payee"], arguments["from_account"])
+        self.writes += 1
         return ToolOutcome(
             {
                 "status": "done",
@@ -381,6 +387,7 @@ class ToolExecutor:
 
     def _pay_bill(self, arguments: dict[str, Any]) -> ToolOutcome:
         paid = self.bank.pay_bill(arguments["bill"])
+        self.writes += 1
         return ToolOutcome(
             {
                 "status": "done",

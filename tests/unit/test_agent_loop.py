@@ -389,3 +389,92 @@ def test_a_figure_from_nowhere_is_still_caught(executor: ToolExecutor) -> None:
 
     assert out.guard_hit is True
     assert "31,415" not in out.text
+
+
+# --- figures the bank gave earlier in the same conversation -----------------
+
+
+def test_a_figure_from_an_earlier_lookup_can_be_restated(executor: ToolExecutor) -> None:
+    """Found in use: asking about a balance twice failed the second time.
+
+    The model answered the repeat from memory without calling the tool again.
+    The figures were right and had come from the bank -- on the previous turn.
+    """
+    conversation = Conversation("s1")
+    client = FakeLLMClient(
+        [
+            Reply(tool_calls=(ToolCall("c1", "list_accounts", {}),)),
+            Reply(text="Checking is $2,483.50 and savings is $19,020.00."),
+            Reply(text="Checking is $2,483.50 and savings is $19,020.00."),
+        ]
+    )
+    agent = Agent(client, executor)
+
+    first = agent.handle("what are my balances?", conversation)
+    second = agent.handle("tell me again", conversation)
+
+    assert first.guard_hit is False
+    assert second.guard_hit is False, "a figure the bank already gave was suppressed"
+    assert "2,483.50" in second.text
+
+
+def test_memory_does_not_admit_a_figure_the_bank_never_gave(
+    executor: ToolExecutor,
+) -> None:
+    conversation = Conversation("s1")
+    client = FakeLLMClient(
+        [
+            Reply(tool_calls=(ToolCall("c1", "list_accounts", {}),)),
+            Reply(text="Checking is $2,483.50."),
+            Reply(text="Your savings balance is $31,415.00."),
+        ]
+    )
+    agent = Agent(client, executor)
+    agent.handle("balances?", conversation)
+    out = agent.handle("and savings?", conversation)
+
+    assert out.guard_hit is True
+
+
+def test_a_suppressed_figure_does_not_become_quotable(executor: ToolExecutor) -> None:
+    # The model's own text is never a source, or an invented figure would
+    # launder itself simply by being repeated.
+    conversation = Conversation("s1")
+    client = FakeLLMClient(
+        [
+            Reply(text="Your balance is $31,415.00."),
+            Reply(text="As I said, $31,415.00."),
+        ]
+    )
+    agent = Agent(client, executor)
+    agent.handle("balance?", conversation)
+    out = agent.handle("say that again", conversation)
+
+    assert out.guard_hit is True
+
+
+def test_moving_money_forgets_the_balances_it_made_stale(bank: SqliteBank) -> None:
+    """A balance reported before a transfer is no longer true after it.
+
+    Remembering it would let the bot state yesterday's figure with full
+    confidence, which is the failure this guard exists to prevent -- arriving
+    by a different road.
+    """
+    executor = ToolExecutor(bank)
+    conversation = Conversation("s1")
+    client = FakeLLMClient(
+        [
+            Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "checking"}),)),
+            Reply(text="Your checking balance is $2,483.50."),
+            Reply(tool_calls=(ToolCall("c2", "transfer_money", TRANSFER),)),
+            Reply(text="Transfer $50.00 to sarah. Shall I go ahead?"),
+            Reply(text="Your checking balance is $2,483.50."),
+        ]
+    )
+    agent = Agent(client, executor)
+    agent.handle("balance?", conversation)
+    agent.handle("send sarah fifty", conversation)
+    executor.confirm()
+
+    out = agent.handle("what's my balance now?", conversation)
+    assert out.guard_hit is True, "the pre-transfer balance was still quotable"
