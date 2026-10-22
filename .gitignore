@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Editors
+.vscode/
+.idea/
+
+# Data and model artefacts — reproducible, and too large for a repo
+data/raw/
+data/interim/
+data/processed/
+data/synthetic/
+checkpoints/
+results/**/*.json
+*.wav
+
+# Generated at runtime
+*.db
+*.sqlite3
+
+# Secrets — never commit
+.env
+kaggle.json

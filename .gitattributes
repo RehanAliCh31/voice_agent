@@ -1,0 +1,8 @@
+# Line endings are normalised to LF in the repository and checked out native,
+# so the same file is byte-identical for every contributor regardless of OS.
+* text=auto
+
+# Binary formats — never convert, never diff as text.
+*.png binary
+*.wav binary
+*.pt  binary

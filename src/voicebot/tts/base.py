@@ -1,0 +1,31 @@
+"""TTS stage interface and a dependency-free fake."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+import numpy as np
+
+from voicebot.schemas import AudioBuffer
+from voicebot.utils.registry import register
+
+
+class TTSEngine(ABC):
+    """Turns text into speech."""
+
+    @abstractmethod
+    def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
+        """Synthesize one reply."""
+
+
+@register("tts", "fake")
+class FakeTTSEngine(TTSEngine):
+    """Returns silence proportional to the text length. Used by tests."""
+
+    def __init__(self, sample_rate: int = 16000, seconds_per_char: float = 0.05) -> None:
+        self.sample_rate = sample_rate
+        self.seconds_per_char = seconds_per_char
+
+    def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
+        n = max(1, int(len(text) * self.seconds_per_char * self.sample_rate))
+        return AudioBuffer(samples=np.zeros(n, dtype=np.float32), sample_rate=self.sample_rate)

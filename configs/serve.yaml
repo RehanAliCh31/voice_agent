@@ -1,0 +1,16 @@
+asr:
+  engine: whisper
+  model_name: openai/whisper-base.en
+  device: auto
+  language: en
+
+nlu:
+  engine: joint
+  checkpoint: ""
+  max_length: 64
+  device: auto
+
+tts:
+  engine: vits
+  model_name: facebook/mms-tts-eng
+  device: auto

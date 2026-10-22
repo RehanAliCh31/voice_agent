@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voicebot"
+version = "0.1.0"
+description = "Cascaded speech-to-speech conversational voice bot"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "pydantic>=2.6",
+    "torch>=2.2",
+    "transformers>=4.40",
+    "scikit-learn>=1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.4", "black>=24.0", "mypy>=1.9", "types-PyYAML>=6.0"]
+serve = ["fastapi>=0.110", "uvicorn>=0.29", "gradio>=4.26", "nest-asyncio>=1.6", "python-multipart>=0.0.9"]
+speech = ["faster-whisper>=1.0", "soundfile>=0.12", "librosa>=0.10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# The frontend is package data, not a loose directory: it then ships
+# inside a wheel exactly as it does in an editable install.
+[tool.setuptools.package-data]
+voicebot = ["api/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Where first-party code lives, so imports from scripts/ sort as ours.
+src = ["src", "scripts"]
+
+[tool.ruff.lint]
+# Pinned explicitly: relying on ruff's default selection means a ruff
+# upgrade can fail the lint with no code change.
+select = ["E", "F", "I", "UP", "RUF"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
