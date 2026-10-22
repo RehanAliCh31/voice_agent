@@ -36,3 +36,6 @@ results/**/*.json
 # Secrets — never commit
 .env
 kaggle.json
+
+# Scratch workspace for plan execution
+.superpowers/
