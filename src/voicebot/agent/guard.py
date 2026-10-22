@@ -40,11 +40,45 @@ log = get_logger("agent.guard")
 _USD_WORDS = r"dollars?|usd|bucks?|cents?"
 _OTHER_CURRENCY = r"pounds?|sterling|gbp|euros?|eur|rupees?|pkr|yen|jpy"
 
-_NUMBER_WORDS = (
-    r"zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
-    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
-    r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million"
-)
+# Spoken replies spell amounts out, so they have to be read rather than
+# refused. Written here rather than pulled from a library: the vocabulary a
+# bank assistant uses is this list, and a dependency for forty words is a
+# dependency to keep up to date for forty words.
+_UNITS: dict[str, int] = {
+    "zero": 0,
+    "a": 1,
+    "an": 1,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+}
+_SCALES: dict[str, int] = {"hundred": 100, "thousand": 1_000, "million": 1_000_000}
+
+_NUMBER_WORDS = "|".join(sorted(set(_UNITS) | set(_SCALES), key=len, reverse=True))
 
 # Digits that are money: a currency symbol either side, a currency word after,
 # or two decimal places.
@@ -64,8 +98,9 @@ _PREFIXED = re.compile(rf"\b(?:{_USD_WORDS})\s+(?P<amount>\d[\d,]*(?:\.\d+)?)\b"
 # recovered reliably, and does not need to be: the prompt tells the model to
 # write figures in digits, so words are a violation by policy.
 _SPELLED = re.compile(
-    rf"\b(?:{_NUMBER_WORDS})(?:[\s-]+(?:and[\s-]+)?(?:{_NUMBER_WORDS}))*\s+"
-    rf"(?:{_USD_WORDS}|{_OTHER_CURRENCY})\b",
+    rf"\b(?P<whole>(?:{_NUMBER_WORDS})(?:[\s-]+(?:and[\s-]+)?(?:{_NUMBER_WORDS}))*)"
+    rf"\s+(?:{_USD_WORDS})\b"
+    rf"(?:\s+and\s+(?P<cents>(?:{_NUMBER_WORDS})(?:[\s-]+(?:{_NUMBER_WORDS}))*)\s+cents?\b)?",
     re.IGNORECASE,
 )
 
@@ -78,6 +113,36 @@ _FOREIGN = re.compile(
 )
 
 
+def words_to_number(words: str) -> int | None:
+    """Read an English number phrase. Returns None if it is not one.
+
+    Scales multiply what precedes them and accumulate: "nineteen thousand
+    twenty" is 19,000 then 20, and "eight hundred twenty" is 800 then 20.
+    """
+    tokens = [w for w in re.split(r"[\s-]+", words.lower().strip()) if w and w != "and"]
+    if not tokens:
+        return None
+
+    total = 0
+    current = 0
+    seen = False
+    for token in tokens:
+        if token in _UNITS:
+            current += _UNITS[token]
+            seen = True
+        elif token in _SCALES:
+            scale = _SCALES[token]
+            if scale == 100:
+                current = max(current, 1) * scale
+            else:
+                total += max(current, 1) * scale
+                current = 0
+            seen = True
+        else:
+            return None
+    return total + current if seen else None
+
+
 def _to_decimal(raw: str) -> Decimal | None:
     try:
         return Decimal(raw.replace(",", ""))
@@ -86,7 +151,7 @@ def _to_decimal(raw: str) -> Decimal | None:
 
 
 def money_in_text(text: str) -> list[Decimal]:
-    """Every money figure the sentence states in digits, in order."""
+    """Every money figure the sentence states, in digits or in words."""
     found: list[Decimal] = []
     for match in _MONEY.finditer(text or ""):
         raw = match.group("symbol") or match.group("worded") or match.group("decimal")
@@ -97,23 +162,27 @@ def money_in_text(text: str) -> list[Decimal]:
         value = _to_decimal(match.group("amount"))
         if value is not None:
             found.append(value)
+    for match in _SPELLED.finditer(text or ""):
+        whole = words_to_number(match.group("whole"))
+        if whole is None:
+            continue
+        amount = Decimal(whole)
+        cents = words_to_number(match.group("cents") or "") if match.group("cents") else None
+        if cents is not None:
+            amount += Decimal(cents) / 100
+        found.append(amount)
     return found
 
 
 def unverifiable_figure(text: str) -> str | None:
     """A figure that cannot be checked at all. Returns what was found, or None.
 
-    Spelled-out amounts and foreign currencies are violations outright: the
-    first because its value cannot be recovered, the second because this bank
-    holds one currency, so any other one was converted.
+    Only foreign currencies qualify. This bank holds one, so an amount in
+    another was converted -- which the prompt forbids and no tool could have
+    produced. Amounts written in words are read and checked like any other.
     """
-    spelled = _SPELLED.search(text or "")
-    if spelled:
-        return spelled.group(0)
     foreign = _FOREIGN.search(text or "")
-    if foreign:
-        return foreign.group(0)
-    return None
+    return foreign.group(0) if foreign else None
 
 
 def allowed_values(sourced_cents: Iterable[int]) -> set[Decimal]:

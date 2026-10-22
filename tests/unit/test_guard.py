@@ -194,3 +194,81 @@ def test_the_fallback_cannot_speak_a_laundered_figure() -> None:
 
     assert "31,415" not in fallback_sentence((1_902_000,))
     assert "19,020.00" in fallback_sentence((1_902_000,))
+
+
+# --- figures the model writes in words ---------------------------------------
+#
+# Replies are spoken aloud, so the model writes amounts the way a person says
+# them. An earlier version treated any spelled-out figure as unverifiable and
+# suppressed it, which silenced entirely correct answers -- "savings is at
+# nineteen thousand twenty dollars" against a real balance of $19,020.00.
+# They are parsed and checked like any other figure now.
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("nineteen thousand twenty dollars", [Decimal("19020")]),
+        ("two hundred dollars", [Decimal("200")]),
+        ("eighteen thousand eight hundred twenty dollars", [Decimal("18820")]),
+        ("two thousand four hundred and eighty three dollars", [Decimal("2483")]),
+        ("fifty dollars", [Decimal("50")]),
+        ("zero dollars", [Decimal("0")]),
+        ("a hundred dollars", [Decimal("100")]),
+        ("one million dollars", [Decimal("1000000")]),
+        ("fifty dollars and fifty cents", [Decimal("50.50")]),
+        ("two hundred dollars and five cents", [Decimal("200.05")]),
+    ],
+)
+def test_amounts_written_in_words_are_read(text: str, expected: list[Decimal]) -> None:
+    assert money_in_text(text) == expected
+
+
+def test_a_correct_spelled_out_figure_passes() -> None:
+    text, hit = guard("Savings is at nineteen thousand twenty dollars.", [], FALLBACK, (SAVINGS,))
+    assert hit is False
+    assert text.startswith("Savings")
+
+
+def test_a_wrong_spelled_out_figure_is_caught() -> None:
+    _, hit = guard("Savings is at forty two thousand dollars.", [], FALLBACK, (SAVINGS,))
+    assert hit is True
+
+
+def test_the_reported_sentence_now_passes() -> None:
+    # Verbatim from the failure report, with the balances it was reported against.
+    text, hit = guard(
+        "You've got two accounts. Checking is at zero, and savings is at "
+        "nineteen thousand twenty dollars.",
+        [],
+        FALLBACK,
+        (0, SAVINGS),
+    )
+    assert hit is False
+
+
+def test_the_reported_transfer_sentence_now_passes() -> None:
+    text, hit = guard(
+        "Done. Two hundred dollars is on its way to Sara, and your savings now "
+        "shows eighteen thousand eight hundred twenty dollars.",
+        [],
+        FALLBACK,
+        (20_000, 1_882_000),
+    )
+    assert hit is False
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "It should arrive in five working days.",
+        "You have two accounts.",
+        "The card ending 4417 is now frozen.",
+        "I can help with four things.",
+    ],
+)
+def test_number_words_without_a_currency_are_not_figures(sentence: str) -> None:
+    # "two accounts" and "five working days" are not amounts.
+    assert money_in_text(sentence) == []
+    _, hit = guard(sentence, [], FALLBACK, ())
+    assert hit is False
