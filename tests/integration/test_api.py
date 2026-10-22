@@ -1,230 +1,297 @@
-"""The HTTP surface, driven through FastAPI's TestClient.
+"""The HTTP surface, end to end, on fake engines.
 
-No VOICEBOT_CONFIG is set, so the app builds with the fake engines: the whole
-API is exercised with no checkpoint, no download and no GPU.
+The whole service is exercised with no model, no endpoint and no network: the
+fake LLM client is scripted, the bank is in memory, and the TestClient runs
+the real lifespan. What these tests cannot cover is the model's judgement;
+what they do cover is that no amount of model behaviour can move money without
+a confirmation, and that the page is still served.
 """
 
-import base64
+from __future__ import annotations
+
+from collections.abc import Iterator
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from voicebot.api.app import create_app
-from voicebot.pipeline.audio_io import decode_wav, encode_wav
+from voicebot.config import AppConfig
+from voicebot.llm.base import FakeLLMClient, Reply, ToolCall
+from voicebot.pipeline.audio_io import encode_wav
 from voicebot.schemas import AudioBuffer
+
+TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
 
 
 def _wav(seconds: float = 1.0, rate: int = 16_000, silent: bool = False) -> bytes:
     t = np.linspace(0, seconds, int(rate * seconds), endpoint=False, dtype=np.float32)
-    samples = np.zeros_like(t) if silent else (0.5 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    samples = np.zeros_like(t) if silent else (0.5 * np.sin(2 * np.pi * 220 * t))
     return encode_wav(AudioBuffer(samples=samples.astype(np.float32), sample_rate=rate))
 
 
 @pytest.fixture
-def client():
+def client() -> Iterator[TestClient]:
     # The context manager is what runs the lifespan, which loads the engines.
     with TestClient(create_app()) as test_client:
         yield test_client
 
 
+def scripted(app_client: TestClient, replies: list[Reply]) -> FakeLLMClient:
+    """Replace the service's LLM with a script, for one test."""
+    fake = FakeLLMClient(replies)
+    app_client.app.state.services.llm = fake
+    return fake
+
+
+def browser_tts(app_client: TestClient) -> None:
+    from voicebot.tts.browser import BrowserTTSEngine
+
+    app_client.app.state.services.tts = BrowserTTSEngine()
+
+
 # --- operational -------------------------------------------------------------
 
 
-def test_health_reports_ok_and_a_version(client):
+def test_health_reports_ok_and_a_version(client: TestClient) -> None:
     body = client.get("/health").json()
     assert body["status"] == "ok"
     assert body["version"]
 
 
-def test_ready_names_the_engines_actually_loaded(client):
+def test_ready_names_the_llm_not_an_nlu(client: TestClient) -> None:
     body = client.get("/ready").json()
     assert body["ready"] is True
     assert body["asr"] == "FakeASREngine"
-    assert body["nlu"] == "FakeNLUEngine"
-    assert body["tts"] == "FakeTTSEngine"
-    assert body["device"] in {"cpu", "cuda"}
+    assert body["llm"] == "FakeLLMClient"
+    assert "nlu" not in body
 
 
-def test_metrics_is_prometheus_text(client):
-    client.post("/v1/chat", json={"text": "what is my balance"})
-    text = client.get("/metrics").text
-    assert "voicebot_turns_total" in text
-    assert "# TYPE voicebot_turns_total counter" in text
-    assert "voicebot_actions_total{action=" in text
+def test_metrics_exposes_tool_calls_and_the_guard_hit_rate(client: TestClient) -> None:
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "savings"}),)),
+            Reply(text="Your savings balance is $19,020.00."),
+        ],
+    )
+    client.post("/v1/chat", json={"text": "balance?"})
+
+    body = client.get("/metrics").text
+    assert "voicebot_turns_total 1" in body
+    assert 'voicebot_tool_calls_total{tool="get_balance"} 1' in body
+    assert "voicebot_guard_hits_total 0" in body
 
 
-def test_metrics_counts_turns(client):
-    before = client.get("/metrics").text
-    assert "voicebot_turns_total 0" in before
-    client.post("/v1/chat", json={"text": "what is my balance"})
-    client.post("/v1/chat", json={"text": "what is my balance"})
-    assert "voicebot_turns_total 2" in client.get("/metrics").text
+def test_the_guard_hit_counter_rises_when_a_figure_is_invented(client: TestClient) -> None:
+    scripted(client, [Reply(text="Your balance is $31,415.00.")])
+    client.post("/v1/chat", json={"text": "balance?"})
+    assert "voicebot_guard_hits_total 1" in client.get("/metrics").text
 
 
-# --- one stage at a time -----------------------------------------------------
+# --- a turn ------------------------------------------------------------------
 
 
-def test_transcribe_returns_text_and_confidence(client):
-    response = client.post("/v1/transcribe", files={"audio": ("a.wav", _wav(), "audio/wav")})
-    assert response.status_code == 200
-    body = response.json()
-    assert body["text"]  # the fake returns a fixed sentence
-    assert 0.0 <= body["confidence"] <= 1.0
-    assert body["duration_s"] == pytest.approx(1.0, abs=0.01)
+def test_a_chat_turn_returns_the_new_shape(client: TestClient) -> None:
+    scripted(client, [Reply(text="Hello there.")])
+    body = client.post("/v1/chat", json={"text": "hello"}).json()
 
-
-def test_understand_returns_intent_and_scores(client):
-    body = client.post("/v1/understand", json={"text": "What is my balance?"}).json()
-    assert body["intent"]
-    assert 0.0 <= body["intent_confidence"] <= 1.0
-    assert "is_out_of_scope" in body
-
-
-def test_understand_normalises_before_classifying(client):
-    """The endpoint must apply the same normalisation the pipeline does."""
-    body = client.post("/v1/understand", json={"text": "   "}).json()
-    assert body["is_out_of_scope"] is True
-
-
-def test_speak_returns_decodable_wav(client):
-    body = client.post("/v1/speak", json={"text": "your balance is fifty dollars"}).json()
-    audio = decode_wav(base64.b64decode(body["audio_b64"]))
-    assert audio.sample_rate == body["sample_rate"]
-    assert audio.duration_s > 0
-
-
-def test_speak_rejects_empty_text(client):
-    assert client.post("/v1/speak", json={"text": "   "}).status_code == 400
-
-
-# --- a whole turn ------------------------------------------------------------
-
-
-def test_chat_returns_the_full_inspector_payload(client):
-    body = client.post("/v1/chat", json={"text": "what is my checking balance"}).json()
-
+    assert body["reply"] == "Hello there."
+    assert body["tool_calls"] == []
+    assert body["guard_hit"] is False
     assert body["session_id"]
-    assert body["text"] == "what is my checking balance"
-    assert "intent" in body["understanding"]
-    assert body["action"]["type"]
-    assert body["action"]["text"]
-    assert "total" in body["latency_ms"]
-    assert body["audio_b64"]
+    # A typed turn skips the microphone, so only the stages that ran report --
+    # and none of v1's stages exist any more.
+    stages = set(body["latency_ms"])
+    assert {"agent", "tts"} <= stages
+    assert not stages & {"nlu", "dialogue", "normalize"}
 
 
-def test_converse_accepts_audio_and_returns_audio(client):
-    response = client.post(
-        "/v1/converse",
-        files={"audio": ("a.wav", _wav(), "audio/wav")},
-        data={"session_id": "fixed-session"},
+def test_a_tool_call_is_reported_for_the_inspector(client: TestClient) -> None:
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "savings"}),)),
+            Reply(text="Your savings balance is $19,020.00."),
+        ],
     )
+    body = client.post("/v1/chat", json={"text": "balance?"}).json()
+
+    call = body["tool_calls"][0]
+    assert call["name"] == "get_balance"
+    assert call["arguments"] == {"account": "savings"}
+    assert call["result"]["balance"] == "$19,020.00"
+
+
+def test_converse_accepts_audio(client: TestClient) -> None:
+    scripted(client, [Reply(text="Hello there.")])
+    response = client.post("/v1/converse", files={"audio": ("turn.wav", _wav(), "audio/wav")})
     assert response.status_code == 200
-    body = response.json()
-    assert body["session_id"] == "fixed-session"
-    assert body["transcript"]["text"]
-    assert decode_wav(base64.b64decode(body["audio_b64"])).duration_s > 0
+    assert response.json()["reply"] == "Hello there."
 
 
-def test_silence_is_answered_with_a_clarification(client):
+def test_silence_is_answered_without_calling_the_model(client: TestClient) -> None:
+    fake = scripted(client, [])  # any call raises
     body = client.post(
-        "/v1/converse", files={"audio": ("a.wav", _wav(silent=True), "audio/wav")}
+        "/v1/converse", files={"audio": ("turn.wav", _wav(silent=True), "audio/wav")}
     ).json()
-    assert body["action"]["type"] == "clarify"
-    assert body["text"] == ""
+
+    assert body["reply"]
+    assert fake.calls == []
 
 
-# --- sessions ----------------------------------------------------------------
+def test_a_session_id_is_issued_when_none_is_given(client: TestClient) -> None:
+    scripted(client, [Reply(text="hi")])
+    assert len(client.post("/v1/chat", json={"text": "hello"}).json()["session_id"]) == 32
 
 
-def test_a_session_id_is_issued_when_none_is_given(client):
+def test_the_conversation_persists_within_a_session(client: TestClient) -> None:
+    fake = scripted(client, [Reply(text="one"), Reply(text="two")])
     first = client.post("/v1/chat", json={"text": "hello"}).json()
-    second = client.post("/v1/chat", json={"text": "hello"}).json()
-    assert first["session_id"] != second["session_id"]
+    client.post("/v1/chat", json={"text": "again", "session_id": first["session_id"]})
+
+    assert len(fake.calls[1][0]) > len(fake.calls[0][0])
 
 
-def test_conversation_state_persists_within_a_session(client):
-    first = client.post("/v1/chat", json={"text": "transfer money"}).json()
-    sid = first["session_id"]
-    assert first["action"]["type"] == "ask_slot"
-
-    second = client.post("/v1/chat", json={"text": "transfer money", "session_id": sid}).json()
-    assert second["session_id"] == sid
-    # The second turn continues the same task rather than starting over.
-    assert second["action"]["intent"] == first["action"]["intent"]
+# --- speech out --------------------------------------------------------------
 
 
-def test_a_transfer_persists_across_turns_in_one_session(client):
-    """The bug this pins.
+def test_browser_tts_returns_no_audio_but_asks_the_page_to_speak(client: TestClient) -> None:
+    browser_tts(client)
+    scripted(client, [Reply(text="Hello there.")])
+    body = client.post("/v1/chat", json={"text": "hello"}).json()
 
-    The bank used to be rebuilt per request, so a transfer completed, the
-    reply said the balance had changed, and the next turn read the original
-    balance again. The money never actually moved.
-    """
-    sid = "money-session"
-    services = client.app.state.services
-
-    services.sessions.get(sid).bank.transfer(5_000, "sarah", "checking")
-
-    # A LATER request in the same session must see the reduced balance.
-    client.post("/v1/chat", json={"text": "what is my balance", "session_id": sid})
-    assert services.sessions.get(sid).bank.balances["checking"] == 243_350
+    assert body["audio_b64"] is None
+    assert body["speak_client_side"] is True
 
 
-def test_two_sessions_have_independent_accounts(client):
-    services = client.app.state.services
-    a = services.sessions.get("session-a").bank
-    b = services.sessions.get("session-b").bank
+def test_a_server_side_engine_still_returns_audio(client: TestClient) -> None:
+    scripted(client, [Reply(text="Hello there.")])
+    body = client.post("/v1/chat", json={"text": "hello"}).json()
 
-    a.transfer(10_000, "sarah", "checking")
-    assert a.balances["checking"] == 238_350
-    assert b.balances["checking"] == 248_350, "one session spent another's money"
+    assert body["audio_b64"]
+    assert body["speak_client_side"] is False
 
 
-def test_ending_a_session_forgets_it(client):
-    sid = "ending-session"
-    client.post("/v1/chat", json={"text": "hello", "session_id": sid})
-    services = client.app.state.services
-    services.sessions.get(sid).bank.transfer(1_000, "sarah", "checking")
-
-    assert client.delete(f"/v1/session/{sid}").json()["status"] == "ended"
-    # a fresh conversation under the same id starts from the seeded balance
-    assert services.sessions.get(sid).bank.balances["checking"] == 248_350
+# --- confirmation ------------------------------------------------------------
 
 
-# --- bad input ---------------------------------------------------------------
-
-
-def test_an_empty_upload_is_rejected(client):
-    response = client.post("/v1/converse", files={"audio": ("a.wav", b"", "audio/wav")})
-    assert response.status_code == 400
-    assert "No audio" in response.json()["detail"]
-
-
-def test_a_non_wav_upload_is_rejected_with_a_reason(client):
-    response = client.post(
-        "/v1/converse", files={"audio": ("a.wav", b"not a wav file at all", "audio/wav")}
+def test_confirm_executes_the_pending_action(client: TestClient) -> None:
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Transfer $50.00 to sarah from checking. Shall I go ahead?"),
+            Reply(text="Done. $50.00 sent to sarah."),
+        ],
     )
-    assert response.status_code == 400
-    assert "Could not read" in response.json()["detail"]
+    bank = client.app.state.services.bank
+    session_id = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"]
+    assert bank.balance("checking") == 248_350  # nothing yet
+
+    body = client.post("/v1/confirm", json={"session_id": session_id}).json()
+
+    assert body["reply"]
+    assert bank.balance("checking") == 243_350
 
 
-def test_oversized_audio_is_refused_before_decoding(client):
-    oversized = b"RIFF" + b"\x00" * (11 * 1024 * 1024)
-    response = client.post("/v1/converse", files={"audio": ("a.wav", oversized, "audio/wav")})
-    assert response.status_code == 413
-    assert "limit" in response.json()["detail"]
+def test_cancel_leaves_the_money_alone(client: TestClient) -> None:
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Transfer $50.00 to sarah. Shall I go ahead?"),
+            Reply(text="No problem, cancelled."),
+        ],
+    )
+    bank = client.app.state.services.bank
+    session_id = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"]
+
+    client.post("/v1/cancel", json={"session_id": session_id})
+
+    assert bank.balance("checking") == 248_350
 
 
-def test_a_missing_audio_field_is_a_validation_error(client):
-    assert client.post("/v1/converse").status_code == 422
+def test_confirm_with_no_pending_action_answers_cleanly(client: TestClient) -> None:
+    # The user clicks Yes twice, or clicks it after a restart.
+    scripted(client, [Reply(text="There wasn't anything waiting.")])
+    response = client.post("/v1/confirm", json={"session_id": "fresh"})
+
+    assert response.status_code == 200
+    assert response.json()["reply"]
 
 
-# --- documentation -----------------------------------------------------------
+def test_one_session_cannot_confirm_anothers_transfer(client: TestClient) -> None:
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Shall I go ahead?"),
+            Reply(text="Nothing was pending."),
+        ],
+    )
+    bank = client.app.state.services.bank
+    client.post("/v1/chat", json={"text": "send sarah fifty", "session_id": "tab-one"})
+
+    client.post("/v1/confirm", json={"session_id": "tab-two"})
+
+    assert bank.balance("checking") == 248_350
 
 
-def test_the_openapi_schema_documents_every_endpoint(client):
-    paths = client.get("/openapi.json").json()["paths"]
-    assert {"/health", "/ready", "/metrics"} <= set(paths)
-    assert {"/v1/transcribe", "/v1/understand", "/v1/speak"} <= set(paths)
-    assert {"/v1/converse", "/v1/chat"} <= set(paths)
+# --- housekeeping ------------------------------------------------------------
+
+
+def test_reset_restores_the_seeded_balances(client: TestClient) -> None:
+    bank = client.app.state.services.bank
+    bank.transfer(5_000, "sarah", "checking")
+
+    assert client.post("/v1/reset", json={}).json()["status"] == "reset"
+    assert bank.balance("checking") == 248_350
+
+
+def test_reset_keeps_the_audit_log(client: TestClient) -> None:
+    scripted(client, [Reply(text="hi")])
+    client.post("/v1/chat", json={"text": "hello"})
+    before = client.app.state.services.bank.turn_count()
+
+    client.post("/v1/reset", json={})
+
+    assert client.app.state.services.bank.turn_count() == before
+
+
+def test_ending_a_session_forgets_it(client: TestClient) -> None:
+    scripted(client, [Reply(text="hi")])
+    session_id = client.post("/v1/chat", json={"text": "hello"}).json()["session_id"]
+    assert client.delete(f"/v1/session/{session_id}").json()["status"] == "ended"
+
+
+def test_the_per_stage_nlu_route_is_gone(client: TestClient) -> None:
+    # The static mount at the root answers an unrouted POST with 405 rather
+    # than 404; either way nothing handles it any more.
+    assert client.post("/v1/understand", json={"text": "x"}).status_code != 200
+
+
+# --- the front end -----------------------------------------------------------
+
+
+def test_the_page_is_served_at_the_root(client: TestClient) -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "<!doctype html>" in response.text.lower()
+
+
+@pytest.mark.parametrize("asset", ["app.css", "app.js", "vad.js"])
+def test_every_asset_the_page_asks_for_is_served(client: TestClient, asset: str) -> None:
+    assert client.get(f"/{asset}").status_code == 200
+
+
+def test_the_api_still_wins_over_the_static_mount(client: TestClient) -> None:
+    # The static files are mounted at the root, so an API path that fell
+    # through to them would 404 instead of answering.
+    assert client.get("/health").json()["status"] == "ok"
+
+
+def test_a_bare_config_starts_with_fakes_and_an_in_memory_bank() -> None:
+    config = AppConfig()
+    assert config.llm.engine == "fake"
+    assert config.database.path == ":memory:"

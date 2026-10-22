@@ -1,30 +1,27 @@
 """The whole turn: audio in, audio out.
 
-This is the only place the five stages meet. Each one is held behind its
-interface, so the pipeline is identical whether it is driving fake engines in
-a test or RoBERTa and Whisper on a GPU.
+This is the only place the four stages meet. Each one is held behind its
+interface, so the pipeline is identical whether it is driving fakes in a test
+or Whisper and a 27B model over the network.
+
+v1 ran a normalisation stage between the ASR and the NLU, rewriting Whisper's
+output into the lowercased, punctuation-free form the trained model expected.
+There is no such stage now: casing and punctuation are signal to a language
+model, and stripping them would be deliberate damage.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import numpy as np
 
+from voicebot.agent.loop import Agent, AgentResult, Conversation
 from voicebot.asr.base import ASREngine
-from voicebot.asr.normalizer import normalize
-from voicebot.dialogue.manager import DialogueManager
-from voicebot.nlu.base import NLUEngine
 from voicebot.pipeline.audio_io import is_silent, trim_silence
 from voicebot.pipeline.latency import LatencyBreakdown, LatencyTracker
-from voicebot.schemas import (
-    ActionType,
-    AudioBuffer,
-    BotAction,
-    DialogueState,
-    Transcript,
-    Understanding,
-)
+from voicebot.schemas import AudioBuffer, Transcript
 from voicebot.tts.base import TTSEngine
 from voicebot.utils.logging import get_logger
 
@@ -33,6 +30,10 @@ log = get_logger("pipeline.orchestrator")
 NOT_CAUGHT = "I didn't catch that. Could you say it again?"
 SILENCE = np.zeros(0, dtype=np.float32)
 
+# Whisper returns punctuation-only strings on room tone -- "...", ".", "?!".
+# Anything with no letter or digit in it carries no request.
+_HAS_CONTENT = re.compile(r"[A-Za-z0-9]")
+
 
 @dataclass(frozen=True)
 class TurnResult:
@@ -40,8 +41,7 @@ class TurnResult:
 
     transcript: Transcript
     text: str
-    understanding: Understanding
-    action: BotAction
+    agent: AgentResult
     audio: AudioBuffer
     latency: LatencyBreakdown
 
@@ -52,18 +52,16 @@ class VoicePipeline:
     def __init__(
         self,
         asr: ASREngine,
-        nlu: NLUEngine,
+        agent: Agent,
         tts: TTSEngine,
-        manager: DialogueManager | None = None,
         speak: bool = True,
     ) -> None:
         self.asr = asr
-        self.nlu = nlu
+        self.agent = agent
         self.tts = tts
-        self.manager = manager or DialogueManager()
         self.speak = speak
 
-    def converse(self, audio: AudioBuffer, state: DialogueState) -> TurnResult:
+    def converse(self, audio: AudioBuffer, conversation: Conversation) -> TurnResult:
         """Audio in, audio out."""
         tracker = LatencyTracker()
 
@@ -72,8 +70,8 @@ class VoicePipeline:
             heard_something = not is_silent(trimmed)
 
         # Guard here, not only inside the ASR engine. A new engine that forgets
-        # to check would otherwise let silence through to the NLU, and running
-        # a speech model on room tone is both wasted time and an invitation to
+        # to check would otherwise let silence through, and running a speech
+        # model on room tone is both wasted time and an invitation to
         # hallucinate. Checking first also skips the expensive call entirely.
         if not heard_something:
             return self._nothing_heard(
@@ -83,35 +81,14 @@ class VoicePipeline:
         with tracker.stage("asr"):
             transcript = self.asr.transcribe(trimmed)
 
-        with tracker.stage("normalize"):
-            text = normalize(transcript.text)
-
-        # Nothing was said. Short-circuit rather than ask the NLU to classify
-        # an empty string and the dialogue manager to act on the result.
-        if not text:
+        # Nothing was actually said. Short-circuit rather than spend a remote
+        # round trip asking a model what "..." means.
+        if not _HAS_CONTENT.search(transcript.text or ""):
             return self._nothing_heard(transcript, tracker)
 
-        with tracker.stage("nlu"):
-            understanding = self.nlu.understand(text)
+        return self._finish(transcript, transcript.text.strip(), conversation, tracker)
 
-        with tracker.stage("dialogue"):
-            action = self.manager.handle(text, understanding, state)
-
-        with tracker.stage("tts"):
-            reply_audio = self._speak(action.text)
-
-        result = TurnResult(
-            transcript=transcript,
-            text=text,
-            understanding=understanding,
-            action=action,
-            audio=reply_audio,
-            latency=tracker.breakdown(),
-        )
-        self._log(result)
-        return result
-
-    def respond_to_text(self, text: str, state: DialogueState) -> TurnResult:
+    def respond_to_text(self, text: str, conversation: Conversation) -> TurnResult:
         """Same turn, skipping the microphone.
 
         Used by tests and by the API's text endpoint. Going through the same
@@ -120,33 +97,56 @@ class VoicePipeline:
         tracker = LatencyTracker()
         transcript = Transcript(text=text, confidence=1.0, duration_s=0.0)
 
-        with tracker.stage("normalize"):
-            normalized = normalize(text)
-
-        if not normalized:
+        if not _HAS_CONTENT.search(text or ""):
             return self._nothing_heard(transcript, tracker)
 
-        with tracker.stage("nlu"):
-            understanding = self.nlu.understand(normalized)
-
-        with tracker.stage("dialogue"):
-            action = self.manager.handle(normalized, understanding, state)
-
-        with tracker.stage("tts"):
-            reply_audio = self._speak(action.text)
-
-        result = TurnResult(
-            transcript=transcript,
-            text=normalized,
-            understanding=understanding,
-            action=action,
-            audio=reply_audio,
-            latency=tracker.breakdown(),
-        )
-        self._log(result)
-        return result
+        return self._finish(transcript, text.strip(), conversation, tracker)
 
     # --- internals -----------------------------------------------------------
+
+    def _finish(
+        self,
+        transcript: Transcript,
+        text: str,
+        conversation: Conversation,
+        tracker: LatencyTracker,
+    ) -> TurnResult:
+        with tracker.stage("agent"):
+            result = self.agent.handle(text, conversation)
+
+        with tracker.stage("tts"):
+            audio = self._speak(result.text)
+
+        turn = TurnResult(
+            transcript=transcript,
+            text=text,
+            agent=result,
+            audio=audio,
+            latency=tracker.breakdown(),
+        )
+        self._log(turn)
+        return turn
+
+    def resolve_pending(self, confirmed: bool, conversation: Conversation) -> TurnResult:
+        """The Yes or Cancel button: act, then let the model say what happened."""
+        tracker = LatencyTracker()
+        transcript = Transcript(text="yes" if confirmed else "no", confidence=1.0, duration_s=0.0)
+
+        with tracker.stage("agent"):
+            result = self.agent.resolve_pending(confirmed, conversation)
+
+        with tracker.stage("tts"):
+            audio = self._speak(result.text)
+
+        turn = TurnResult(
+            transcript=transcript,
+            text=transcript.text,
+            agent=result,
+            audio=audio,
+            latency=tracker.breakdown(),
+        )
+        self._log(turn)
+        return turn
 
     def _speak(self, text: str) -> AudioBuffer:
         if not self.speak:
@@ -154,17 +154,15 @@ class VoicePipeline:
         return self.tts.synthesize(text)
 
     def _nothing_heard(self, transcript: Transcript, tracker: LatencyTracker) -> TurnResult:
-        """Silence, or a transcript that normalised away to nothing."""
-        action = BotAction(type=ActionType.CLARIFY, text=NOT_CAUGHT)
+        """Silence, or a transcript with nothing in it. The model is not called."""
+        with tracker.stage("agent"):
+            pass  # named so every turn reports the same four stages
         with tracker.stage("tts"):
-            audio = self._speak(action.text)
+            audio = self._speak(NOT_CAUGHT)
         return TurnResult(
             transcript=transcript,
             text="",
-            understanding=Understanding(
-                intent="oos", intent_confidence=0.0, oos_score=1.0, is_out_of_scope=True
-            ),
-            action=action,
+            agent=AgentResult(text=NOT_CAUGHT),
             audio=audio,
             latency=tracker.breakdown(),
         )
@@ -172,11 +170,10 @@ class VoicePipeline:
     def _log(self, result: TurnResult) -> None:
         slowest = result.latency.slowest()
         log.info(
-            "heard=%r intent=%s conf=%.2f action=%s total=%.0fms slowest=%s",
+            "heard=%r tools=%s guard_hit=%s total=%.0fms slowest=%s",
             result.text,
-            result.understanding.intent,
-            result.understanding.intent_confidence,
-            result.action.type.value,
+            [call.name for call in result.agent.tool_calls] or "none",
+            result.agent.guard_hit,
             result.latency.total_ms,
             f"{slowest[0]} {slowest[1]:.0f}ms" if slowest else "n/a",
         )

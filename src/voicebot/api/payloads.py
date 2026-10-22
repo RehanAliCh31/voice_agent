@@ -3,28 +3,18 @@
 Separate from `voicebot.schemas` on purpose. Those dataclasses are the
 pipeline's internal contract; these are the *published* one. Serving the
 internals directly would mean any refactor is a breaking API change, and the
-frontend would have to follow every rename.
+front end would have to follow every rename.
 """
 
 from __future__ import annotations
 
 import base64
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from voicebot.pipeline.audio_io import encode_wav
 from voicebot.pipeline.orchestrator import TurnResult
-from voicebot.schemas import Understanding
-
-
-class SlotPayload(BaseModel):
-    """One extracted parameter, with its span in the utterance."""
-
-    name: str
-    value: str
-    start: int
-    end: int
-    confidence: float
 
 
 class TranscriptPayload(BaseModel):
@@ -33,22 +23,16 @@ class TranscriptPayload(BaseModel):
     duration_s: float
 
 
-class ActionPayload(BaseModel):
-    """What the bot did, and why. The frontend renders by `type`."""
+class ToolCallPayload(BaseModel):
+    """One tool the model ran, with what it asked for and what came back.
 
-    type: str
-    text: str
-    intent: str | None = None
-    filled_slots: dict[str, str] = Field(default_factory=dict)
-    missing_slots: list[str] = Field(default_factory=list)
+    This is what the inspector panel shows in place of v1's intent, slots and
+    gate score: the actual work done, rather than a classifier's opinion.
+    """
 
-
-class UnderstandingPayload(BaseModel):
-    intent: str
-    intent_confidence: float
-    slots: list[SlotPayload] = Field(default_factory=list)
-    oos_score: float
-    is_out_of_scope: bool
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] = Field(default_factory=dict)
 
 
 class TurnPayload(BaseModel):
@@ -57,17 +41,27 @@ class TurnPayload(BaseModel):
     session_id: str
     transcript: TranscriptPayload
     text: str
-    understanding: UnderstandingPayload
-    action: ActionPayload
-    latency_ms: dict[str, float]
+    reply: str
+    tool_calls: list[ToolCallPayload] = Field(default_factory=list)
+    guard_hit: bool = False
+    latency_ms: dict[str, float] = Field(default_factory=dict)
+    # Null when the page is doing the speaking. Nullable rather than absent so
+    # a client can tell "no audio" from "field missing".
     audio_b64: str | None = None
+    speak_client_side: bool = False
     audio_sample_rate: int = 16_000
 
 
 class TextRequest(BaseModel):
-    """Type instead of speaking. Used by the frontend's fallback input."""
+    """Type instead of speaking. Used by the front end's fallback input."""
 
     text: str
+    session_id: str | None = None
+
+
+class SessionRequest(BaseModel):
+    """Act on a session without saying anything -- confirm, cancel, reset."""
+
     session_id: str | None = None
 
 
@@ -89,41 +83,28 @@ class HealthPayload(BaseModel):
 class ReadyPayload(BaseModel):
     ready: bool
     asr: str
-    nlu: str
+    llm: str
     tts: str
     device: str
     sessions: int
 
 
-def understanding_payload(understanding: Understanding) -> UnderstandingPayload:
-    return UnderstandingPayload(
-        intent=understanding.intent,
-        intent_confidence=understanding.intent_confidence,
-        slots=[
-            SlotPayload(
-                name=slot.name,
-                value=slot.value,
-                start=slot.start,
-                end=slot.end,
-                confidence=slot.confidence,
-            )
-            for slot in understanding.slots
-        ],
-        oos_score=understanding.oos_score,
-        is_out_of_scope=understanding.is_out_of_scope,
-    )
-
-
-def turn_payload(session_id: str, result: TurnResult, include_audio: bool = True) -> TurnPayload:
+def turn_payload(session_id: str, result: TurnResult, speaks_client_side: bool) -> TurnPayload:
     """Convert a pipeline result into the published shape.
 
     Audio is base64-encoded WAV inside the JSON rather than a second request
     for a binary body. One round trip per turn keeps the client simple, and a
-    reply is a few hundred kilobytes.
+    reply is a few hundred kilobytes. With browser speech there is no audio at
+    all, and `speak_client_side` tells the page to say the words itself.
     """
     audio_b64 = None
-    if include_audio and len(result.audio.samples):
+    if len(result.audio.samples):
         audio_b64 = base64.b64encode(encode_wav(result.audio)).decode("ascii")
+
+    calls = [
+        ToolCallPayload(name=call.name, arguments=dict(call.arguments), result=dict(outcome))
+        for call, outcome in zip(result.agent.tool_calls, result.agent.tool_results, strict=False)
+    ]
 
     return TurnPayload(
         session_id=session_id,
@@ -133,15 +114,11 @@ def turn_payload(session_id: str, result: TurnResult, include_audio: bool = True
             duration_s=result.transcript.duration_s,
         ),
         text=result.text,
-        understanding=understanding_payload(result.understanding),
-        action=ActionPayload(
-            type=result.action.type.value,
-            text=result.action.text,
-            intent=result.action.intent,
-            filled_slots=dict(result.action.filled_slots),
-            missing_slots=list(result.action.missing_slots),
-        ),
+        reply=result.agent.text,
+        tool_calls=calls,
+        guard_hit=result.agent.guard_hit,
         latency_ms={key: round(value, 2) for key, value in result.latency.as_dict().items()},
         audio_b64=audio_b64,
+        speak_client_side=speaks_client_side,
         audio_sample_rate=result.audio.sample_rate,
     )

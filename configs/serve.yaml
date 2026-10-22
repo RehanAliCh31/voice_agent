@@ -1,16 +1,42 @@
+# Serving configuration: the real engines, on this machine.
+#
+# Run with:
+#   VOICEBOT_CONFIG=configs/serve.yaml \
+#     .venv/Scripts/python -m uvicorn voicebot.api.app:app --port 8000
+#
+# No API key appears here. The key, if the endpoint ever needs one, is read
+# from the environment variable named below, so this file is safe to commit.
+
+seed: 42
+
 asr:
   engine: whisper
+  # base.en rather than small: this host has two cores and no CUDA, and the
+  # English-only model is markedly faster for the same transcript quality on
+  # clear speech.
   model_name: openai/whisper-base.en
-  device: auto
+  device: cpu
   language: en
 
-nlu:
-  engine: joint
-  checkpoint: ""
-  max_length: 64
-  device: auto
-
 tts:
-  engine: vits
-  model_name: facebook/mms-tts-eng
-  device: auto
+  # The page speaks, using the browser's own synthesiser. VITS on this host
+  # took 10-15s a turn and had to be held in memory alongside Whisper.
+  # Set this to `vits` for a recording where the neural voice is the point.
+  engine: browser
+
+llm:
+  engine: openai
+  base_url: http://localhost:8001/v1
+  model: qwen3.8-27b-fp8
+  api_key_env: VOICEBOT_LLM_KEY
+  timeout_s: 30.0
+  max_retries: 2
+  temperature: 0.4
+  # Replies are spoken aloud, so they are short by design.
+  max_tokens: 200
+  max_tool_rounds: 4
+  max_turns: 20
+
+database:
+  path: data/bank.db
+  seed_on_create: true

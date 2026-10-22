@@ -39,11 +39,10 @@ are also exposed, so a client can inspect any one of them in isolation.
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Load the engines once, before serving."""
     config_path = os.environ.get("VOICEBOT_CONFIG")
-    checkpoint = os.environ.get("VOICEBOT_CHECKPOINT")
     config: AppConfig = load_config(config_path) if config_path else AppConfig()
 
-    log.info("loading services (config=%s checkpoint=%s)", config_path or "defaults", checkpoint)
-    app.state.services = build_services(config=config, checkpoint=checkpoint)
+    log.info("loading services (config=%s)", config_path or "defaults")
+    app.state.services = build_services(config=config)
     try:
         yield
     finally:

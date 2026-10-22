@@ -13,6 +13,11 @@ from voicebot.utils.registry import register
 class TTSEngine(ABC):
     """Turns text into speech."""
 
+    # True when the engine returns no audio because the client will speak the
+    # words itself. The API publishes this so the page knows which it is
+    # getting; every server-side engine leaves it False.
+    speaks_client_side: bool = False
+
     @abstractmethod
     def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
         """Synthesize one reply."""

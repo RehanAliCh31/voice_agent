@@ -1,12 +1,15 @@
 """Where a conversation lives between requests.
 
-A conversation is the dialogue state AND the account it is acting on. Both
-have to be session-scoped: a shared bank would let one browser tab spend
-another's balance, and a per-request bank would reset the balance after every
-transfer, so the money would never actually move.
+A session owns its message history and its pending action. It does **not** own
+a bank: there is one bank per process, because this is one customer's
+assistant and a phone and a laptop looking at the same account is the
+realistic case rather than a bug.
 
-Behind an interface because the in-memory store is correct for one process
-and wrong for two. Swapping in Redis means writing another SessionStore, not
+The pending action is per session, though. Two tabs mid-confirmation must not
+be able to confirm each other's transfer.
+
+Behind an interface because the in-memory store is correct for one process and
+wrong for two. Swapping in Redis means writing another SessionStore, not
 touching a single route.
 """
 
@@ -17,39 +20,45 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from voicebot.dialogue.mock_backend import MockBank
-from voicebot.schemas import DialogueState
+from voicebot.agent.executor import ToolExecutor
+from voicebot.agent.loop import Conversation
+from voicebot.bank.base import Bank
 from voicebot.utils.logging import get_logger
 
 log = get_logger("api.sessions")
 
 
 @dataclass
-class Conversation:
-    """Everything one caller's conversation owns."""
+class Session:
+    """Everything one caller's conversation owns.
 
-    state: DialogueState
-    bank: MockBank
+    Named `Session` rather than `Conversation` because `agent.Conversation` is
+    the message list; two classes sharing one name across two modules is a bug
+    waiting to be written.
+    """
+
+    conversation: Conversation
+    executor: ToolExecutor
 
 
 class SessionStore(ABC):
-    """Reads and writes one conversation."""
+    """Reads and writes one session."""
 
     @abstractmethod
-    def get(self, session_id: str) -> Conversation:
-        """Return the conversation for `session_id`, creating it if new."""
+    def get(self, session_id: str) -> Session:
+        """Return the session for `session_id`, creating it if new."""
 
     @abstractmethod
-    def put(self, session_id: str, conversation: Conversation) -> None:
-        """Persist the conversation."""
+    def put(self, session_id: str, session: Session) -> None:
+        """Persist the session."""
 
     @abstractmethod
     def drop(self, session_id: str) -> None:
-        """Forget a conversation."""
+        """Forget a session."""
 
     @abstractmethod
     def __len__(self) -> int:
-        """How many conversations are live."""
+        """How many sessions are live."""
 
     @staticmethod
     def new_id() -> str:
@@ -58,7 +67,7 @@ class SessionStore(ABC):
 
 @dataclass
 class _Entry:
-    conversation: Conversation
+    session: Session
     touched: float
 
 
@@ -72,23 +81,27 @@ class InMemorySessionStore(SessionStore):
     a public URL.
     """
 
+    bank: Bank
     ttl_seconds: float = 1800.0
     max_sessions: int = 1000
     _entries: dict[str, _Entry] = field(default_factory=dict)
 
-    def get(self, session_id: str) -> Conversation:
+    def get(self, session_id: str) -> Session:
         self._evict_expired()
         entry = self._entries.get(session_id)
         if entry is None:
-            conversation = Conversation(state=DialogueState(session_id=session_id), bank=MockBank())
-            self._entries[session_id] = _Entry(conversation=conversation, touched=time.monotonic())
+            session = Session(
+                conversation=Conversation(session_id=session_id),
+                executor=ToolExecutor(self.bank),
+            )
+            self._entries[session_id] = _Entry(session=session, touched=time.monotonic())
             self._evict_overflow()
-            return conversation
+            return session
         entry.touched = time.monotonic()
-        return entry.conversation
+        return entry.session
 
-    def put(self, session_id: str, conversation: Conversation) -> None:
-        self._entries[session_id] = _Entry(conversation=conversation, touched=time.monotonic())
+    def put(self, session_id: str, session: Session) -> None:
+        self._entries[session_id] = _Entry(session=session, touched=time.monotonic())
         self._evict_overflow()
 
     def drop(self, session_id: str) -> None:
@@ -108,7 +121,7 @@ class InMemorySessionStore(SessionStore):
             log.info("evicted %d expired session(s)", len(stale))
 
     def _evict_overflow(self) -> None:
-        """Drop the least recently touched conversations once over the cap."""
+        """Drop the least recently touched sessions once over the cap."""
         excess = len(self._entries) - self.max_sessions
         if excess <= 0:
             return

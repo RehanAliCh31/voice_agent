@@ -43,6 +43,35 @@ class TTSConfig(_Strict):
     device: str = "auto"
 
 
+class LLMConfig(_Strict):
+    """The model that does the understanding and the talking.
+
+    `engine: fake` selects the scripted client, so a bare AppConfig still
+    starts the service with no network and no downloads. The key is named
+    rather than stored, so a config file is safe to commit.
+    """
+
+    engine: str = "fake"
+    base_url: str = ""
+    model: str = ""
+    api_key_env: str = "VOICEBOT_LLM_KEY"
+    timeout_s: float = 30.0
+    max_retries: int = 2
+    temperature: float = 0.4
+    max_tokens: int = 200
+    # A model that keeps calling tools is stuck; an unbounded loop against a
+    # shared endpoint is an outage rather than a bug.
+    max_tool_rounds: int = 4
+    max_turns: int = 20
+
+
+class DatabaseConfig(_Strict):
+    """Where the bank lives. `:memory:` for tests, a file for serving."""
+
+    path: str = ":memory:"
+    seed_on_create: bool = True
+
+
 class TrainingConfig(_Strict):
     learning_rate: float = 3e-5
     batch_size: int = 32
@@ -61,6 +90,8 @@ class AppConfig(_Strict):
     asr: ASRConfig = Field(default_factory=ASRConfig)
     nlu: NLUConfig = Field(default_factory=NLUConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
 
 
