@@ -279,3 +279,24 @@ def test_the_assistant_has_no_way_to_create_money() -> None:
 def test_deposit_is_not_reachable_through_the_executor() -> None:
     out = ToolExecutor(SqliteBank()).execute(call("deposit", amount_cents=100_000))
     assert "error" in out.result
+
+
+def test_a_bill_confirmation_reads_back_the_amount(executor: ToolExecutor) -> None:
+    """The customer has to hear what they are agreeing to pay.
+
+    The summary used to say only "Pay your electricity bill in full", so the
+    amount in the model's sentence came from an earlier lookup -- and once
+    that aged out of the recall window the guard suppressed the whole
+    read-back.
+    """
+    out = executor.execute(call("pay_bill", bill="electricity"))
+    assert out.result["status"] == "needs_confirmation"
+    assert "$72.50" in out.result["summary"]
+    assert 7_250 in out.sourced_cents
+
+
+def test_a_card_confirmation_sources_no_amount(executor: ToolExecutor) -> None:
+    # Freezing a card involves no money, so nothing is sourced by it.
+    out = executor.execute(call("freeze_card", last4="4417"))
+    assert out.result["status"] == "needs_confirmation"
+    assert out.sourced_cents == ()

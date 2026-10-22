@@ -273,6 +273,14 @@ class Agent:
         # currency figure back as words anyway, so nothing is lost aloud.
         # Done after the guard, so the check runs on what the model actually
         # wrote.
+        if hit and self.executor.pending is not None:
+            # The sentence the customer was meant to agree to never reached
+            # them, so there is nothing for them to agree to. Leaving the
+            # action armed let a "yes" aimed at something else pay a bill
+            # nobody had heard named.
+            log.warning("cancelling %s: its read-back was suppressed", self.executor.pending.tool)
+            self.executor.cancel()
+
         return self._result(
             in_digits(checked),
             calls,

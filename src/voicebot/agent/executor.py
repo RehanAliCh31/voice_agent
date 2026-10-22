@@ -240,10 +240,17 @@ class ToolExecutor:
         # back. It is the one figure in the sourced set the model chose, and
         # the customer is looking at a confirmation prompt for exactly it.
         proposed = arguments.get("amount_cents")
+        if not isinstance(proposed, int):
+            proposed = self._bill_amount(arguments["bill"]) if name == "pay_bill" else None
         return ToolOutcome(
             {"status": "needs_confirmation", "token": self.pending.token, "summary": summary},
             sourced_cents=(proposed,) if isinstance(proposed, int) else (),
         )
+
+    def _bill_amount(self, bill: str) -> int | None:
+        """What a bill comes to, or None if there is no such bill."""
+        found = next((b for b in self.bank.bills() if b.name == bill.lower()), None)
+        return found.amount_cents if found else None
 
     def _validate(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Check a confirming tool's arguments. Raises ValueError with a hint."""
@@ -272,6 +279,12 @@ class ToolExecutor:
             amount = format_money(arguments["amount_cents"])
             return f"Transfer {amount} to {arguments['payee']} from {arguments['from_account']}"
         if name == "pay_bill":
+            # The amount belongs in the sentence the customer agrees to. It
+            # used to be absent, so the figure they heard came from an earlier
+            # lookup rather than from the thing about to happen.
+            due = self._bill_amount(arguments["bill"])
+            if due is not None:
+                return f"Pay your {arguments['bill']} bill in full, {format_money(due)}"
             return f"Pay your {arguments['bill']} bill in full"
         if name == "freeze_card":
             card = f"the card ending {arguments['last4']}"

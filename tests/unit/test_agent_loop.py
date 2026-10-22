@@ -561,3 +561,65 @@ def test_a_read_only_lookup_does_not_invalidate_anything(bank: SqliteBank) -> No
     assert not [
         m for m in conversation.messages if m["role"] == "tool" and "superseded" in m["content"]
     ]
+
+
+def test_a_suppressed_read_back_cancels_the_action_it_was_asking_about(
+    bank: SqliteBank,
+) -> None:
+    """Reported in use, and the most serious thing found so far.
+
+    The model proposed paying a bill, the guard suppressed its read-back, and
+    the customer heard "let me check that properly" instead of the summary.
+    The pending action survived, so their next "yes" -- meant for something
+    else entirely -- paid $215.
+
+    A read-back the customer never heard is not a read-back. If the sentence
+    does not reach them, the action it was asking about must not survive.
+    """
+    executor = ToolExecutor(bank)
+    client = FakeLLMClient(
+        [
+            Reply(tool_calls=(ToolCall("c1", "pay_bill", {"bill": "credit card"}),)),
+            # A figure no tool returned: the guard will suppress this.
+            Reply(text="Pay your credit card bill, $999.00 — are you sure?"),
+        ]
+    )
+    out = Agent(client, executor).handle("what about the car bill?", Conversation("s1"))
+
+    assert out.guard_hit is True
+    assert executor.pending is None, "a read-back nobody heard left an action armed"
+    assert bank.bills()[0].paid is False
+
+
+def test_a_yes_after_a_suppressed_read_back_does_nothing(bank: SqliteBank) -> None:
+    executor = ToolExecutor(bank)
+    conversation = Conversation("s1")
+    client = FakeLLMClient(
+        [
+            Reply(tool_calls=(ToolCall("c1", "pay_bill", {"bill": "credit card"}),)),
+            Reply(text="Pay your credit card bill, $999.00 — are you sure?"),
+            Reply(text="There was nothing waiting."),
+        ]
+    )
+    agent = Agent(client, executor)
+    agent.handle("what about the car bill?", conversation)
+
+    agent.resolve_pending(True, conversation)
+
+    assert next(b for b in bank.bills() if b.name == "credit card").paid is False
+    assert bank.balance("checking") == 248_350
+
+
+def test_a_read_back_that_survives_the_guard_stays_armed(bank: SqliteBank) -> None:
+    # The ordinary path must be untouched.
+    executor = ToolExecutor(bank)
+    client = FakeLLMClient(
+        [
+            Reply(tool_calls=(ToolCall("c1", "pay_bill", {"bill": "electricity"}),)),
+            Reply(text="Pay your electricity bill, $72.50 — are you sure?"),
+        ]
+    )
+    out = Agent(client, executor).handle("pay electricity", Conversation("s1"))
+
+    assert out.guard_hit is False
+    assert executor.pending is not None
