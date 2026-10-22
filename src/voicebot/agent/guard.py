@@ -185,6 +185,35 @@ def unverifiable_figure(text: str) -> str | None:
     return foreign.group(0) if foreign else None
 
 
+def in_digits(text: str) -> str:
+    """Rewrite amounts written in words as figures: "$3,000.00".
+
+    The model writes them the way a person says them, because its replies are
+    read aloud. On screen that is harder to read and harder to check at a
+    glance, which matters when the figure is the reader's own money. The same
+    parser that verifies a spelled-out amount can rewrite it, so the two can
+    never disagree.
+
+    Speech synthesisers read a currency figure back as words, so the spoken
+    reply is unchanged by this.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        whole = words_to_number(match.group("whole"))
+        if whole is None:
+            return match.group(0)
+        amount = Decimal(whole)
+        spoken_cents = match.group("cents")
+        if spoken_cents:
+            cents = words_to_number(spoken_cents)
+            if cents is None:
+                return match.group(0)
+            amount += Decimal(cents) / 100
+        return f"${amount:,.2f}"
+
+    return _SPELLED.sub(replace, text or "")
+
+
 def allowed_values(sourced_cents: Iterable[int]) -> set[Decimal]:
     """The figures the bank produced, as the guard compares them."""
     return {Decimal(cents) / 100 for cents in sourced_cents}

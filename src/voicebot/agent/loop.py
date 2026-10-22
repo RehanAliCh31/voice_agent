@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from voicebot.agent.executor import ToolExecutor, ToolOutcome
-from voicebot.agent.guard import fallback_sentence, guard, money_in_text
+from voicebot.agent.guard import fallback_sentence, guard, in_digits, money_in_text
 from voicebot.llm.base import LLMClient, LLMUnavailable, Reply, ToolCall
 from voicebot.llm.prompts import NOTHING_SAID, SYSTEM_PROMPT, UNAVAILABLE
 from voicebot.llm.tools import TOOL_SCHEMAS
@@ -242,8 +242,19 @@ class Agent:
             fallback_sentence(sourced),
             sourced_cents=allowed,
         )
+        # Amounts go out in figures. The model writes them as words because
+        # its replies are spoken, but "$3,000.00" is easier to read and far
+        # easier to check at a glance -- and a speech synthesiser reads a
+        # currency figure back as words anyway, so nothing is lost aloud.
+        # Done after the guard, so the check runs on what the model actually
+        # wrote.
         return self._result(
-            checked, calls, outcomes, rounds, hit=hit, suppressed=spoken if hit else None
+            in_digits(checked),
+            calls,
+            outcomes,
+            rounds,
+            hit=hit,
+            suppressed=spoken if hit else None,
         )
 
     def _result(

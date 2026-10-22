@@ -16,7 +16,7 @@ from decimal import Decimal
 
 import pytest
 
-from voicebot.agent.guard import fallback_sentence, guard, money_in_text
+from voicebot.agent.guard import fallback_sentence, guard, in_digits, money_in_text
 
 FALLBACK = "I have that, but let me read it back from your account."
 SAVINGS = 1_902_000  # $19,020.00
@@ -272,3 +272,53 @@ def test_number_words_without_a_currency_are_not_figures(sentence: str) -> None:
     assert money_in_text(sentence) == []
     _, hit = guard(sentence, [], FALLBACK, ())
     assert hit is False
+
+
+# --- showing amounts in digits ----------------------------------------------
+#
+# The model writes amounts the way a person says them, because its replies are
+# read aloud. On screen that is harder to read than "$3,000.00", and harder to
+# check at a glance -- which matters when the figure is your money. The same
+# parser that verifies a spelled-out amount can rewrite it.
+
+
+@pytest.mark.parametrize(
+    ("spoken", "shown"),
+    [
+        (
+            "Your checking account holds three thousand dollars.",
+            "Your checking account holds $3,000.00.",
+        ),
+        ("That's two hundred dollars to Sara.", "That's $200.00 to Sara."),
+        (
+            "Savings is at nineteen thousand twenty dollars.",
+            "Savings is at $19,020.00.",
+        ),
+        ("fifty dollars and fifty cents", "$50.50"),
+        ("Checking is at zero dollars.", "Checking is at $0.00."),
+    ],
+)
+def test_amounts_in_words_are_rewritten_as_digits(spoken: str, shown: str) -> None:
+    assert in_digits(spoken) == shown
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Your balance is $19,020.00.",
+        "It should arrive in five working days.",
+        "You have two accounts.",
+        "The card ending 4417 is now frozen.",
+        "Hello, how can I help?",
+        "",
+    ],
+)
+def test_text_without_a_spelled_out_amount_is_untouched(text: str) -> None:
+    assert in_digits(text) == text
+
+
+def test_every_amount_in_a_sentence_is_rewritten() -> None:
+    assert (
+        in_digits("Checking is at three thousand dollars and savings at two hundred dollars.")
+        == "Checking is at $3,000.00 and savings at $200.00."
+    )

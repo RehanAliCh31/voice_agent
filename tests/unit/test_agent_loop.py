@@ -478,3 +478,21 @@ def test_moving_money_forgets_the_balances_it_made_stale(bank: SqliteBank) -> No
 
     out = agent.handle("what's my balance now?", conversation)
     assert out.guard_hit is True, "the pre-transfer balance was still quotable"
+
+
+def test_amounts_reach_the_page_as_figures(executor: ToolExecutor) -> None:
+    # The model writes amounts as words because its replies are spoken; the
+    # page shows figures, which are easier to check at a glance.
+    client = FakeLLMClient(
+        [
+            Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "checking"}),)),
+            Reply(
+                text="Your checking account holds two thousand four hundred eighty three dollars and fifty cents."
+            ),
+        ]
+    )
+    out = Agent(client, executor).handle("balance?", Conversation("s1"))
+
+    assert out.guard_hit is False
+    assert "$2,483.50" in out.text
+    assert "thousand" not in out.text
