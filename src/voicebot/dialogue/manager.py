@@ -85,9 +85,7 @@ class DialogueManager:
         if intent in responses.SOCIAL:
             # Deliberately does not reset: saying hello mid-task should not
             # throw the task away.
-            return BotAction(
-                type=ActionType.ANSWER, text=responses.social(intent), intent=intent
-            )
+            return BotAction(type=ActionType.ANSWER, text=responses.social(intent), intent=intent)
 
         if intent not in INTENT_SPECS:
             reset(state)
