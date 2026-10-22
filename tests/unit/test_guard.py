@@ -237,7 +237,7 @@ def test_a_wrong_spelled_out_figure_is_caught() -> None:
 
 def test_the_reported_sentence_now_passes() -> None:
     # Verbatim from the failure report, with the balances it was reported against.
-    text, hit = guard(
+    _, hit = guard(
         "You've got two accounts. Checking is at zero, and savings is at "
         "nineteen thousand twenty dollars.",
         [],
@@ -248,7 +248,7 @@ def test_the_reported_sentence_now_passes() -> None:
 
 
 def test_the_reported_transfer_sentence_now_passes() -> None:
-    text, hit = guard(
+    _, hit = guard(
         "Done. Two hundred dollars is on its way to Sara, and your savings now "
         "shows eighteen thousand eight hundred twenty dollars.",
         [],
