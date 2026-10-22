@@ -1,19 +1,19 @@
 # Voice Bot — a speech-to-speech banking assistant
 
-Speak to it, and it speaks back. A cascaded voice assistant that handles
-balances, transfers, bills, spending, cards and fraud reports — with an intent
-and slot model trained here, and no large language model anywhere in the
-answer path.
+Speak to it, and it speaks back. A voice agent that handles balances,
+transfers, bills, spending and cards — where a language model does the
+understanding and the talking, and a database holds every fact it is allowed
+to state.
 
 ```
-your voice -> VAD -> ASR -> normalise -> NLU (intent + slots) -> scope gate
-                                                                     |
-          its voice <- TTS <- templates <- dialogue manager <- mock bank
+your voice -> VAD -> Whisper -> LLM <-> tools -> your browser speaks
+                                         |
+                                       SQLite
 ```
 
-Everything runs locally: three open models, one FastAPI service, and a plain
-HTML/CSS/JS front end with barge-in. No external AI service is called, and
-nothing leaves the machine.
+The model is the brain. It is deliberately **not** the memory and **not** the
+hands: it cannot know a balance without asking the database, and it cannot
+move money without going through code that can refuse.
 
 <!-- Save a screenshot of the running UI to docs/images/ui.png, then delete
      these two comment lines to show it.
@@ -22,98 +22,123 @@ nothing leaves the machine.
 
 ---
 
-## Results
+## How it is stopped from inventing your balance
 
-The NLU stage is the part trained here. Full method, ablations and the two
-measurement bugs that changed the conclusions are in
-[`docs/experiments.md`](docs/experiments.md); what the model is for, and what
-it is explicitly not for, is in [`docs/model_card.md`](docs/model_card.md).
+A language model asked for your balance will eventually produce a confident,
+plausible, invented number, because producing plausible text is what it does.
+Three mechanisms sit between that tendency and the customer, and none of them
+is a prompt instruction.
 
-| Model | Params | Test accuracy | Macro-F1 | In-scope accuracy | Slot F1 |
-|---|---|---|---|---|---|
-| TF-IDF + LinearSVC *(baseline)* | — | 0.8209 | 0.8639 | — | n/a |
-| DistilBERT joint | 66M | 0.8807 | 0.9128 | 0.9410 | 0.5613 |
-| **RoBERTa joint** *(shipped)* | **125M** | **0.8963** | **0.9241** | **0.9528** | **0.6866** |
+**It has to ask.** The model has no account data. Nine tools are its only
+route to one, and each returns JSON from SQLite. Asking for a balance means
+calling `get_balance` and reading what comes back.
 
-**Out-of-scope gate**, threshold 0.93 tuned on validation data only:
-**95% of out-of-scope questions declined correctly, 91% of in-scope questions
-answered correctly and delivered.**
+**It cannot act alone.** `transfer_money`, `pay_bill`, `freeze_card` and
+`order_card` return a summary and a token on the first call and change
+nothing. Only a second call carrying that token executes, and the Yes and
+Cancel buttons act on the pending action directly rather than sending the word
+"yes" back through the model. A model talked past its instructions still
+cannot move money; so a misheard "yes" cannot either.
 
-**Latency**, measured end to end through the browser:
+**Every spoken figure is checked.** Before the reply reaches your ears, each
+money-shaped number in it is compared by value against the figures the tools
+actually returned. A mismatch discards the sentence and reads back the stored
+value instead. The check is scoped to money, so "five working days" and "the
+card ending 4417" pass untouched.
 
-| | T4 GPU | CPU |
-|---|---|---|
-| ASR (`whisper-small` / `whisper-base.en`) | 388 ms | 2.3 s |
-| NLU | 12 ms | 0.3 s |
-| TTS | 180 ms | 5 s |
-| **Whole turn** | **~0.6 s** | **~8 s** |
+The cost of that last rule is real and worth stating: **the bot cannot do
+arithmetic out loud.** "That's about £30 less than last month" is a derived
+figure no tool returned, so it is suppressed. A guard that admits
+correct-looking totals admits incorrect ones by the same rule.
 
 ---
 
-## Why there is no LLM
+## What it is like to use
 
-An LLM asked for your balance will eventually produce a confident, plausible,
-invented number, because producing plausible text is what it does. This bot
-cannot: every number comes from the account store, and every sentence it can
-say is a template in one readable file.
+```
+YOU   hi there, how are you?
+BOT   I'm doing well, thanks for asking! How can I help you with your accounts today?
+      tools: none
 
-The model's job is narrow and measurable — classify the intent, tag the slots.
-The answering is ordinary code:
+YOU   what's my savings balance?
+BOT   Your savings balance is $19,020.00.
+      tools: get_balance{account: savings}          figures: verified
 
-| An LLM would | Here it is |
-|---|---|
-| Read what you meant | RoBERTa, two heads (`nlu/`) |
-| Decide whether to attempt it | Confidence gate at 0.93 (`nlu/joint_engine.py`) |
-| Remember the conversation | `dialogue/states.py` |
-| Decide what to do next | `dialogue/manager.py` |
-| Know the facts | `dialogue/mock_backend.py` |
-| Write the sentence | `dialogue/responses.py` |
+YOU   how much did I spend this week?
+BOT   You spent $41.99 this week.
+      tools: get_spending{period: this week}        figures: verified
 
-The cost is that it only does the seven things it was built for. For a
-banking assistant, "I don't handle that" is the better failure.
+YOU   send fifty dollars to sarah from checking
+BOT   I'll transfer $50.00 to Sarah from your Checking account. Does that sound right?
+      tools: transfer_money{amount_cents: 5000, ...}   -> waiting
+      [Yes, confirm]  [Cancel]
+
+                                                   balance still $2,483.50
+→ Yes
+BOT   Done! $50.00 sent to Sarah. Your Checking balance is now $2,433.50.
+```
+
+Transcribed from a real session against the live model.
+
+---
+
+## Measured latency
+
+On the machine this runs on — an Intel i5-6200U, two cores, no CUDA — with the
+model served remotely on another host.
+
+| Stage | Time | Where it runs |
+|---|---|---|
+| Whisper `base.en` (3 s of speech) | **2.3 s** | this CPU |
+| LLM, conversational reply | **3.4 – 5.5 s** | remote |
+| LLM, reply after a tool call | **4 – 10 s** | remote, two round trips |
+| Speech out | **~0 s** | the browser |
+| **A whole spoken turn** | **≈ 6 – 12 s** | |
+
+Whisper's model loads once at startup and takes 49 s to do it.
+
+**This is slower than the version it replaced**, which answered in about 0.6 s
+on a GPU. The LLM buys accuracy and natural conversation; it does not buy
+speed, and it is remote, so faster local hardware does not help it. Speech
+synthesis moved into the browser precisely because it was the one stage that
+could be removed outright.
 
 ---
 
 ## Quick start
 
-### Run the tests — no GPU, no downloads, no network
+### Run the tests — no GPU, no model, no network
 
 ```bash
-pip install -e ".[dev]"
-pytest
+python -m venv .venv
+.venv/Scripts/pip install -e ".[dev,serve]"
+.venv/Scripts/python -m pytest
 ```
 
-248 tests. Every engine has a fake implementation, so the whole suite — the
-HTTP API included — runs offline in seconds.
+217 tests in about 16 seconds. Every external dependency sits behind an
+abstract base class with a fake — including the language model, whose
+`FakeLLMClient` replays scripted replies and tool calls. The whole agent loop,
+the confirmation gate and the numeric guard are exercised with no endpoint.
 
-### Run the service with the real models
+### Run it for real
 
 ```bash
-pip install -e ".[dev,serve]"
 VOICEBOT_CONFIG=configs/serve.yaml \
-VOICEBOT_CHECKPOINT=checkpoints/roberta_oosplus \
-uvicorn voicebot.api.app:app --port 8000
+  .venv/Scripts/python -m uvicorn voicebot.api.app:app --port 8000
 ```
 
 Open <http://localhost:8000>. The page is served by the same process as the
 API, which is what lets the browser grant it a microphone.
 
-Without `VOICEBOT_CONFIG` the service starts on the fake engines — useful for
-working on the front end with no model downloads.
+`configs/serve.yaml` points at the model endpoint and selects browser speech.
+Without `VOICEBOT_CONFIG` the service starts on fakes with an in-memory bank —
+useful for working on the front end.
 
-### On Google Colab
+Tests that need the real endpoint are marked `live` and deselected by default:
 
-Colab is the practical way to train and to run this on a GPU. Mount Drive,
-`pip install -e ".[dev,serve]"`, start the server in a background thread, and
-open the port:
-
-```python
-from google.colab.output import eval_js
-print(eval_js("google.colab.kernel.proxyPort(8000)"))
+```bash
+.venv/Scripts/python -m pytest -m live
 ```
-
-Open that address in a **new tab**, not an inline frame — an embedded frame is
-not allowed to use the microphone.
 
 ---
 
@@ -121,24 +146,26 @@ not allowed to use the microphone.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /v1/converse` | Audio in, audio out. One whole turn. |
+| `POST /v1/converse` | Audio in, a whole turn out. |
 | `POST /v1/chat` | The same turn, typed instead of spoken. |
+| `POST /v1/confirm` | Agree to the pending action. |
+| `POST /v1/cancel` | Decline it. |
+| `POST /v1/reset` | Restore the demo balances; keep the audit log. |
 | `POST /v1/transcribe` | ASR alone. |
-| `POST /v1/understand` | NLU alone. |
 | `POST /v1/speak` | TTS alone. |
 | `DELETE /v1/session/{id}` | Forget a conversation. |
 | `GET /health` | Liveness. Answers before the models load. |
 | `GET /ready` | Readiness, naming the engines actually loaded. |
-| `GET /metrics` | Prometheus text: turns, actions by type, live sessions. |
+| `GET /metrics` | Prometheus text: turns, tool calls by name, guard hits. |
 
-Each pipeline stage is exposed on its own so a client can inspect any one of
-them in isolation — which is exactly what the inspector panel in the UI does.
+A turn returns the reply, every tool call with its arguments and result,
+whether the guard fired, and per-stage timings — which is exactly what the
+inspector panel draws.
 
 Interactive docs at `/docs`.
 
-Models load **once** in the application lifespan, not per request. Each
-conversation holds **its own account state**, so one browser tab cannot spend
-another's balance and a completed transfer persists across turns.
+**`voicebot_guard_hits_total` is the metric worth watching.** A rising one
+means the model is reaching for figures it was not given.
 
 ---
 
@@ -146,111 +173,108 @@ another's balance and a completed transfer persists across turns.
 
 | Path | Contents |
 |---|---|
-| `src/voicebot/asr/` | Whisper engine, and the normaliser that rewrites its output into the form the NLU was trained on |
-| `src/voicebot/nlu/` | The joint intent + slot model, its dataset, BIO tagging, the SVM baseline |
-| `src/voicebot/dialogue/` | State machine, slot specs, account store, reply templates |
-| `src/voicebot/tts/` | VITS engine |
+| `src/voicebot/llm/` | The client, its offline fake, the nine tool schemas, the system prompt |
+| `src/voicebot/agent/` | The LLM ⇄ tool loop, the executor that owns the confirmation gate, the numeric guard |
+| `src/voicebot/bank/` | SQLite schema, the ledger, the audit log, the seed data |
+| `src/voicebot/asr/` | Whisper engine |
+| `src/voicebot/tts/` | VITS, and the null engine that hands synthesis to the browser |
 | `src/voicebot/pipeline/` | Orchestrator, audio plumbing, per-stage timing |
 | `src/voicebot/api/` | FastAPI app, routes, sessions, published payload shapes |
 | `src/voicebot/api/static/` | The front end: `index.html`, `app.css`, `app.js`, `vad.js` |
-| `src/voicebot/training/` | Training and evaluation entry points |
 | `configs/` | YAML run configuration, validated by pydantic at startup |
-| `scripts/` | Data download; gate re-tuning without retraining |
 | `tests/` | Unit and integration tests |
-| `docs/experiments.md` | Method, results, ablations, measurement bugs |
-| `docs/model_card.md` | What the trained model is, is for, and is not for |
+| `docs/design/` | The design documents and implementation plans |
+| `docs/experiments.md` | v1's method, results and the measurement bugs that changed them |
+| `docs/model_card.md` | v1's trained model: what it was, and what it was not for |
 
 Every engine sits behind an abstract base class with a registry, so swapping
-Whisper for another ASR is a config change, and the fakes that make the test
-suite offline implement the same interface.
+Whisper for another ASR, or the endpoint for a hosted provider, is a config
+change.
 
 ---
 
-## The front end
+## The database
 
-Four files, no framework.
+Five tables, SQLite, from the standard library — no server, no ORM, no
+dependency. Money is integer cents throughout.
 
-- Records the microphone and converts WebM/Opus to 16 kHz mono PCM **in the
-  browser**, so the server receives exactly the format it wants
-- **Inspector panel** showing the transcript and its confidence, the predicted
-  intent and its confidence, the extracted slots, the gate score and verdict,
-  and milliseconds spent in each pipeline stage
-- **Barge-in**: talk over the reply and it stops and listens, with a
-  sensitivity slider and an off switch. Relies on the browser's echo
-  cancellation, or the bot would interrupt itself
-- **Yes / Cancel buttons** during confirmation, so a misheard "yes" cannot
-  move money
-- A text box for when the microphone is unavailable
-- Works at phone width
+`transactions` is a ledger: money out is stored negative, every balance change
+writes a row in the same transaction as the update, so an interruption leaves
+neither. Spending periods are a closed vocabulary (`today`, `this week`,
+`last month`, …) mapped onto date ranges, and an unrecognised one returns an
+error listing the valid ones. v1 stored periods as free text, which meant "how
+much did I spend in October?" matched nothing, summed to zero, and the bot
+answered "nothing" to a question it had not understood.
 
----
+`turns` is the audit log — what was said, which tools ran, whether the guard
+fired and what it suppressed. For a banking demo it is worth more than the
+account tables.
 
-## Training
-
-```bash
-# the shipped model
-python -m voicebot.training.train_intent \
-    --config configs/experiments/e1_roberta.yaml \
-    --clinc data/raw/data/data_oos_plus.json \
-    --output checkpoints/roberta_oosplus \
-    --slot-examples 5000
-
-# re-tune the out-of-scope gate by inference alone, ~1 min instead of 22
-python scripts/retune_gate.py --checkpoint checkpoints/roberta_oosplus \
-    --clinc data/raw/data/data_oos_plus.json
-```
-
-Intents come from CLINC150 (15,250 real utterances, 150 in-scope intents plus
-`oos`). Slots come from a templated banking corpus generated here, split by
-**template and by value** so no phrasing or value appears on both sides of the
-split. That split is the difference between a slot F1 of 1.0000 and a
-meaningful 0.6866 — see `docs/experiments.md`.
-
-Every run writes `metrics.json` and `predictions.json` beside its checkpoint,
-with the seed recorded.
+One bank per process, one pending action per session: this is one customer's
+assistant, but two browser tabs mid-confirmation must not be able to confirm
+each other's transfer.
 
 ---
 
 ## Quality gates
 
 ```bash
-ruff check src tests     # lint
-black --check src tests  # formatting
-mypy src                 # types
-pytest                   # 248 tests
+.venv/Scripts/python -m ruff check src tests     # lint
+.venv/Scripts/python -m black --check src tests  # formatting
+.venv/Scripts/python -m mypy src                 # types
+.venv/Scripts/python -m pytest                   # 217 tests
 ```
 
 ---
 
 ## Known limitations
 
-Stated plainly, because they change how the numbers should be read.
+Stated plainly, because they change how the system should be judged.
 
-- **The slot corpus is synthetic.** CLINC150 carries no slot annotations, so
-  the slot head trains on 18 generated templates. Slot F1 on real speech will
-  be below 0.6866. The intent head is unaffected — it trains on real human
-  utterances.
-- **The slot tagger labels tokens in every utterance**, including ones with no
-  slots, so it produces noise the dialogue manager discards. Visible in the
-  inspector panel; harmless to the answer.
-- **The gate threshold is tuned on 100 validation out-of-scope examples.** The
-  value carries real sampling noise.
-- **ASR quality drives everything downstream.** `whisper-base.en` on CPU
-  mishears enough to break turns; `whisper-small` on a GPU does not. No
-  dialogue logic repairs a word that was never heard.
-- **English only.** All metrics above are text metrics; accuracy measured
-  through a real speech front end is deferred to v2.
-- **Sessions are in-process**, with a TTL and a cap. Correct for one process,
-  wrong for two. `SessionStore` is an interface for exactly that reason.
+- **No arithmetic.** The numeric guard rejects any figure a tool did not
+  return, including correct sums. Deliberate, and it means the bot cannot
+  compare two balances out loud.
+- **One currency.** USD. Asked in pounds, it says so rather than converting.
+- **One endpoint, no fallback.** The trained model that used to run locally is
+  gone. If the model server is unreachable, the bot says so and can do nothing
+  else. It also has no authentication.
+- **Slower than v1.** Six to twelve seconds a turn against roughly one. See
+  the latency table.
+- **Sessions are in-process**, with a TTL and a cap, and a conversation does
+  not survive a restart — the money does. `SessionStore` is an interface for
+  exactly that reason.
+- **The model's judgement is not tested.** The suite proves that no model
+  behaviour can move money without a confirmation or state an unsourced
+  figure. It cannot prove the model will choose the right tool.
+- **English only**, and accuracy through a real microphone across accents is
+  unmeasured.
 
 ---
 
 ## What's next
 
-Specified in the design document and deliberately out of scope for v1: a
-spoken benchmark (synthesising CLINC150 and measuring accuracy against word
-error rate), ASR-robust training on perturbed transcripts, and a comparison of
-out-of-scope scoring methods beyond a confidence threshold.
+Streaming the model's reply and beginning to speak at the first sentence
+boundary, which would hide most of the LLM's time behind the speech that
+follows it. A spoken benchmark measuring task success against word error
+rate. An authenticated endpoint.
+
+---
+
+## History
+
+v1 was the same product built without a language model: a RoBERTa intent and
+slot model trained here, a finite-state dialogue manager, and a file of reply
+templates. It reached 0.8963 test accuracy and 0.9241 macro-F1, and it could
+not invent a balance because every sentence it could say was written by hand.
+
+That work is kept in [`docs/model_card.md`](docs/model_card.md) and
+[`docs/experiments.md`](docs/experiments.md) — including the two measurement
+bugs that changed its conclusions, one of which turned a slot F1 of 1.0000
+into an honest 0.6866.
+
+v2 trades that rigidity for conversation, and rebuilds the safety property
+with tools, a confirmation gate and a numeric guard rather than with
+templates.
 
 ---
 
@@ -260,10 +284,8 @@ Check these before any commercial use — they are not all permissive:
 
 | Component | Licence |
 |---|---|
-| CLINC150 dataset | CC BY 3.0 |
 | `openai/whisper-*` | MIT |
-| `roberta-base` | MIT |
-| `facebook/mms-tts-eng` | **CC BY-NC 4.0 — non-commercial** |
+| `facebook/mms-tts-eng` *(optional, non-default)* | **CC BY-NC 4.0 — non-commercial** |
 
-The TTS model is the binding constraint. Anything commercial would need a
-permissively licensed voice; the engine registry makes that a config change.
+VITS is no longer the default voice; the browser's own synthesiser is. If you
+switch it back on with `tts.engine: vits`, that licence applies again.
