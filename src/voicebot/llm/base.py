@@ -1,0 +1,71 @@
+"""The LLM stage interface and a dependency-free fake.
+
+The fake is what keeps the test suite honest: the whole agent loop, including
+tool calling and the confirmation gate, is exercised offline with no endpoint
+and no network. An integration that cannot be tested without a server has cost
+more than it added.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Any
+
+
+class LLMUnavailable(Exception):
+    """The model could not be reached, or refused to answer.
+
+    Raised only after retries are exhausted. The agent turns this into a
+    sentence the user hears, never a 500.
+    """
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool the model wants run, with the arguments it chose."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Reply:
+    """One response from the model: words, tool calls, or both.
+
+    `text` is None when the model only wants to call tools. Callers must cope
+    with both being empty -- a model occasionally returns neither.
+    """
+
+    text: str | None = None
+    tool_calls: tuple[ToolCall, ...] = ()
+
+
+class LLMClient(ABC):
+    """Sends a conversation to a model and returns what it said."""
+
+    @abstractmethod
+    def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Reply:
+        """One round trip. Raises LLMUnavailable if the model cannot be reached."""
+
+
+class FakeLLMClient(LLMClient):
+    """Replays a scripted sequence of replies. Used by tests and CI."""
+
+    def __init__(self, scripted: Sequence[Reply]) -> None:
+        self._scripted = list(scripted)
+        self._index = 0
+        self.calls: list[tuple[list[dict[str, Any]], list[dict[str, Any]]]] = []
+
+    def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Reply:
+        self.calls.append((messages, tools))
+        if self._index >= len(self._scripted):
+            raise IndexError(
+                f"FakeLLMClient ran out of scripted replies after {self._index}; "
+                "the test asked for one more than it supplied."
+            )
+        reply = self._scripted[self._index]
+        self._index += 1
+        return reply

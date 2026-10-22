@@ -31,7 +31,11 @@ voicebot = ["api/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# `live` tests need the real LLM endpoint, which is on a private network.
+# They are deselected by default so the suite runs anywhere, offline, in
+# seconds. Run them deliberately with: pytest -m live
+addopts = "-q -m 'not live'"
+markers = ["live: needs the real LLM endpoint; deselected by default"]
 
 [tool.ruff]
 line-length = 100
