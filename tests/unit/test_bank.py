@@ -175,3 +175,50 @@ def test_reset_restores_the_seeded_state_but_keeps_the_audit_log(bank: SqliteBan
 )
 def test_format_money(cents: int, expected: str) -> None:
     assert format_money(cents) == expected
+
+
+# --- paying money in ---------------------------------------------------------
+#
+# An administrative operation, not something the assistant can do. A bank
+# assistant that can create money is not a bank assistant, so there is no tool
+# for this -- only the command line.
+
+
+def test_a_deposit_raises_the_balance(bank: SqliteBank) -> None:
+    assert bank.deposit(50_000, "checking") == 248_350 + 50_000
+    assert bank.balance("checking") == 298_350
+
+
+def test_a_deposit_writes_a_ledger_row(bank: SqliteBank) -> None:
+    before = bank.spending("today")
+    bank.deposit(50_000, "checking", source="manual top-up")
+    # Money in is a positive row, so it does not count as spending.
+    assert bank.spending("today") == before
+
+
+def test_a_deposit_appears_in_the_ledger_as_money_in(bank: SqliteBank) -> None:
+    bank.deposit(50_000, "checking", source="manual top-up")
+    row = bank._db.execute(
+        "SELECT merchant, cents FROM transactions ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row["cents"] == 50_000
+    assert row["merchant"] == "manual top-up"
+
+
+@pytest.mark.parametrize("cents", [0, -100])
+def test_a_deposit_must_be_positive(bank: SqliteBank, cents: int) -> None:
+    with pytest.raises(BankError):
+        bank.deposit(cents, "checking")
+    assert bank.balance("checking") == 248_350
+
+
+def test_a_deposit_to_an_unknown_account_is_refused(bank: SqliteBank) -> None:
+    with pytest.raises(BankError):
+        bank.deposit(50_000, "offshore")
+
+
+def test_a_deposit_restores_an_emptied_account(bank: SqliteBank) -> None:
+    bank.transfer(248_350, "someone", "checking")
+    assert bank.balance("checking") == 0
+    bank.deposit(100_000, "checking", source="manual top-up")
+    assert bank.balance("checking") == 100_000

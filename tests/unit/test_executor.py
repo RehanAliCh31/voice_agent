@@ -267,3 +267,15 @@ def test_a_spending_result_is_not_labelled_with_an_unfiltered_merchant(
     # answer -- that would be a confident label on the wrong figure.
     out = executor.execute(call("get_spending", period="this week", merchant=5))
     assert "merchant" not in out.result
+
+
+def test_the_assistant_has_no_way_to_create_money() -> None:
+    # Paying money in is an administrative act. A bank assistant that can do
+    # it is not a bank assistant.
+    names = {schema["function"]["name"] for schema in TOOL_SCHEMAS}
+    assert not {"deposit", "add_money", "credit", "top_up"} & names
+
+
+def test_deposit_is_not_reachable_through_the_executor() -> None:
+    out = ToolExecutor(SqliteBank()).execute(call("deposit", amount_cents=100_000))
+    assert "error" in out.result

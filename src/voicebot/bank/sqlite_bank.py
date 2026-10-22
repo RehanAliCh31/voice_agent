@@ -174,6 +174,20 @@ class SqliteBank(Bank):
             self._db.execute("INSERT INTO cards VALUES (?, ?, 0)", (last4, name))
         return Card(last4=last4, account=name, frozen=False)
 
+    def deposit(self, cents: int, account: str, source: str = "deposit") -> int:
+        """Pay money in. Writes a positive ledger row, so the history stays true."""
+        if cents <= 0:
+            raise BankError("A deposit has to be more than zero.")
+        name = self._account(account)
+
+        with self._db:
+            self._db.execute(
+                "UPDATE accounts SET balance_cents = balance_cents + ? WHERE name = ?",
+                (cents, name),
+            )
+            self._ledger(name, source.lower(), cents)
+        return self.balance(name)
+
     # --- audit ---------------------------------------------------------------
 
     def log_turn(

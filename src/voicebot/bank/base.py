@@ -154,6 +154,16 @@ class Bank(ABC):
     def order_card(self, account: str) -> Card:
         """Issue a new card for an account and return it."""
 
+    @abstractmethod
+    def deposit(self, cents: int, account: str, source: str = "deposit") -> int:
+        """Pay money in and return the new balance.
+
+        Administrative, not conversational. There is deliberately no tool for
+        this: an assistant that can create money is not an assistant. It
+        exists so a demo account that has been spent down can be topped up
+        from the command line without discarding the audit log.
+        """
+
     # --- audit ---------------------------------------------------------------
 
     @abstractmethod

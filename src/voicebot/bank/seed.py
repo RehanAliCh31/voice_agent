@@ -11,8 +11,13 @@ from __future__ import annotations
 import argparse
 import sqlite3
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-from voicebot.bank.base import period_range
+from voicebot.bank.base import format_money, period_range
+
+if TYPE_CHECKING:
+    from voicebot.bank.sqlite_bank import SqliteBank
 
 ACCOUNTS: tuple[tuple[str, int], ...] = (
     ("checking", 248_350),
@@ -71,23 +76,69 @@ def clear(connection: sqlite3.Connection) -> None:
         connection.execute("DELETE FROM sqlite_sequence WHERE name = 'transactions'")
 
 
+def _show(bank: SqliteBank) -> None:
+    print()
+    for account in bank.accounts():
+        print(f"  {account.name:<10} {format_money(account.balance_cents):>14}")
+    print(f"\n  {bank.turn_count()} turns in the audit log\n")
+
+
 def main() -> None:
-    """Create or reseed a database file from the shell."""
+    """Look after the demo bank from the shell.
+
+    Editing the opening balances in this file does nothing to a database that
+    already exists -- the seed runs once, when the tables are empty. These are
+    the commands that act on a live one.
+    """
     from voicebot.bank.sqlite_bank import SqliteBank
 
-    parser = argparse.ArgumentParser(description="Create or reseed the demo bank.")
-    parser.add_argument("--path", default="data/bank.db", help="database file to write")
+    parser = argparse.ArgumentParser(
+        description="Create, inspect, top up or reset the demo bank.",
+        epilog=(
+            "examples:\n"
+            "  python -m voicebot.bank.seed --show\n"
+            "  python -m voicebot.bank.seed --deposit 500 --account checking\n"
+            "  python -m voicebot.bank.seed --reset\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--path", default="data/bank.db", help="database file to act on")
+    parser.add_argument("--show", action="store_true", help="print the balances and exit")
+    parser.add_argument(
+        "--deposit",
+        type=float,
+        metavar="DOLLARS",
+        help="pay money into an account, keeping everything else as it is",
+    )
+    parser.add_argument(
+        "--account", default="checking", help="which account to pay into (default: checking)"
+    )
     parser.add_argument(
         "--reset",
         action="store_true",
-        help="reseed an existing database, keeping its audit log",
+        help="restore the opening balances, keeping the audit log",
     )
     args = parser.parse_args()
 
-    bank = SqliteBank(path=args.path, seed_if_empty=not args.reset)
+    existed = Path(args.path).exists() if args.path != ":memory:" else False
+    bank = SqliteBank(path=args.path, seed_if_empty=True)
+    if not existed:
+        print(f"created {args.path}")
+
     if args.reset:
         bank.reset()
-    print(f"{'reseeded' if args.reset else 'created'} {args.path}")
+        print(f"reset {args.path} to its opening balances")
+    elif args.deposit is not None:
+        # Dollars on the command line because a person types dollars; cents
+        # everywhere inside, because money is integer cents throughout.
+        cents = round(args.deposit * 100)
+        new_balance = bank.deposit(cents, args.account, source="manual top-up")
+        print(
+            f"paid {format_money(cents)} into {args.account}; "
+            f"it now holds {format_money(new_balance)}"
+        )
+
+    _show(bank)
 
 
 if __name__ == "__main__":

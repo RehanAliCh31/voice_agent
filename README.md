@@ -122,7 +122,7 @@ python -m venv .venv
 .venv/Scripts/python -m pytest
 ```
 
-240 tests in about 17 seconds, plus 16 for the barge-in detector under
+275 tests in about 15 seconds, plus 16 for the barge-in detector under
 `node --test "tests/js/*.test.js"`. Every external dependency sits behind an
 abstract base class with a fake — including the language model, whose
 `FakeLLMClient` replays scripted replies and tool calls. The whole agent loop,
@@ -214,6 +214,20 @@ error listing the valid ones. v1 stored periods as free text, which meant "how
 much did I spend in October?" matched nothing, summed to zero, and the bot
 answered "nothing" to a question it had not understood.
 
+### Looking after the demo bank
+
+```bash
+python -m voicebot.bank --show                          # balances and turn count
+python -m voicebot.bank --deposit 500 --account checking # pay money in
+python -m voicebot.bank --reset                          # opening balances, audit log kept
+```
+
+Editing the opening balances in `bank/seed.py` does nothing to a database
+that already exists: the seed runs once, when the tables are empty. Use these.
+
+Paying money in is administrative and has no tool, so the assistant cannot do
+it. An assistant that can create money is not an assistant.
+
 `turns` is the audit log — what was said, which tools ran, whether the guard
 fired and what it suppressed. For a banking demo it is worth more than the
 account tables.
@@ -230,7 +244,7 @@ each other's transfer.
 .venv/Scripts/python -m ruff check src tests     # lint
 .venv/Scripts/python -m black --check src tests  # formatting
 .venv/Scripts/python -m mypy src                 # types
-.venv/Scripts/python -m pytest                   # 240 tests
+.venv/Scripts/python -m pytest                   # 275 tests
 node --test "tests/js/*.test.js"                 # 16 barge-in tests
 ```
 
