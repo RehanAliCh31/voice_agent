@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.types import Scope
 
 from voicebot import __version__
 from voicebot.api.deps import build_services
@@ -26,6 +27,25 @@ from voicebot.utils.logging import get_logger
 log = get_logger("api.app")
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class RevalidatedStatic(StaticFiles):
+    """Static files a browser must check before reusing.
+
+    StaticFiles sends an ETag but no Cache-Control, so a browser is free to
+    apply heuristic caching and serve a stale script without asking. For a
+    page whose JavaScript changes with the service, that means someone runs
+    yesterday's code and reports that a fix did not work.
+
+    `no-cache` does not forbid caching -- it requires revalidation, which the
+    existing ETag answers with a 304 and no body.
+    """
+
+    async def get_response(self, path: str, scope: Scope):  # type: ignore[no-untyped-def]
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
 
 DESCRIPTION = """
 A cascaded speech-to-speech banking assistant.
@@ -75,7 +95,7 @@ def create_app() -> FastAPI:
     # frontend then shares an origin with the API, which means the page can
     # use relative URLs and the browser will grant it the microphone.
     if STATIC_DIR.is_dir():
-        app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
+        app.mount("/", RevalidatedStatic(directory=STATIC_DIR, html=True), name="ui")
     else:  # pragma: no cover - only when the package is installed without assets
         log.warning("no static directory at %s; the API is up but the UI is not", STATIC_DIR)
 

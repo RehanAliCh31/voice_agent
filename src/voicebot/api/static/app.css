@@ -581,3 +581,9 @@ h1, h2, p, dl, dd, dt { margin: 0; }
   font-size: 12.5px;
   font-style: italic;
 }
+
+/* While the bot speaks the meter shows loudness against the barge-in line,
+   so the slider can be set by looking rather than by guessing. */
+.level__fill[data-over="true"] {
+  background: var(--accent-bright);
+}

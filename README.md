@@ -122,7 +122,8 @@ python -m venv .venv
 .venv/Scripts/python -m pytest
 ```
 
-236 tests in about 16 seconds. Every external dependency sits behind an
+240 tests in about 17 seconds, plus 16 for the barge-in detector under
+`node --test "tests/js/*.test.js"`. Every external dependency sits behind an
 abstract base class with a fake — including the language model, whose
 `FakeLLMClient` replays scripted replies and tool calls. The whole agent loop,
 the confirmation gate and the numeric guard are exercised with no endpoint.
@@ -229,7 +230,8 @@ each other's transfer.
 .venv/Scripts/python -m ruff check src tests     # lint
 .venv/Scripts/python -m black --check src tests  # formatting
 .venv/Scripts/python -m mypy src                 # types
-.venv/Scripts/python -m pytest                   # 236 tests
+.venv/Scripts/python -m pytest                   # 240 tests
+node --test "tests/js/*.test.js"                 # 16 barge-in tests
 ```
 
 ---
@@ -255,6 +257,11 @@ Stated plainly, because they change how the system should be judged.
   figure. It cannot prove the model will choose the right tool.
 - **English only**, and accuracy through a real microphone across accents is
   unmeasured.
+- **Barge-in is an energy gate, not a speech classifier.** It measures the
+  microphone against a moving estimate of the room, which is enough to tell a
+  person from the bot's own voice through the speakers. A sustained noise at
+  speaking volume — a television, someone else talking nearby — will still
+  interrupt it. A real classifier would not, at the cost of a model download.
 
 ---
 

@@ -387,3 +387,17 @@ def test_the_committed_default_config_still_loads() -> None:
     config = load_config("configs/app.yaml")
     assert config.llm.engine
     assert config.database.path
+
+
+@pytest.mark.parametrize("asset", ["/", "/app.js", "/vad.js", "/app.css"])
+def test_the_page_and_its_assets_must_be_revalidated(client: TestClient, asset: str) -> None:
+    """Without this the browser runs yesterday's JavaScript.
+
+    FastAPI's StaticFiles sends an ETag but no Cache-Control, so a browser
+    applies heuristic caching and may not ask whether the file changed. After
+    an update that looks exactly like the fix not working -- which is how this
+    was found.
+    """
+    response = client.get(asset)
+    assert response.status_code == 200
+    assert "no-cache" in response.headers.get("cache-control", "")

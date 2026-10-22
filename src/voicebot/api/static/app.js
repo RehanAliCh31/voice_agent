@@ -830,9 +830,17 @@
 
     state.vad = new window.VoiceActivity({
       onSpeech: onBargeIn,
-      onLevel: function (rms) {
+      onLevel: function (rms, trigger) {
+        // While listening, the meter is just loudness. While the bot is
+        // speaking, it is loudness against the line barge-in has to clear --
+        // which moves with the room -- so you can see why it did or did not
+        // fire, and set the slider by looking rather than by guessing.
         if (state.phase === "listening") {
           el.levelFill.style.width = Math.min(100, Math.round(rms * 400)) + "%";
+        } else if (state.phase === "speaking") {
+          var share = trigger > 0 ? rms / trigger : 0;
+          el.levelFill.style.width = Math.min(100, Math.round(share * 90)) + "%";
+          el.levelFill.setAttribute("data-over", share >= 1 ? "true" : "false");
         }
       },
     });

@@ -48,8 +48,18 @@ ok "dependencies installed"
 # --- --test ------------------------------------------------------------------
 
 if [ "${1:-}" = "--test" ]; then
-    say "Running the test suite"
-    exec "$PYTHON" -m pytest
+    say "Running the Python suite"
+    "$PYTHON" -m pytest
+
+    # The barge-in detector is the one piece of logic that cannot be tested
+    # from Python, and the one whose failures were found by using it.
+    if command -v node >/dev/null 2>&1; then
+        say "Running the barge-in detector tests"
+        node --test "tests/js/*.test.js" 2>&1 | grep -E "^(not ok|# (pass|fail))" || true
+    else
+        warn "node not installed; skipping the barge-in detector tests"
+    fi
+    exit 0
 fi
 
 # --- which configuration -----------------------------------------------------
