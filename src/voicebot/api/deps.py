@@ -72,7 +72,13 @@ class Services:
             turn_index=turn_index,
             user_text=turn.text,
             bot_text=turn.agent.text,
-            tool_calls=json.dumps([call.name for call in turn.agent.tool_calls]) or None,
+            # NULL, not "[]": json.dumps([]) is truthy, so `or None` never
+            # fired and the schema's "nullable" was a fiction.
+            tool_calls=(
+                json.dumps([call.name for call in turn.agent.tool_calls])
+                if turn.agent.tool_calls
+                else None
+            ),
             guard_hit=turn.agent.guard_hit,
             suppressed=turn.agent.suppressed,
             latency_ms=turn.latency.total_ms,
@@ -86,6 +92,12 @@ class Services:
         }
 
 
+def _check_engine(kind: str, name: str, known: set[str]) -> None:
+    """Refuse an engine name nothing implements, rather than falling back."""
+    if name not in known:
+        raise ValueError(f"unknown {kind} engine {name!r}. Known: {', '.join(sorted(known))}.")
+
+
 def build_services(config: AppConfig | None = None) -> Services:
     """Construct the engines, the bank and the session store named by the config.
 
@@ -94,6 +106,13 @@ def build_services(config: AppConfig | None = None) -> Services:
     """
     config = config or AppConfig()
     set_seed(config.seed)
+
+    # Config is strict about unknown keys; it has to be strict about unknown
+    # values too. A single typo would otherwise start cleanly and answer every
+    # question with "the model isn't configured yet".
+    _check_engine("asr", config.asr.engine, {"whisper", "fake"})
+    _check_engine("llm", config.llm.engine, {"openai", "fake"})
+    _check_engine("tts", config.tts.engine, {"vits", "browser", "fake"})
 
     asr: ASREngine
     if config.asr.engine == "whisper":

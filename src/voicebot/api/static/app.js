@@ -5,9 +5,10 @@
  * playing the barge-in detector is armed, so talking over the bot stops it
  * and starts the next turn.
  *
- * Every element is built with createElement and textContent, never
- * innerHTML. A transcript is user input echoed back, and the model's own
- * output is not trusted markup either.
+ * No text ever reaches the DOM as markup: every element is built with
+ * createElement and textContent. A transcript is user input echoed back, and
+ * the model's own output is not trusted markup either. The one innerHTML in
+ * this file writes a fixed SVG literal with no interpolation.
  */
 
 (function () {
@@ -524,6 +525,28 @@
 
   // --- a turn -------------------------------------------------------------
 
+  /** Say once that this browser cannot speak, rather than seeming broken. */
+  function noteSilence() {
+    if (state.toldAboutVoices) {
+      return;
+    }
+    state.toldAboutVoices = true;
+    var notice = node("div", "turn turn--bot turn--notice");
+    notice.appendChild(node("div", "turn__who", ""));
+    var body = node("div", "turn__body");
+    body.appendChild(
+      node(
+        "p",
+        "turn__text",
+        "This browser has no speech voices installed, so replies are shown " +
+          "but not spoken. Everything else works."
+      )
+    );
+    notice.appendChild(body);
+    el.conversation.appendChild(notice);
+    el.conversation.scrollTop = el.conversation.scrollHeight;
+  }
+
   /** The Yes or Cancel button. Rendered exactly like any other turn. */
   function resolvePending(promise) {
     showThinking();
@@ -549,7 +572,7 @@
 
     addTurn("BOT", reply, {
       audioBlob: blob,
-      replayText: turn.speak_client_side ? reply : null,
+      replayText: turn.speak_client_side && canSpeak() ? reply : null,
       guardHit: Boolean(turn.guard_hit),
     });
 
@@ -567,6 +590,9 @@
       setStatus("Speaking", bargeHint(), "busy");
       speak(reply).then(idle);
     } else {
+      if (turn.speak_client_side) {
+        noteSilence();
+      }
       idle();
     }
   }
@@ -652,7 +678,7 @@
 
   function finishTurn() {
     setPhase("thinking");
-    setStatus("Processing", "Transcribing, then reading the intent", "busy");
+    setStatus("Processing", "Transcribing, then thinking", "busy");
     el.levelFill.style.width = "0%";
 
     return stopRecording()
@@ -695,7 +721,7 @@
   function send(text) {
     stopPlayback();
     setPhase("thinking");
-    setStatus("Processing", "Reading the intent", "busy");
+    setStatus("Processing", "Thinking", "busy");
     addTurn("YOU", text);
     showThinking();
 

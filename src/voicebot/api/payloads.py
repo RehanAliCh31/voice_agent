@@ -109,8 +109,14 @@ def turn_payload(
     if len(result.audio.samples):
         audio_b64 = base64.b64encode(encode_wav(result.audio)).decode("ascii")
 
+    # The token gates money. There is no reason to publish it, even
+    # same-origin to the session that owns it.
     calls = [
-        ToolCallPayload(name=call.name, arguments=dict(call.arguments), result=dict(outcome))
+        ToolCallPayload(
+            name=call.name,
+            arguments={k: v for k, v in call.arguments.items() if k != "confirmation_token"},
+            result={k: v for k, v in outcome.items() if k != "token"},
+        )
         for call, outcome in zip(result.agent.tool_calls, result.agent.tool_results, strict=False)
     ]
 

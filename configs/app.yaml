@@ -1,24 +1,28 @@
-# Default runtime configuration. Override per-experiment under configs/experiments/.
+# The committed default: everything fake, nothing downloaded, no network.
+#
+# Starting the service with no VOICEBOT_CONFIG uses these same defaults, so
+# this file exists to be copied and edited rather than to be run. For the real
+# engines see configs/serve.yaml.
+
 seed: 42
-data_dir: data
 
 asr:
   engine: fake
 
-nlu:
-  engine: fake
-  encoder_name: distilbert-base-uncased
-  max_length: 64
-  oos_threshold: 0.5
-
 tts:
+  # `browser` hands synthesis to the page; `vits` synthesises here.
   engine: fake
 
-training:
-  learning_rate: 3.0e-5
-  batch_size: 32
-  epochs: 5
-  warmup_ratio: 0.1
-  slot_loss_weight: 1.0
-  early_stopping_patience: 2
-  device: auto
+llm:
+  engine: fake
+  # Set engine to `openai` and fill these in to talk to a real endpoint.
+  base_url: ""
+  model: ""
+  api_key_env: VOICEBOT_LLM_KEY
+  max_tool_rounds: 4
+  max_turns: 20
+
+database:
+  # `:memory:` starts from the seeded demo state every run.
+  path: ":memory:"
+  seed_on_create: true

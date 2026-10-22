@@ -243,3 +243,94 @@ def test_trim_keeps_the_system_prompt_and_bounds_the_history() -> None:
     assert conversation.messages[0]["role"] == "system"
     assert len(conversation.messages) <= 21
     assert conversation.messages[-1]["content"] == "turn 59"
+
+
+# --- trimming must not split a tool call from its result --------------------
+
+
+def test_trim_never_orphans_a_tool_message(executor: ToolExecutor) -> None:
+    """A `tool` message whose assistant parent was dropped is a 400.
+
+    The client treats a 4xx as non-retryable, so the customer would hear the
+    outage apology on every turn until the orphan scrolled out of the window.
+    """
+    conversation = Conversation("s1")
+    agent = Agent(
+        FakeLLMClient(
+            [
+                (
+                    Reply(tool_calls=(ToolCall(f"c{i}", "list_bills", {}),))
+                    if i % 2
+                    else Reply(text=f"reply {i}")
+                )
+                for i in range(40)
+            ]
+            + [Reply(text="done")] * 40
+        ),
+        executor,
+        max_turns=3,
+    )
+    for i in range(12):
+        agent.handle(f"turn {i}", conversation)
+
+    roles = [m["role"] for m in conversation.messages]
+    for index, role in enumerate(roles):
+        if role != "tool":
+            continue
+        earlier = roles[:index]
+        assert "assistant" in earlier, f"orphaned tool message at {index}: {roles}"
+
+
+def test_trim_counts_turns_not_messages(executor: ToolExecutor) -> None:
+    # A tool turn is several messages. Counting messages would make the bot
+    # forget roughly five exchanges instead of twenty.
+    conversation = Conversation("s1")
+    agent = Agent(FakeLLMClient([Reply(text="ok")] * 40), executor, max_turns=5)
+    for i in range(12):
+        agent.handle(f"turn {i}", conversation)
+
+    users = [m for m in conversation.messages if m["role"] == "user"]
+    assert len(users) == 5
+    assert users[0]["content"] == "turn 7"
+
+
+def test_trim_keeps_the_system_prompt_pinned(executor: ToolExecutor) -> None:
+    conversation = Conversation("s1")
+    agent = Agent(FakeLLMClient([Reply(text="ok")] * 40), executor, max_turns=3)
+    for i in range(10):
+        agent.handle(f"turn {i}", conversation)
+    assert conversation.messages[0]["role"] == "system"
+
+
+# --- the audit record survives an outage ------------------------------------
+
+
+def test_an_outage_after_a_tool_ran_still_reports_it(bank: SqliteBank) -> None:
+    """`turns` must be right precisely when something went wrong.
+
+    A transfer that executed before the endpoint died has to appear in the
+    audit log; losing it makes the log wrong at the only moment it is read.
+    """
+    executor = ToolExecutor(bank)
+    token = executor.execute(ToolCall("c0", "transfer_money", TRANSFER)).result["token"]
+
+    class DiesAfterOneRound(LLMClient):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, messages: Any, tools: Any) -> Reply:
+            self.calls += 1
+            if self.calls == 1:
+                return Reply(
+                    tool_calls=(
+                        ToolCall("c1", "transfer_money", {**TRANSFER, "confirmation_token": token}),
+                    )
+                )
+            raise LLMUnavailable("endpoint died")
+
+    out = Agent(DiesAfterOneRound(), executor).handle("confirm it", Conversation("s1"))
+
+    assert bank.balance("checking") == 243_350  # the money moved
+    assert out.text == UNAVAILABLE
+    assert [call.name for call in out.tool_calls] == ["transfer_money"]
+    assert out.tool_results and out.tool_results[0]["status"] == "done"

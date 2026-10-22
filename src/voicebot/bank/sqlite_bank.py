@@ -100,19 +100,25 @@ class SqliteBank(Bank):
         if cents <= 0:
             raise BankError("The amount has to be more than zero.")
         account = self._account(from_account)
-        available = self.balance(account)
-        if available < cents:
-            raise BankError(
-                f"There isn't enough in {account}. The balance is {format_money(available)}."
-            )
 
+        # The sufficiency test is the UPDATE's own WHERE clause rather than a
+        # separate read. Checking first and writing second lets two concurrent
+        # transfers both pass the check; the loser then violates the CHECK
+        # constraint and raises instead of being refused in words.
         with self._db:
-            self._db.execute(
-                "UPDATE accounts SET balance_cents = balance_cents - ? WHERE name = ?",
-                (cents, account),
-            )
+            changed = self._db.execute(
+                "UPDATE accounts SET balance_cents = balance_cents - ? "
+                "WHERE name = ? AND balance_cents >= ?",
+                (cents, account, cents),
+            ).rowcount
+            if not changed:
+                available = self.balance(account)
+                raise BankError(
+                    f"There isn't enough in {account}. "
+                    f"The balance is {format_money(available)}."
+                )
             self._ledger(account, payee.lower(), -cents)
-        return available - cents
+        return self.balance(account)
 
     def pay_bill(self, bill: str) -> int:
         row = self._db.execute(
@@ -125,18 +131,19 @@ class SqliteBank(Bank):
             raise BankError(f"Your {bill} bill is already paid.")
 
         amount = int(row["amount_cents"])
-        available = self.balance("checking")
-        if available < amount:
-            raise BankError(
-                f"There isn't enough in checking to cover that. "
-                f"The bill is {format_money(amount)} and the balance is {format_money(available)}."
-            )
 
         with self._db:
-            self._db.execute(
-                "UPDATE accounts SET balance_cents = balance_cents - ? WHERE name = 'checking'",
-                (amount,),
-            )
+            changed = self._db.execute(
+                "UPDATE accounts SET balance_cents = balance_cents - ? "
+                "WHERE name = 'checking' AND balance_cents >= ?",
+                (amount, amount),
+            ).rowcount
+            if not changed:
+                available = self.balance("checking")
+                raise BankError(
+                    f"There isn't enough in checking to cover that. The bill is "
+                    f"{format_money(amount)} and the balance is {format_money(available)}."
+                )
             self._db.execute("UPDATE bills SET paid = 1 WHERE name = ?", (bill.lower(),))
             self._ledger("checking", bill.lower(), -amount)
         return amount

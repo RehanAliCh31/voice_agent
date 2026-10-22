@@ -11,13 +11,15 @@ because the alternative is a customer listening to silence.
 from __future__ import annotations
 
 import json
+import secrets
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from voicebot.agent.executor import ToolExecutor
-from voicebot.agent.guard import guard, money_in_results
+from voicebot.agent.executor import ToolExecutor, ToolOutcome
+from voicebot.agent.guard import fallback_sentence, guard
 from voicebot.llm.base import LLMClient, LLMUnavailable, Reply, ToolCall
-from voicebot.llm.prompts import NOTHING_SAID, SYSTEM_PROMPT, UNAVAILABLE, UNVERIFIED
+from voicebot.llm.prompts import NOTHING_SAID, SYSTEM_PROMPT, UNAVAILABLE
 from voicebot.llm.tools import TOOL_SCHEMAS
 from voicebot.utils.logging import get_logger
 
@@ -60,7 +62,15 @@ class Conversation:
         )
 
     def trim(self, max_turns: int = DEFAULT_MAX_TURNS) -> None:
-        """Bound the history, keeping the system prompt pinned.
+        """Bound the history to whole turns, keeping the system prompt pinned.
+
+        Cutting by message count would eventually leave a `tool` message whose
+        assistant parent had been dropped. An OpenAI-compatible server rejects
+        that with a 400, which this client treats as non-retryable, so the
+        customer would hear the outage apology until the orphan scrolled out.
+        A turn starts at a `user` message and runs to just before the next
+        one, so slicing on those boundaries can never split a tool call from
+        its result.
 
         The context window is not the binding limit -- 262k tokens is far more
         than a conversation needs. Latency is: every message is re-sent on
@@ -69,9 +79,11 @@ class Conversation:
         """
         system = [m for m in self.messages[:1] if m.get("role") == "system"]
         rest = self.messages[len(system) :]
-        if len(rest) > max_turns:
-            rest = rest[-max_turns:]
-        self.messages = system + rest
+
+        starts = [i for i, m in enumerate(rest) if m.get("role") == "user"]
+        if len(starts) <= max_turns:
+            return
+        self.messages = system + rest[starts[-max_turns] :]
 
 
 @dataclass(frozen=True)
@@ -81,6 +93,7 @@ class AgentResult:
     text: str
     tool_calls: tuple[ToolCall, ...] = ()
     tool_results: tuple[dict[str, Any], ...] = ()
+    sourced_cents: tuple[int, ...] = ()
     guard_hit: bool = False
     suppressed: str | None = None
     rounds: int = 0
@@ -120,23 +133,24 @@ class Agent:
         """
         self._ensure_system(conversation)
         pending = self.executor.pending
-        result = self.executor.confirm() if confirmed else self.executor.cancel()
+        outcome = self.executor.confirm() if confirmed else self.executor.cancel()
 
-        call_id = "confirm"
-        conversation.append_assistant(
-            Reply(
-                tool_calls=(
-                    ToolCall(
-                        id=call_id,
-                        name=pending.tool if pending else "confirm",
-                        arguments=pending.arguments if pending else {},
-                    ),
-                )
-            )
+        # A real tool name and a fresh id: duplicate ids across a session, or
+        # a name absent from the schemas, are the kind of thing a stricter
+        # server rejects -- on the one path that moves money.
+        call_id = f"confirm-{secrets.token_urlsafe(6)}"
+        injected = ToolCall(
+            id=call_id,
+            name=pending.tool if pending else "pay_bill",
+            arguments=dict(pending.arguments) if pending else {},
         )
-        conversation.append_tool_result(call_id, result)
+        conversation.append_assistant(Reply(tool_calls=(injected,)))
+        conversation.append_tool_result(call_id, outcome.result)
         conversation.trim(self.max_turns)
-        return self._run(conversation, seeded_results=[result])
+        # The injected call travels with its outcome, so the confirmed
+        # action appears in the inspector. Without it the one turn that
+        # moved money rendered as 'no tools called'.
+        return self._run(conversation, seeded=[outcome], seeded_calls=[injected])
 
     # --- internals -----------------------------------------------------------
 
@@ -145,11 +159,14 @@ class Agent:
             conversation.messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
 
     def _run(
-        self, conversation: Conversation, seeded_results: list[dict[str, Any]] | None = None
+        self,
+        conversation: Conversation,
+        seeded: list[ToolOutcome] | None = None,
+        seeded_calls: list[ToolCall] | None = None,
     ) -> AgentResult:
         """Ask, execute, repeat -- until the model has words and wants nothing more."""
-        calls: list[ToolCall] = []
-        results: list[dict[str, Any]] = list(seeded_results or [])
+        calls: list[ToolCall] = list(seeded_calls or [])
+        outcomes: list[ToolOutcome] = list(seeded or [])
         rounds = 0
         reply = Reply()
 
@@ -158,8 +175,12 @@ class Agent:
             try:
                 reply = self.client.complete(list(conversation.messages), list(TOOL_SCHEMAS))
             except LLMUnavailable as exc:
+                # Carry what already ran. A transfer that executed before the
+                # endpoint died still has to appear in the audit log; losing
+                # it would make `turns` wrong exactly when something went
+                # wrong, which is when it is read.
                 log.warning("llm unavailable on round %d: %s", rounds, exc)
-                return AgentResult(text=UNAVAILABLE, rounds=rounds)
+                return self._result(UNAVAILABLE, calls, outcomes, rounds, hit=False)
 
             conversation.append_assistant(reply)
 
@@ -167,45 +188,49 @@ class Agent:
                 break
 
             for call in reply.tool_calls:
-                result = self.executor.execute(call)
+                outcome = self.executor.execute(call)
                 calls.append(call)
-                results.append(result)
-                conversation.append_tool_result(call.id, result)
+                outcomes.append(outcome)
+                conversation.append_tool_result(call.id, outcome.result)
 
         conversation.trim(self.max_turns)
-        text, hit, suppressed = self._finish(reply.text, results)
+
+        spoken = (reply.text or "").strip()
+        if not spoken:
+            # No words and no rounds left: say something rather than nothing.
+            return self._result(NOTHING_SAID, calls, outcomes, rounds, hit=False)
+
+        sourced = _sourced(outcomes)
+        checked, hit = guard(
+            spoken,
+            [o.result for o in outcomes],
+            fallback_sentence(sourced),
+            sourced_cents=sourced,
+        )
+        return self._result(
+            checked, calls, outcomes, rounds, hit=hit, suppressed=spoken if hit else None
+        )
+
+    def _result(
+        self,
+        text: str,
+        calls: list[ToolCall],
+        outcomes: list[ToolOutcome],
+        rounds: int,
+        hit: bool,
+        suppressed: str | None = None,
+    ) -> AgentResult:
         return AgentResult(
             text=text,
             tool_calls=tuple(calls),
-            tool_results=tuple(results),
+            tool_results=tuple(o.result for o in outcomes),
+            sourced_cents=_sourced(outcomes),
             guard_hit=hit,
             suppressed=suppressed,
             rounds=rounds,
         )
 
-    def _finish(
-        self, text: str | None, results: list[dict[str, Any]]
-    ) -> tuple[str, bool, str | None]:
-        """Turn whatever the model left us with into something sayable, and check it."""
-        spoken = (text or "").strip()
-        if not spoken:
-            # No words and no more rounds: say something rather than nothing.
-            return NOTHING_SAID, False, None
 
-        checked, hit = guard(spoken, results, self._fallback(results))
-        return checked, hit, spoken if hit else None
-
-    def _fallback(self, results: list[dict[str, Any]]) -> str:
-        """What to say instead when the guard fires.
-
-        Built from the tool results, so the customer still gets the real
-        figure where there is one. Assembled from values, never generated --
-        this is the one sentence that must be trustworthy by construction.
-        """
-        amounts = sorted(money_in_results(results))
-        if not amounts:
-            return UNVERIFIED
-        if len(amounts) == 1:
-            return f"The figure I have is ${amounts[0]:,.2f}."
-        readable = ", ".join(f"${amount:,.2f}" for amount in amounts)
-        return f"The figures I have are {readable}."
+def _sourced(outcomes: Sequence[ToolOutcome]) -> tuple[int, ...]:
+    """Every figure the bank produced this turn, and nothing else."""
+    return tuple(cents for outcome in outcomes for cents in outcome.sourced_cents)

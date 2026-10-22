@@ -318,3 +318,72 @@ def test_the_payload_says_when_a_confirmation_is_waiting(client: TestClient) -> 
 def test_an_ordinary_turn_is_not_awaiting_confirmation(client: TestClient) -> None:
     scripted(client, [Reply(text="Hello there.")])
     assert client.post("/v1/chat", json={"text": "hello"}).json()["awaiting_confirmation"] is False
+
+
+def test_the_confirmed_action_reaches_the_inspector(client: TestClient) -> None:
+    # The one action that actually moved money was rendering as "no tools
+    # called", because the confirm path produced a result with no matching call.
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Shall I go ahead?"),
+            Reply(text="Done."),
+        ],
+    )
+    sid = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"]
+
+    body = client.post("/v1/confirm", json={"session_id": sid}).json()
+
+    assert body["tool_calls"], "the confirmed transfer is missing from the inspector"
+    assert body["tool_calls"][0]["name"] == "transfer_money"
+    assert body["tool_calls"][0]["result"]["status"] == "done"
+
+
+def test_the_confirmation_token_is_not_published(client: TestClient) -> None:
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Shall I go ahead?"),
+        ],
+    )
+    body = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()
+    for call in body["tool_calls"]:
+        assert "confirmation_token" not in call["arguments"]
+        assert "token" not in call["result"]
+
+
+def test_a_turn_with_no_tools_logs_null_rather_than_an_empty_array(
+    client: TestClient,
+) -> None:
+    scripted(client, [Reply(text="Hello there.")])
+    client.post("/v1/chat", json={"text": "hello"})
+
+    bank = client.app.state.services.bank
+    row = bank._db.execute("SELECT tool_calls FROM turns ORDER BY id DESC LIMIT 1").fetchone()
+    assert row["tool_calls"] is None
+
+
+def test_an_unknown_engine_name_is_refused_rather_than_silently_faked() -> None:
+    # A single typo in a deploy would otherwise start cleanly and answer every
+    # question with "the model isn't configured yet".
+    from voicebot.api.deps import build_services
+    from voicebot.config import AppConfig, ASRConfig, LLMConfig, TTSConfig
+
+    for config in (
+        AppConfig(asr=ASRConfig(engine="whispr")),
+        AppConfig(llm=LLMConfig(engine="openapi")),
+        AppConfig(tts=TTSConfig(engine="vit")),
+    ):
+        with pytest.raises(ValueError, match="unknown"):
+            build_services(config=config)
+
+
+def test_the_committed_default_config_still_loads() -> None:
+    # configs/app.yaml is what the docs point at; it must not rot.
+    from voicebot.config import load_config
+
+    config = load_config("configs/app.yaml")
+    assert config.llm.engine
+    assert config.database.path

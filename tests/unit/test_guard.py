@@ -2,7 +2,12 @@
 
 The guard checks money and only money. A bot that cannot say "five working
 days" without tripping an alarm is not holding a conversation, so the scope is
-deliberately narrow — and inside that scope it is absolute.
+deliberately narrow -- and inside that scope it is absolute.
+
+What it trusts is the integer cents the executor reports taking from the bank.
+It does not read the tool results' text: an earlier version did, and could be
+defeated by calling a tool with a money-shaped argument that the error message
+echoed back.
 """
 
 from __future__ import annotations
@@ -11,9 +16,11 @@ from decimal import Decimal
 
 import pytest
 
-from voicebot.agent.guard import guard, money_in_results, money_in_text
+from voicebot.agent.guard import fallback_sentence, guard, money_in_text
 
 FALLBACK = "I have that, but let me read it back from your account."
+SAVINGS = 1_902_000  # $19,020.00
+CHECKING = 248_350  # $2,483.50
 
 
 # --- what counts as money ----------------------------------------------------
@@ -40,33 +47,17 @@ def test_money_is_recognised(text: str, expected: list[Decimal]) -> None:
         "The card ending 4417 is now frozen.",
         "I can help with 5 things.",
         "Hello, how can I help?",
-        "A replacement arrives in 5 working days.",
     ],
 )
 def test_plain_numbers_are_not_money(text: str) -> None:
     assert money_in_text(text) == []
 
 
-def test_money_is_read_out_of_tool_results() -> None:
-    results = [
-        {"balance": "$19,020.00", "balance_cents": 1_902_000},
-        {"cards": [{"last4": "4417", "frozen": True}]},
-    ]
-    # Both spellings of the same figure collapse to one value; 4417 is not money.
-    assert money_in_results(results) == {Decimal("19020.00")}
-
-
-def test_nested_results_are_searched() -> None:
-    results = [{"accounts": [{"balance_cents": 248_350}, {"balance_cents": 1_902_000}]}]
-    assert money_in_results(results) == {Decimal("2483.50"), Decimal("19020.00")}
-
-
 # --- the guard ---------------------------------------------------------------
 
 
-def test_a_figure_that_matches_a_tool_result_passes() -> None:
-    results = [{"balance": "$19,020.00", "balance_cents": 1_902_000}]
-    text, hit = guard("Your savings balance is $19,020.00.", results, FALLBACK)
+def test_a_figure_that_matches_a_sourced_value_passes() -> None:
+    text, hit = guard("Your savings balance is $19,020.00.", [], FALLBACK, (SAVINGS,))
     assert hit is False
     assert text == "Your savings balance is $19,020.00."
 
@@ -74,15 +65,12 @@ def test_a_figure_that_matches_a_tool_result_passes() -> None:
 def test_a_reformatted_but_correct_figure_passes() -> None:
     # The real model drops a trailing .00. That is a formatting choice, not a
     # different number, so the comparison is by value and not by string.
-    results = [{"balance": "$19,020.00"}]
-    text, hit = guard("Your balance is $19,020.", results, FALLBACK)
+    _, hit = guard("Your balance is $19,020.", [], FALLBACK, (SAVINGS,))
     assert hit is False
-    assert text == "Your balance is $19,020."
 
 
 def test_an_invented_figure_is_caught_and_replaced() -> None:
-    results = [{"balance": "$19,020.00"}]
-    text, hit = guard("Your balance is $31,415.00.", results, FALLBACK)
+    text, hit = guard("Your balance is $31,415.00.", [], FALLBACK, (SAVINGS,))
     assert hit is True
     assert text == FALLBACK
 
@@ -90,14 +78,98 @@ def test_an_invented_figure_is_caught_and_replaced() -> None:
 def test_a_derived_total_is_caught() -> None:
     # Arithmetic is forbidden: $21,503.50 is correct but no tool returned it,
     # and a guard that admits correct-looking sums admits incorrect ones too.
-    results = [{"balance": "$19,020.00"}, {"balance": "$2,483.50"}]
-    _, hit = guard("Together that's $21,503.50.", results, FALLBACK)
+    _, hit = guard("Together that's $21,503.50.", [], FALLBACK, (SAVINGS, CHECKING))
     assert hit is True
 
 
 def test_one_wrong_figure_among_right_ones_is_still_caught() -> None:
-    results = [{"a": "$19,020.00"}, {"b": "$2,483.50"}]
-    _, hit = guard("Savings is $19,020.00 and checking is $9,999.99.", results, FALLBACK)
+    _, hit = guard(
+        "Savings is $19,020.00 and checking is $9,999.99.", [], FALLBACK, (SAVINGS, CHECKING)
+    )
+    assert hit is True
+
+
+def test_a_money_figure_on_a_turn_with_no_tool_calls_is_caught() -> None:
+    # Nothing was looked up, so the bot has no business stating a figure.
+    text, hit = guard("Your balance is $500.00.", [], FALLBACK, ())
+    assert hit is True
+    assert text == FALLBACK
+
+
+def test_an_empty_reply_is_left_to_the_caller() -> None:
+    text, hit = guard("", [], FALLBACK, (SAVINGS,))
+    assert hit is False
+    assert text == ""
+
+
+# --- the allowed set comes from the bank, never from rendered text ----------
+
+
+def test_a_figure_laundered_through_an_error_message_is_caught() -> None:
+    """The guard must not read money out of text the model itself supplied.
+
+    Attack: call get_balance(account="$31,415.00"). The bank's error echoes
+    the argument back, and a guard that re-parses result text then treats
+    $31,415.00 as sourced. Verified end to end before this test existed.
+    """
+    results = [
+        {
+            "error": "I don't recognise the account '$31,415.00'. I have: checking, savings.",
+            "hint": "I don't recognise the account '$31,415.00'.",
+        }
+    ]
+    _, hit = guard("Your savings balance is $31,415.00.", results, FALLBACK, sourced_cents=())
+    assert hit is True
+
+
+def test_a_figure_laundered_through_a_confirmation_summary_is_caught() -> None:
+    results = [
+        {
+            "status": "needs_confirmation",
+            "token": "abc",
+            "summary": "Transfer $0.01 to my $77,000.00 fund from checking",
+        }
+    ]
+    _, hit = guard("You have $77,000.00 available.", results, FALLBACK, sourced_cents=(1,))
+    assert hit is True
+
+
+def test_sourced_cents_are_what_the_guard_trusts() -> None:
+    # The same sentence passes only when the bank actually produced the figure.
+    _, hit = guard("Your balance is $19,020.00.", [], FALLBACK, sourced_cents=(1_902_000,))
+    assert hit is False
+
+
+# --- figures the model writes in words, or in another currency --------------
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Your savings balance is about nineteen thousand dollars.",
+        "Your savings balance is forty two thousand dollars.",
+        "You have around five hundred dollars left.",
+    ],
+)
+def test_a_spelled_out_amount_is_caught(sentence: str) -> None:
+    # The prompt tells the model to speak like a person, which invites exactly
+    # this. A figure in words is unverifiable, so it is a violation outright.
+    _, hit = guard(sentence, [], FALLBACK, sourced_cents=(1_902_000,))
+    assert hit is True
+
+
+def test_a_currency_word_before_the_number_is_caught() -> None:
+    _, hit = guard("Your balance is USD 31415.", [], FALLBACK, sourced_cents=(1_902_000,))
+    assert hit is True
+
+
+@pytest.mark.parametrize(
+    "sentence", ["You have 500 pounds.", "That's £500 left.", "About 300 euros."]
+)
+def test_a_non_usd_figure_is_always_a_violation(sentence: str) -> None:
+    # The bank holds one currency. A figure in another one was converted,
+    # which the prompt forbids and no tool could have returned.
+    _, hit = guard(sentence, [], FALLBACK, sourced_cents=(50_000,))
     assert hit is True
 
 
@@ -106,23 +178,19 @@ def test_one_wrong_figure_among_right_ones_is_still_caught() -> None:
     [
         "It should arrive in five working days.",
         "The card ending 4417 is now frozen.",
+        "I can help with four things.",
         "Hello, how can I help?",
     ],
 )
-def test_non_money_sentences_pass_untouched(sentence: str) -> None:
-    text, hit = guard(sentence, [], FALLBACK)
+def test_ordinary_sentences_still_pass(sentence: str) -> None:
+    text, hit = guard(sentence, [], FALLBACK, sourced_cents=())
     assert hit is False
     assert text == sentence
 
 
-def test_a_money_figure_on_a_turn_with_no_tool_calls_is_caught() -> None:
-    # Nothing was looked up, so the bot has no business stating a figure.
-    text, hit = guard("Your balance is $500.00.", [], FALLBACK)
-    assert hit is True
-    assert text == FALLBACK
+def test_the_fallback_cannot_speak_a_laundered_figure() -> None:
+    # The fallback is built from sourced cents, so a figure the guard just
+    # rejected cannot come back in the sentence meant to replace it.
 
-
-def test_an_empty_reply_is_left_to_the_caller() -> None:
-    text, hit = guard("", [{"balance": "$1.00"}], FALLBACK)
-    assert hit is False
-    assert text == ""
+    assert "31,415" not in fallback_sentence((1_902_000,))
+    assert "19,020.00" in fallback_sentence((1_902_000,))

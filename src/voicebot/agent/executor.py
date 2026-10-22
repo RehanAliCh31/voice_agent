@@ -13,6 +13,7 @@ isn't enough in checking" is something the bot should be able to explain.
 from __future__ import annotations
 
 import secrets
+import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -31,6 +32,21 @@ log = get_logger("agent.executor")
 DEFAULT_TTL_S = 300.0
 
 
+@dataclass(frozen=True)
+class ToolOutcome:
+    """What a tool produced, and which of its figures the bank actually gave.
+
+    `sourced_cents` is the whole of what the numeric guard will trust. It is
+    reported explicitly rather than parsed back out of `result`, because
+    `result` contains strings the model supplied -- an echoed account name, a
+    payee, an error quoting the bad argument -- and a guard that reads those
+    can be fed any figure the model likes.
+    """
+
+    result: dict[str, Any]
+    sourced_cents: tuple[int, ...] = ()
+
+
 @dataclass
 class PendingAction:
     """An action that has been read back to the customer but not performed."""
@@ -47,8 +63,10 @@ class PendingAction:
         return now - self.created_at >= ttl_s
 
 
-def _error(message: str, hint: str) -> dict[str, Any]:
-    return {"error": message, "hint": hint}
+def _error(message: str, hint: str) -> ToolOutcome:
+    # No sourced figures: an error message may quote the model's own
+    # argument back, and nothing in it came from the database.
+    return ToolOutcome({"error": message, "hint": hint})
 
 
 def _require_positive_int(value: Any, field: str) -> int:
@@ -85,7 +103,7 @@ class ToolExecutor:
 
     # --- the public surface --------------------------------------------------
 
-    def execute(self, tool_call: ToolCall) -> dict[str, Any]:
+    def execute(self, tool_call: ToolCall) -> ToolOutcome:
         """Run one tool call, or ask for confirmation first."""
         handler = self._handlers().get(tool_call.name)
         if handler is None:
@@ -103,12 +121,20 @@ class ToolExecutor:
             return handler(arguments)
         except (ValueError, KeyError) as exc:
             return _error(str(exc), "Check the tool's parameters and try again.")
+        except sqlite3.Error as exc:
+            # A CHECK violation from two concurrent writes, say. The customer
+            # hears a refusal; they do not meet a 500.
+            log.warning("database refused %s: %s", tool_call.name, exc)
+            return _error(
+                "I couldn't complete that against your account just now.",
+                "The database refused the write. Nothing has changed.",
+            )
         except BankError as exc:
             # The bank writes its refusals to be read aloud, so the message is
             # the hint: it says both what went wrong and what is allowed.
             return _error(str(exc), str(exc))
 
-    def confirm(self) -> dict[str, Any]:
+    def confirm(self) -> ToolOutcome:
         """Perform the pending action. Called by the Yes button, not the model."""
         pending = self.pending
         if pending is None:
@@ -117,20 +143,35 @@ class ToolExecutor:
                 "No action was pending, so nothing happened.",
             )
         self.pending = None
+        if pending.expired(self.ttl_s, time.monotonic()):
+            # Sessions live for 30 minutes and the buttons stay on screen, so
+            # without this a customer could return from lunch and confirm a
+            # summary they no longer remember.
+            log.warning("confirmation expired before the button was pressed: %s", pending.tool)
+            return _error(
+                "That confirmation has expired.",
+                f"More than {int(self.ttl_s)}s passed. Nothing has changed; please ask again.",
+            )
         try:
             return self._handlers()[pending.tool](pending.arguments)
         except (ValueError, KeyError) as exc:
             return _error(str(exc), "The pending action could not be completed.")
+        except sqlite3.Error as exc:
+            log.warning("database refused %s: %s", pending.tool, exc)
+            return _error(
+                "I couldn't complete that against your account just now.",
+                "The database refused the write. Nothing has changed.",
+            )
         except BankError as exc:
             return _error(str(exc), str(exc))
 
-    def cancel(self) -> dict[str, Any]:
+    def cancel(self) -> ToolOutcome:
         """Discard the pending action. Called by the Cancel button."""
         pending = self.pending
         self.pending = None
         if pending is None:
-            return {"status": "cancelled", "detail": "There was nothing pending."}
-        return {"status": "cancelled", "detail": f"Cancelled: {pending.summary}"}
+            return ToolOutcome({"status": "cancelled", "detail": "There was nothing pending."})
+        return ToolOutcome({"status": "cancelled", "detail": f"Cancelled: {pending.summary}"})
 
     # --- the gate ------------------------------------------------------------
 
@@ -139,8 +180,8 @@ class ToolExecutor:
         name: str,
         arguments: dict[str, Any],
         token: Any,
-        handler: Callable[[dict[str, Any]], dict[str, Any]],
-    ) -> dict[str, Any]:
+        handler: Callable[[dict[str, Any]], ToolOutcome],
+    ) -> ToolOutcome:
         """Two-phase. Validate first, so a bad request never becomes pending."""
         validated = self._validate(name, arguments)
         pending = self.pending
@@ -180,7 +221,7 @@ class ToolExecutor:
 
         return self._begin(name, validated)
 
-    def _begin(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _begin(self, name: str, arguments: dict[str, Any]) -> ToolOutcome:
         """Record what we are about to do, and say it back. Nothing happens yet."""
         summary = self._summarise(name, arguments)
         self.pending = PendingAction(
@@ -190,7 +231,14 @@ class ToolExecutor:
             summary=summary,
             created_at=time.monotonic(),
         )
-        return {"status": "needs_confirmation", "token": self.pending.token, "summary": summary}
+        # The proposed amount is reportable so the bot can read the summary
+        # back. It is the one figure in the sourced set the model chose, and
+        # the customer is looking at a confirmation prompt for exactly it.
+        proposed = arguments.get("amount_cents")
+        return ToolOutcome(
+            {"status": "needs_confirmation", "token": self.pending.token, "summary": summary},
+            sourced_cents=(proposed,) if isinstance(proposed, int) else (),
+        )
 
     def _validate(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Check a confirming tool's arguments. Raises ValueError with a hint."""
@@ -231,7 +279,7 @@ class ToolExecutor:
 
     # --- the tools themselves ------------------------------------------------
 
-    def _handlers(self) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
+    def _handlers(self) -> dict[str, Callable[[dict[str, Any]], ToolOutcome]]:
         return {
             "list_accounts": self._list_accounts,
             "list_bills": self._list_bills,
@@ -244,93 +292,123 @@ class ToolExecutor:
             "order_card": self._order_card,
         }
 
-    def _list_accounts(self, _: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "accounts": [
-                {
-                    "name": a.name,
-                    "balance": format_money(a.balance_cents),
-                    "balance_cents": a.balance_cents,
-                }
-                for a in self.bank.accounts()
-            ]
-        }
+    def _list_accounts(self, _: dict[str, Any]) -> ToolOutcome:
+        accounts = self.bank.accounts()
+        return ToolOutcome(
+            {
+                "accounts": [
+                    {
+                        "name": a.name,
+                        "balance": format_money(a.balance_cents),
+                        "balance_cents": a.balance_cents,
+                    }
+                    for a in accounts
+                ]
+            },
+            sourced_cents=tuple(a.balance_cents for a in accounts),
+        )
 
-    def _list_bills(self, _: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "bills": [
-                {
-                    "name": b.name,
-                    "amount": format_money(b.amount_cents),
-                    "amount_cents": b.amount_cents,
-                    "paid": b.paid,
-                }
-                for b in self.bank.bills()
-            ]
-        }
+    def _list_bills(self, _: dict[str, Any]) -> ToolOutcome:
+        bills = self.bank.bills()
+        return ToolOutcome(
+            {
+                "bills": [
+                    {
+                        "name": b.name,
+                        "amount": format_money(b.amount_cents),
+                        "amount_cents": b.amount_cents,
+                        "paid": b.paid,
+                    }
+                    for b in bills
+                ]
+            },
+            sourced_cents=tuple(b.amount_cents for b in bills),
+        )
 
-    def _list_cards(self, _: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "cards": [
-                {"last4": c.last4, "account": c.account, "frozen": c.frozen}
-                for c in self.bank.cards()
-            ]
-        }
+    def _list_cards(self, _: dict[str, Any]) -> ToolOutcome:
+        return ToolOutcome(
+            {
+                "cards": [
+                    {"last4": c.last4, "account": c.account, "frozen": c.frozen}
+                    for c in self.bank.cards()
+                ]
+            }
+        )
 
-    def _get_balance(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _get_balance(self, arguments: dict[str, Any]) -> ToolOutcome:
         account = _require_text(arguments.get("account"), "account")
         cents = self.bank.balance(account)
-        return {
-            "account": account.strip().lower(),
-            "balance": format_money(cents),
-            "balance_cents": cents,
-        }
+        return ToolOutcome(
+            {
+                "account": account.strip().lower(),
+                "balance": format_money(cents),
+                "balance_cents": cents,
+            },
+            sourced_cents=(cents,),
+        )
 
-    def _get_spending(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _get_spending(self, arguments: dict[str, Any]) -> ToolOutcome:
         period = _require_text(arguments.get("period"), "period")
-        merchant = arguments.get("merchant")
-        cents = self.bank.spending(period, merchant if isinstance(merchant, str) else None)
-        out = {"period": period, "total": format_money(cents), "total_cents": cents}
+        raw_merchant = arguments.get("merchant")
+        # Only a string narrows the query, so only a string may label the
+        # answer. Echoing a merchant that was not filtered on would put a
+        # confident label on the wrong figure.
+        merchant = raw_merchant if isinstance(raw_merchant, str) and raw_merchant.strip() else None
+        cents = self.bank.spending(period, merchant)
+        out: dict[str, Any] = {
+            "period": period,
+            "total": format_money(cents),
+            "total_cents": cents,
+        }
         if merchant:
             out["merchant"] = merchant
-        return out
+        return ToolOutcome(out, sourced_cents=(cents,))
 
-    def _transfer_money(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        remaining = self.bank.transfer(
-            arguments["amount_cents"], arguments["payee"], arguments["from_account"]
+    def _transfer_money(self, arguments: dict[str, Any]) -> ToolOutcome:
+        sent = arguments["amount_cents"]
+        remaining = self.bank.transfer(sent, arguments["payee"], arguments["from_account"])
+        return ToolOutcome(
+            {
+                "status": "done",
+                "sent": format_money(sent),
+                "sent_cents": sent,
+                "payee": arguments["payee"],
+                "remaining_balance": format_money(remaining),
+                "remaining_balance_cents": remaining,
+            },
+            sourced_cents=(sent, remaining),
         )
-        return {
-            "status": "done",
-            "sent": format_money(arguments["amount_cents"]),
-            "sent_cents": arguments["amount_cents"],
-            "payee": arguments["payee"],
-            "remaining_balance": format_money(remaining),
-            "remaining_balance_cents": remaining,
-        }
 
-    def _pay_bill(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _pay_bill(self, arguments: dict[str, Any]) -> ToolOutcome:
         paid = self.bank.pay_bill(arguments["bill"])
-        return {
-            "status": "done",
-            "bill": arguments["bill"],
-            "paid": format_money(paid),
-            "paid_cents": paid,
-        }
+        return ToolOutcome(
+            {
+                "status": "done",
+                "bill": arguments["bill"],
+                "paid": format_money(paid),
+                "paid_cents": paid,
+            },
+            sourced_cents=(paid,),
+        )
 
-    def _freeze_card(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _freeze_card(self, arguments: dict[str, Any]) -> ToolOutcome:
         card = self.bank.freeze_card(arguments["last4"])
-        return {
-            "status": "done",
-            "last4": card.last4,
-            "frozen": True,
-            "reported_fraud": bool(arguments.get("report_fraud")),
-        }
+        return ToolOutcome(
+            {
+                "status": "done",
+                "last4": card.last4,
+                "frozen": True,
+                "reported_fraud": bool(arguments.get("report_fraud")),
+            }
+        )
 
-    def _order_card(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _order_card(self, arguments: dict[str, Any]) -> ToolOutcome:
         card = self.bank.order_card(arguments["account"])
-        return {
-            "status": "done",
-            "account": card.account,
-            "last4": card.last4,
-            "arrives_in_working_days": 5,
-        }
+        return ToolOutcome(
+            {
+                "status": "done",
+                "account": card.account,
+                "last4": card.last4,
+                "arrives_in_working_days": 5,
+            }
+        )
