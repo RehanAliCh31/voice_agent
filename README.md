@@ -41,10 +41,17 @@ Cancel buttons act on the pending action directly rather than sending the word
 cannot move money; so a misheard "yes" cannot either.
 
 **Every spoken figure is checked.** Before the reply reaches your ears, each
-money-shaped number in it is compared by value against the figures the tools
-actually returned. A mismatch discards the sentence and reads back the stored
-value instead. The check is scoped to money, so "five working days" and "the
-card ending 4417" pass untouched.
+money figure in it is compared by value against the integer cents the bank
+reported handing over. A mismatch discards the sentence and reads back the
+stored value instead. The check is scoped to money, so "five working days" and
+"the card ending 4417" pass untouched.
+
+What the guard trusts comes from the executor, never from the text of a tool
+result. An earlier version parsed results for figures and could be defeated by
+laundering: calling `get_balance(account="$31,415.00")` makes the bank's error
+echo that string back, and a guard reading result text then treats the figure
+as sourced. A figure spelled out in words, or quoted in another currency, is a
+violation outright — neither can be checked.
 
 The cost of that last rule is real and worth stating: **the bot cannot do
 arithmetic out loud.** "That's about £30 less than last month" is a derived
@@ -115,7 +122,7 @@ python -m venv .venv
 .venv/Scripts/python -m pytest
 ```
 
-217 tests in about 16 seconds. Every external dependency sits behind an
+236 tests in about 16 seconds. Every external dependency sits behind an
 abstract base class with a fake — including the language model, whose
 `FakeLLMClient` replays scripted replies and tool calls. The whole agent loop,
 the confirmation gate and the numeric guard are exercised with no endpoint.
@@ -222,7 +229,7 @@ each other's transfer.
 .venv/Scripts/python -m ruff check src tests     # lint
 .venv/Scripts/python -m black --check src tests  # formatting
 .venv/Scripts/python -m mypy src                 # types
-.venv/Scripts/python -m pytest                   # 217 tests
+.venv/Scripts/python -m pytest                   # 236 tests
 ```
 
 ---
