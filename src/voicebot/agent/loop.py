@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from voicebot.agent.executor import ToolExecutor, ToolOutcome
-from voicebot.agent.guard import fallback_sentence, guard
+from voicebot.agent.guard import fallback_sentence, guard, money_in_text
 from voicebot.llm.base import LLMClient, LLMUnavailable, Reply, ToolCall
 from voicebot.llm.prompts import NOTHING_SAID, SYSTEM_PROMPT, UNAVAILABLE
 from voicebot.llm.tools import TOOL_SCHEMAS
@@ -201,11 +201,16 @@ class Agent:
             return self._result(NOTHING_SAID, calls, outcomes, rounds, hit=False)
 
         sourced = _sourced(outcomes)
+        # The customer's own figures are speakable. Repeating "$400" back to
+        # someone who just said "transfer $400" is quoting them, not inventing
+        # a fact -- and refusing to left the bot unable to take an instruction
+        # at all, since every confirmation restated the amount.
+        allowed = sourced + _quoted(conversation) + _pending(self.executor)
         checked, hit = guard(
             spoken,
             [o.result for o in outcomes],
             fallback_sentence(sourced),
-            sourced_cents=sourced,
+            sourced_cents=allowed,
         )
         return self._result(
             checked, calls, outcomes, rounds, hit=hit, suppressed=spoken if hit else None
@@ -234,3 +239,27 @@ class Agent:
 def _sourced(outcomes: Sequence[ToolOutcome]) -> tuple[int, ...]:
     """Every figure the bank produced this turn, and nothing else."""
     return tuple(cents for outcome in outcomes for cents in outcome.sourced_cents)
+
+
+def _quoted(conversation: Conversation, turns: int = 4) -> tuple[int, ...]:
+    """Money figures the customer themselves stated recently, as cents.
+
+    Only from `user` messages. The model's own earlier replies are not a
+    source -- treating them as one would let an invented figure launder itself
+    by being repeated.
+    """
+    said = [m for m in conversation.messages if m.get("role") == "user"][-turns:]
+    return tuple(
+        int(value * 100)
+        for message in said
+        for value in money_in_text(str(message.get("content") or ""))
+    )
+
+
+def _pending(executor: ToolExecutor) -> tuple[int, ...]:
+    """The amount of an action that has been read back and not yet settled."""
+    pending = executor.pending
+    if pending is None:
+        return ()
+    amount = pending.arguments.get("amount_cents")
+    return (amount,) if isinstance(amount, int) else ()

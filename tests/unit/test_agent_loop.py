@@ -334,3 +334,58 @@ def test_an_outage_after_a_tool_ran_still_reports_it(bank: SqliteBank) -> None:
     assert out.text == UNAVAILABLE
     assert [call.name for call in out.tool_calls] == ["transfer_money"]
     assert out.tool_results and out.tool_results[0]["status"] == "done"
+
+
+# --- repeating the customer's own figure is not inventing one ---------------
+
+
+def test_the_bot_may_repeat_an_amount_the_customer_just_said(
+    executor: ToolExecutor,
+) -> None:
+    """Found in use: "transfer $400 to Ali" was answered with the fallback.
+
+    The model asked for confirmation in words without calling the tool first.
+    $400 came from the customer, so no tool had reported it, and the guard
+    suppressed the reply -- leaving the conversation unable to proceed, since
+    every "yes" produced the same suppression.
+    """
+    client = FakeLLMClient([Reply(text="I can transfer $400.00 to Ali. Shall I go ahead?")])
+    out = Agent(client, executor).handle("Can you please transfer $400 to Ali?", Conversation("s1"))
+
+    assert out.guard_hit is False
+    assert "400" in out.text
+
+
+def test_a_figure_the_customer_said_earlier_still_counts(executor: ToolExecutor) -> None:
+    # The customer names the amount, the bot asks, the customer says "yes".
+    conversation = Conversation("s1")
+    client = FakeLLMClient(
+        [
+            Reply(text="I can transfer $400.00 to Ali. Shall I go ahead?"),
+            Reply(text="Just to confirm, that's $400.00 to Ali?"),
+        ]
+    )
+    agent = Agent(client, executor)
+    agent.handle("transfer $400 to Ali", conversation)
+    out = agent.handle("yes please", conversation)
+
+    assert out.guard_hit is False
+
+
+def test_a_pending_action_may_be_restated(bank: SqliteBank) -> None:
+    executor = ToolExecutor(bank)
+    executor.execute(ToolCall("c0", "transfer_money", TRANSFER))
+    client = FakeLLMClient([Reply(text="I still have $50.00 to Sarah waiting. Go ahead?")])
+
+    out = Agent(client, executor).handle("what was that again?", Conversation("s1"))
+
+    assert out.guard_hit is False
+
+
+def test_a_figure_from_nowhere_is_still_caught(executor: ToolExecutor) -> None:
+    # The protection that matters must survive the fix.
+    client = FakeLLMClient([Reply(text="Your savings balance is $31,415.00.")])
+    out = Agent(client, executor).handle("what's my balance?", Conversation("s1"))
+
+    assert out.guard_hit is True
+    assert "31,415" not in out.text

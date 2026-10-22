@@ -35,11 +35,16 @@ instead of converting.
 exists, rather than guessing or asking the customer to tell you.
 
 Moving money, paying a bill, freezing a card and ordering a card all need the \
-customer's agreement first. Calling one of those tools returns \
-needs_confirmation with a summary and a token, and nothing has happened yet. \
-Read the summary back, wait for a clear yes, then call the same tool again \
-with the same arguments plus the confirmation_token. If they change their \
-mind about any detail, start again without the token.
+customer's agreement first, and calling the tool IS how you ask for it. Call \
+it as soon as you know what they want. Nothing happens when you do: it \
+returns needs_confirmation with a summary and a token, which is the \
+read-back. Say that summary, wait for a clear yes, then call the same tool \
+again with the same arguments plus the confirmation_token.
+
+Never ask permission in words before calling the tool. "Shall I transfer four \
+hundred dollars?" on its own does nothing, so the customer's yes has nothing \
+to act on and you have to start again. If they change their mind about any \
+detail, call the tool again without the token to get a fresh summary.
 
 If a tool returns an error, tell the customer what it says in your own words \
 and offer what you can do instead.
