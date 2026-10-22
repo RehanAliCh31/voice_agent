@@ -30,7 +30,7 @@
 
   <div class="chips" id="chips">
     <span class="chip" id="chipAsr">asr</span>
-    <span class="chip" id="chipNlu">nlu</span>
+    <span class="chip" id="chipNlu">llm</span>
     <span class="chip" id="chipTts">tts</span>
     <span class="chip chip--pending" id="chipStatus">connecting</span>
   </div>
@@ -122,27 +122,21 @@
     </section>
 
     <section class="panel">
-      <h2 class="panel__title">Intent</h2>
-      <div class="intent">
-        <span class="intent__name intent__name--idle" id="intentName">—</span>
-        <span class="intent__conf" id="intentConf">—</span>
+      <h2 class="panel__title">Tools called</h2>
+      <div class="tools" id="tools">
+        <div class="tool">
+          <div class="tool__name tool__name--idle">no tools called</div>
+          <div class="tool__result">Nothing has been looked up yet.</div>
+        </div>
       </div>
-      <div class="bar"><span class="bar__fill" id="intentBar"></span></div>
     </section>
 
     <section class="panel">
-      <h2 class="panel__title">Slots</h2>
-      <dl class="slots" id="slots">
-        <div class="slot"><dt>—</dt><dd class="slot__empty">nothing extracted yet</dd></div>
-      </dl>
-    </section>
-
-    <section class="panel">
-      <h2 class="panel__title">Out-of-scope gate</h2>
+      <h2 class="panel__title">Figures spoken</h2>
       <div class="gate">
-        <span class="gate__score" id="gateScore">score —</span>
-        <span class="gate__verdict" id="gateVerdict">idle</span>
+        <span class="gate__verdict" id="guardVerdict">idle</span>
       </div>
+      <p class="panel__note" id="guardNote">Nothing spoken yet.</p>
     </section>
 
     <section class="panel">

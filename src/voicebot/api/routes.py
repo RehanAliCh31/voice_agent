@@ -62,7 +62,12 @@ def _publish(services: Services, session_id: str, result: TurnResult) -> TurnPay
     """Count it, log it, and convert it into the published shape."""
     session = services.sessions.get(session_id)
     services.record_turn(session_id, session.conversation.turn_index, result)
-    return turn_payload(session_id, result, services.speaks_client_side)
+    return turn_payload(
+        session_id,
+        result,
+        services.speaks_client_side,
+        awaiting_confirmation=session.executor.pending is not None,
+    )
 
 
 # --- operational -------------------------------------------------------------

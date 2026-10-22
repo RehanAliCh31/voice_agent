@@ -44,6 +44,9 @@ class TurnPayload(BaseModel):
     reply: str
     tool_calls: list[ToolCallPayload] = Field(default_factory=list)
     guard_hit: bool = False
+    # True while an action has been read back and not yet agreed to. The page
+    # shows its Yes/Cancel buttons from this.
+    awaiting_confirmation: bool = False
     latency_ms: dict[str, float] = Field(default_factory=dict)
     # Null when the page is doing the speaking. Nullable rather than absent so
     # a client can tell "no audio" from "field missing".
@@ -89,7 +92,12 @@ class ReadyPayload(BaseModel):
     sessions: int
 
 
-def turn_payload(session_id: str, result: TurnResult, speaks_client_side: bool) -> TurnPayload:
+def turn_payload(
+    session_id: str,
+    result: TurnResult,
+    speaks_client_side: bool,
+    awaiting_confirmation: bool = False,
+) -> TurnPayload:
     """Convert a pipeline result into the published shape.
 
     Audio is base64-encoded WAV inside the JSON rather than a second request
@@ -117,6 +125,7 @@ def turn_payload(session_id: str, result: TurnResult, speaks_client_side: bool) 
         reply=result.agent.text,
         tool_calls=calls,
         guard_hit=result.agent.guard_hit,
+        awaiting_confirmation=awaiting_confirmation,
         latency_ms={key: round(value, 2) for key, value in result.latency.as_dict().items()},
         audio_b64=audio_b64,
         speak_client_side=speaks_client_side,

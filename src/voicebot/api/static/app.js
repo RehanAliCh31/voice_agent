@@ -56,6 +56,30 @@
       });
     },
 
+    confirm: function () {
+      return request("/v1/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: state.sessionId }),
+      });
+    },
+
+    cancel: function () {
+      return request("/v1/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: state.sessionId }),
+      });
+    },
+
+    reset: function () {
+      return fetch("/v1/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: state.sessionId }),
+      });
+    },
+
     endSession: function () {
       if (!state.sessionId) {
         return Promise.resolve();
@@ -159,6 +183,58 @@
       URL.revokeObjectURL(state.playing.src);
       state.playing = null;
     }
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  }
+
+  /** True when this browser can actually speak. Some have no voices at all. */
+  function canSpeak() {
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
+      return false;
+    }
+    var voices = window.speechSynthesis.getVoices();
+    return !voices || voices.length > 0;
+  }
+
+  /** Speak text with the browser's own synthesiser, arming barge-in. */
+  function speak(text) {
+    stopPlayback();
+
+    return new Promise(function (resolve) {
+      if (!text || !canSpeak()) {
+        resolve();
+        return;
+      }
+
+      var utterance = new SpeechSynthesisUtterance(text);
+      if (state.voice) {
+        utterance.voice = state.voice;
+      }
+      utterance.rate = 1.05;
+
+      var settled = false;
+      function finish() {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (state.vad) {
+          state.vad.disarm();
+        }
+        resolve();
+      }
+
+      utterance.onstart = function () {
+        if (state.vad) {
+          state.vad.arm();
+        }
+      };
+      utterance.onend = finish;
+      utterance.onerror = finish;
+
+      window.speechSynthesis.speak(utterance);
+    });
   }
 
   /** Play the bot's reply, arming barge-in for as long as it lasts. */
@@ -230,7 +306,16 @@
     var body = node("div", "turn__body");
     body.appendChild(node("p", "turn__text", text));
 
-    if (options.audioBlob) {
+    if (options.guardHit) {
+      var flag = node("div", "turn__flag");
+      flag.textContent = "figure read back from your account";
+      flag.title =
+        "The model's own wording stated a figure no tool returned, so the " +
+        "stored value was spoken instead.";
+      body.appendChild(flag);
+    }
+
+    if (options.audioBlob || options.replayText) {
       var row = node("div", "turn__audio");
 
       var replay = node("button", "replay");
@@ -240,13 +325,14 @@
         '<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">' +
         '<path d="M2 1.5l8 4.5-8 4.5z" fill="currentColor"></path></svg>';
       replay.addEventListener("click", function () {
-        play(options.audioBlob);
+        if (options.audioBlob) {
+          play(options.audioBlob);
+        } else {
+          speak(options.replayText);
+        }
       });
 
       row.appendChild(replay);
-      if (options.seconds) {
-        row.appendChild(node("span", "turn__length", formatClock(options.seconds)));
-      }
       body.appendChild(row);
     }
 
@@ -310,29 +396,22 @@
     el.asrText.classList.add("transcript--idle");
     el.asrConf.textContent = "conf —";
 
-    el.intentName.textContent = "—";
-    el.intentName.classList.add("intent__name--idle");
-    el.intentConf.textContent = "—";
-    el.intentBar.style.width = "0%";
+    renderToolCalls([]);
 
-    renderSlots([], "nothing extracted yet");
-
-    el.gateScore.textContent = "score —";
-    el.gateVerdict.textContent = "idle";
-    el.gateVerdict.removeAttribute("data-verdict");
+    el.guardVerdict.textContent = "idle";
+    el.guardVerdict.removeAttribute("data-verdict");
+    el.guardNote.textContent = "Nothing spoken yet.";
 
     renderLatency({});
   }
 
   function renderInspector(turn) {
-    if (!turn || !turn.understanding) {
+    if (!turn) {
       resetInspector();
       return;
     }
 
     var transcript = turn.transcript || {};
-    var understanding = turn.understanding;
-
     el.asrText.textContent = transcript.text || "(nothing heard)";
     el.asrText.classList.toggle("transcript--idle", !transcript.text);
     el.asrConf.textContent =
@@ -340,40 +419,77 @@
         ? "conf " + transcript.confidence.toFixed(2)
         : "conf —";
 
-    el.intentName.textContent = understanding.intent || "—";
-    el.intentName.classList.toggle("intent__name--idle", !understanding.intent);
-
-    var confidence = understanding.intent_confidence || 0;
-    el.intentConf.textContent = confidence.toFixed(2);
-    el.intentBar.style.width = Math.round(confidence * 100) + "%";
-
-    renderSlots(understanding.slots || []);
-
-    var score = understanding.oos_score;
-    el.gateScore.textContent = typeof score === "number" ? "score " + score.toFixed(3) : "score —";
-    el.gateVerdict.textContent = understanding.is_out_of_scope ? "rejected" : "in scope";
-    el.gateVerdict.setAttribute("data-verdict", understanding.is_out_of_scope ? "out" : "in");
-
+    renderToolCalls(turn.tool_calls || []);
+    renderGuard(turn);
     renderLatency(turn.latency_ms || {});
   }
 
-  function renderSlots(slots, emptyText) {
-    el.slots.replaceChildren();
+  /** What the model actually did: which tools, with what, and what came back. */
+  function renderToolCalls(calls) {
+    el.tools.replaceChildren();
 
-    if (!slots.length) {
-      var blank = node("div", "slot");
-      blank.appendChild(node("dt", null, "—"));
-      blank.appendChild(node("dd", "slot__empty", emptyText || "no slots found"));
-      el.slots.appendChild(blank);
+    if (!calls.length) {
+      var blank = node("div", "tool");
+      blank.appendChild(node("div", "tool__name tool__name--idle", "no tools called"));
+      blank.appendChild(
+        node("div", "tool__result", "The model answered without looking anything up.")
+      );
+      el.tools.appendChild(blank);
       return;
     }
 
-    slots.forEach(function (slot) {
-      var row = node("div", "slot");
-      row.appendChild(node("dt", null, slot.name));
-      row.appendChild(node("dd", null, slot.value));
-      el.slots.appendChild(row);
+    calls.forEach(function (call) {
+      var row = node("div", "tool");
+      row.appendChild(node("div", "tool__name", call.name));
+
+      var args = call.arguments || {};
+      var argText = Object.keys(args)
+        .filter(function (key) {
+          return key !== "confirmation_token";
+        })
+        .map(function (key) {
+          return key + ": " + args[key];
+        })
+        .join(", ");
+      if (argText) {
+        row.appendChild(node("div", "tool__args", argText));
+      }
+
+      var result = call.result || {};
+      row.appendChild(node("div", "tool__result", summariseResult(result)));
+      if (result.error) {
+        row.classList.add("tool--error");
+      }
+      el.tools.appendChild(row);
     });
+  }
+
+  /** One readable line from a tool's JSON result. */
+  function summariseResult(result) {
+    if (result.error) {
+      return result.error;
+    }
+    if (result.status === "needs_confirmation") {
+      return "waiting: " + result.summary;
+    }
+    var parts = Object.keys(result)
+      .filter(function (key) {
+        return key !== "token" && key.indexOf("_cents") === -1 && typeof result[key] !== "object";
+      })
+      .map(function (key) {
+        return key + ": " + result[key];
+      });
+    return parts.length ? parts.join(", ") : "ok";
+  }
+
+  /** Whether the reply the user heard is the one the model wrote. */
+  function renderGuard(turn) {
+    var hit = Boolean(turn.guard_hit);
+    el.guardVerdict.textContent = hit ? "suppressed" : "verified";
+    el.guardVerdict.setAttribute("data-verdict", hit ? "out" : "in");
+    el.guardNote.textContent = hit
+      ? "A figure in the reply came from no tool. The bot read back the stored value instead."
+      : "Every figure spoken came from the database.";
   }
 
   function renderLatency(latency) {
@@ -408,6 +524,17 @@
 
   // --- a turn -------------------------------------------------------------
 
+  /** The Yes or Cancel button. Rendered exactly like any other turn. */
+  function resolvePending(promise) {
+    showThinking();
+    setStatus("Working", "", "busy");
+    return promise.then(handleTurn, function (error) {
+      hideThinking();
+      addTurn("BOT", "Sorry — that didn't go through: " + error.message, { error: true });
+      idle();
+    });
+  }
+
   function handleTurn(turn) {
     state.sessionId = turn.session_id;
     hideThinking();
@@ -417,22 +544,28 @@
       addTurn("YOU", turn.text);
     }
 
-    var action = turn.action || {};
     var blob = turn.audio_b64 ? base64ToBlob(turn.audio_b64, "audio/wav") : null;
+    var reply = turn.reply || "";
 
-    addTurn("BOT", action.text, {
+    addTurn("BOT", reply, {
       audioBlob: blob,
-      seconds: (turn.transcript && turn.transcript.duration_s) || 0,
+      replayText: turn.speak_client_side ? reply : null,
+      guardHit: Boolean(turn.guard_hit),
     });
 
-    // A transfer waits on a yes. Buttons remove any doubt about whether the
-    // word was heard correctly, which matters more here than anywhere else.
-    el.confirm.hidden = action.type !== "confirm";
+    // An action waits on a yes. Buttons remove any doubt about whether the
+    // word was heard correctly, which matters more here than anywhere else --
+    // and they act on the pending action directly, not through the model.
+    el.confirm.hidden = !turn.awaiting_confirmation;
 
     if (blob) {
       setPhase("speaking");
       setStatus("Speaking", bargeHint(), "busy");
       play(blob).then(idle);
+    } else if (turn.speak_client_side && canSpeak()) {
+      setPhase("speaking");
+      setStatus("Speaking", bargeHint(), "busy");
+      speak(reply).then(idle);
     } else {
       idle();
     }
@@ -579,15 +712,22 @@
   }
 
   function onReset() {
-    api.endSession().finally(function () {
-      state.sessionId = null;
-      stopPlayback();
-      el.conversation.replaceChildren(el.empty);
-      el.confirm.hidden = true;
-      renderInspector({});
-      setPhase("idle");
-      setStatus("Ready", "Tap the microphone to start a turn", "");
-    });
+    // Resets the conversation AND the demo balances. With one shared bank,
+    // a drained checking account would otherwise outlive the conversation
+    // that drained it, and every later transfer would fail for want of funds.
+    api.reset()
+      .catch(function () {})
+      .finally(function () {
+        return api.endSession().finally(function () {
+          state.sessionId = null;
+          stopPlayback();
+          el.conversation.replaceChildren(el.empty);
+          el.confirm.hidden = true;
+          resetInspector();
+          setPhase("idle");
+          setStatus("Ready", "Tap the microphone to start a turn", "");
+        });
+      });
   }
 
   function onBargeIn() {
@@ -603,11 +743,35 @@
       .toLowerCase();
   }
 
+  /** Pick a voice once. Chrome populates the list asynchronously. */
+  function loadVoices() {
+    if (!window.speechSynthesis) {
+      return;
+    }
+    var voices = window.speechSynthesis.getVoices();
+    if (!voices.length) {
+      return;
+    }
+    state.voice =
+      voices.filter(function (v) {
+        return v.localService && /^en/i.test(v.lang);
+      })[0] ||
+      voices.filter(function (v) {
+        return /^en/i.test(v.lang);
+      })[0] ||
+      voices[0];
+  }
+
   function boot() {
+    loadVoices();
+    if (window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+
     api.ready().then(
       function (info) {
         el.chipAsr.textContent = describeEngine(info.asr);
-        el.chipNlu.textContent = describeEngine(info.nlu);
+        el.chipNlu.textContent = describeEngine(info.llm);
         el.chipTts.textContent = describeEngine(info.tts);
         el.asrModel.textContent = describeEngine(info.asr);
         el.chipStatus.textContent = info.device + " ready";
@@ -624,13 +788,13 @@
   document.addEventListener("DOMContentLoaded", function () {
     [
       "conversation", "empty", "confirm", "confirmYes", "confirmNo",
+      "tools", "guardVerdict", "guardNote",
       "mic", "micButton", "statusLabel", "statusHint", "levelFill",
       "sayForm", "sayInput", "resetButton",
       "vadToggle", "vadSensitivity", "vadValue", "vadNote",
       "chipAsr", "chipNlu", "chipTts", "chipStatus",
       "asrText", "asrConf", "asrModel",
-      "intentName", "intentConf", "intentBar",
-      "slots", "gateScore", "gateVerdict", "latencyTotal", "stages",
+      "latencyTotal", "stages",
     ].forEach(function (id) {
       el[id] = document.getElementById(id);
     });
@@ -652,11 +816,11 @@
     el.resetButton.addEventListener("click", onReset);
     el.confirmYes.addEventListener("click", function () {
       el.confirm.hidden = true;
-      send("yes");
+      resolvePending(api.confirm());
     });
     el.confirmNo.addEventListener("click", function () {
       el.confirm.hidden = true;
-      send("no");
+      resolvePending(api.cancel());
     });
 
     el.vadToggle.addEventListener("change", function () {

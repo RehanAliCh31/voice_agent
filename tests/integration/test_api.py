@@ -295,3 +295,26 @@ def test_a_bare_config_starts_with_fakes_and_an_in_memory_bank() -> None:
     config = AppConfig()
     assert config.llm.engine == "fake"
     assert config.database.path == ":memory:"
+
+
+def test_the_payload_says_when_a_confirmation_is_waiting(client: TestClient) -> None:
+    # The page shows its Yes/Cancel buttons from this flag. v1 read it off the
+    # dialogue action type, which no longer exists.
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Transfer $50.00 to sarah. Shall I go ahead?"),
+            Reply(text="Done."),
+        ],
+    )
+    pending = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()
+    assert pending["awaiting_confirmation"] is True
+
+    settled = client.post("/v1/confirm", json={"session_id": pending["session_id"]}).json()
+    assert settled["awaiting_confirmation"] is False
+
+
+def test_an_ordinary_turn_is_not_awaiting_confirmation(client: TestClient) -> None:
+    scripted(client, [Reply(text="Hello there.")])
+    assert client.post("/v1/chat", json={"text": "hello"}).json()["awaiting_confirmation"] is False
