@@ -24,15 +24,6 @@ class ASRConfig(_Strict):
     language: str = "en"
 
 
-class NLUConfig(_Strict):
-    engine: str = "fake"
-    encoder_name: str = "distilbert-base-uncased"
-    checkpoint: str = ""
-    max_length: int = 64
-    oos_threshold: float = 0.5
-    device: str = "auto"
-
-
 # Engines default to "fake" so a bare AppConfig() downloads nothing and
 # needs no GPU. Naming a real engine is always a deliberate act.
 class TTSConfig(_Strict):
@@ -72,27 +63,12 @@ class DatabaseConfig(_Strict):
     seed_on_create: bool = True
 
 
-class TrainingConfig(_Strict):
-    learning_rate: float = 3e-5
-    batch_size: int = 32
-    epochs: int = 5
-    warmup_ratio: float = 0.1
-    weight_decay: float = 0.01
-    slot_loss_weight: float = 1.0
-    early_stopping_patience: int = 2
-    dropout: float = 0.1
-    device: str = "auto"  # "auto" | "cuda" | "cpu"
-
-
 class AppConfig(_Strict):
     seed: int = 42
-    data_dir: str = "data"
     asr: ASRConfig = Field(default_factory=ASRConfig)
-    nlu: NLUConfig = Field(default_factory=NLUConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
-    training: TrainingConfig = Field(default_factory=TrainingConfig)
 
 
 def load_config(path: str | Path) -> AppConfig:

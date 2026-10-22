@@ -479,7 +479,7 @@ h1, h2, p, dl, dd, dt { margin: 0; }
 .gate__verdict[data-verdict="out"] { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn); }
 
 .stage-row { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
-/* Wide enough for the longest stage name the pipeline reports ("normalize"). */
+/* Wide enough for the longest stage name the pipeline reports ("agent"). */
 .stage-row__name { flex-shrink: 0; width: 62px; font-family: var(--mono); font-size: 11px; color: var(--dim); }
 .stage-row__track { flex-grow: 1; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
 .stage-row__fill { display: block; height: 100%; width: 0%; background: var(--faint); border-radius: 2px; transition: width 220ms ease; }

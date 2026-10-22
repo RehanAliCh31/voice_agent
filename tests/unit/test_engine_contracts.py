@@ -1,10 +1,17 @@
+"""Every engine honours its interface, and every fake is resolvable.
+
+The fakes are what make the rest of the suite run offline, so their contracts
+are worth asserting directly rather than only through the code that uses them.
+"""
+
 import numpy as np
 import pytest
 
 from voicebot.asr.base import ASREngine, FakeASREngine
-from voicebot.nlu.base import FakeNLUEngine, NLUEngine
-from voicebot.schemas import AudioBuffer, Transcript, Understanding
+from voicebot.llm.base import FakeLLMClient, LLMClient, Reply, ToolCall
+from voicebot.schemas import AudioBuffer, Transcript
 from voicebot.tts.base import FakeTTSEngine, TTSEngine
+from voicebot.tts.browser import BrowserTTSEngine
 from voicebot.utils.registry import create
 
 
@@ -23,19 +30,12 @@ def test_fake_asr_satisfies_the_contract():
     assert result.duration_s == pytest.approx(1.0)
 
 
-def test_fake_nlu_satisfies_the_contract():
-    engine = FakeNLUEngine(fixed_intent="transfer")
-    result = engine.understand("transfer fifty dollars to sarah")
-    assert isinstance(result, Understanding)
-    assert result.intent == "transfer"
-    assert 0.0 <= result.intent_confidence <= 1.0
-
-
-def test_fake_nlu_treats_blank_input_as_out_of_scope():
-    engine = FakeNLUEngine(fixed_intent="transfer")
-    result = engine.understand("   ")
-    assert result.is_out_of_scope is True
-    assert result.intent_confidence == 0.0
+def test_fake_llm_satisfies_the_contract():
+    client = FakeLLMClient([Reply(text="hello", tool_calls=(ToolCall("c1", "get_balance"),))])
+    reply = client.complete([], [])
+    assert isinstance(reply, Reply)
+    assert reply.text == "hello"
+    assert reply.tool_calls[0].name == "get_balance"
 
 
 def test_fake_tts_returns_audio_of_nonzero_length():
@@ -46,13 +46,28 @@ def test_fake_tts_returns_audio_of_nonzero_length():
     assert buf.duration_s > 0
 
 
+def test_the_browser_engine_returns_no_audio_by_design():
+    # Not a broken engine: the page speaks, so there is nothing to return.
+    assert BrowserTTSEngine().synthesize("hello").duration_s == 0
+
+
+def test_only_the_browser_engine_claims_the_client_speaks():
+    assert BrowserTTSEngine().speaks_client_side is True
+    assert FakeTTSEngine().speaks_client_side is False
+
+
 def test_abstract_engines_cannot_be_instantiated():
-    for cls in (ASREngine, NLUEngine, TTSEngine):
+    for cls in (ASREngine, TTSEngine, LLMClient):
         with pytest.raises(TypeError):
             cls()
 
 
-@pytest.mark.parametrize("kind", ["asr", "nlu", "tts"])
+@pytest.mark.parametrize("kind", ["asr", "tts"])
 def test_fakes_are_resolvable_through_the_registry(kind):
     engine = create(kind, "fake")
     assert engine is not None
+
+
+def test_the_browser_engine_is_registered():
+    # `tts.engine: browser` in a config has to resolve to a class.
+    assert isinstance(create("tts", "browser"), BrowserTTSEngine)

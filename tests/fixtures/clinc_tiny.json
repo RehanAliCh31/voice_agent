@@ -1,8 +1,0 @@
-{
-  "train": [["what is my balance", "balance"], ["transfer money", "transfer"]],
-  "val": [["check my balance", "balance"]],
-  "test": [["balance please", "balance"], ["send money", "transfer"]],
-  "oos_train": [["what is the weather", "oos"]],
-  "oos_val": [["tell me a joke", "oos"]],
-  "oos_test": [["sing a song", "oos"]]
-}

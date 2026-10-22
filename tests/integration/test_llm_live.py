@@ -101,3 +101,35 @@ def test_the_server_reproduces_an_exact_figure_from_a_tool_result(client: OpenAI
         [BALANCE_TOOL],
     )
     assert reply.text and "19,020.47" in reply.text
+
+
+def test_dictated_card_digits_reach_the_tool_intact(client: OpenAIClient) -> None:
+    """The one job the deleted normaliser did that nothing else does.
+
+    v1 had `_join_digit_runs`, which glued a dictated "4 4 1 7" back into
+    "4417" before the trained model saw it. Deleting that module is only safe
+    if the LLM does the same thing natively. This is the proof.
+    """
+    freeze = {
+        "type": "function",
+        "function": {
+            "name": "freeze_card",
+            "description": "Freeze a card so nothing further goes through on it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "last4": {"type": "string", "description": "The card's last four digits."}
+                },
+                "required": ["last4"],
+            },
+        },
+    }
+    reply = client.complete(
+        [
+            {"role": "system", "content": "You are a banking assistant. Use the tools provided."},
+            {"role": "user", "content": "freeze my card, it's four four one seven"},
+        ],
+        [freeze],
+    )
+    assert reply.tool_calls, "the model did not reach for the tool"
+    assert reply.tool_calls[0].arguments.get("last4") == "4417"

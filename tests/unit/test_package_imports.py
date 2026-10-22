@@ -12,7 +12,9 @@ def test_core_modules_import_without_optional_extras():
         "voicebot.utils.logging",
         "voicebot.utils.registry",
         "voicebot.asr",
-        "voicebot.nlu",
+        "voicebot.agent",
+        "voicebot.bank",
+        "voicebot.llm",
         "voicebot.tts",
     ]:
         importlib.import_module(module)
