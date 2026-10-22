@@ -483,12 +483,11 @@ def test_moving_money_forgets_the_balances_it_made_stale(bank: SqliteBank) -> No
 def test_amounts_reach_the_page_as_figures(executor: ToolExecutor) -> None:
     # The model writes amounts as words because its replies are spoken; the
     # page shows figures, which are easier to check at a glance.
+    spoken = "Checking holds two thousand four hundred eighty three dollars and fifty cents."
     client = FakeLLMClient(
         [
             Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "checking"}),)),
-            Reply(
-                text="Checking holds two thousand four hundred eighty three dollars and fifty cents."
-            ),
+            Reply(text=spoken),
         ]
     )
     out = Agent(client, executor).handle("balance?", Conversation("s1"))
