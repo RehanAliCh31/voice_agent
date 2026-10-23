@@ -322,3 +322,65 @@ def test_every_amount_in_a_sentence_is_rewritten() -> None:
         in_digits("Checking is at three thousand dollars and savings at two hundred dollars.")
         == "Checking is at $3,000.00 and savings at $200.00."
     )
+
+
+# --- dollars and cents, said the way people say them -------------------------
+#
+# Found live on a transaction query: the model wrote "ten dollars ninety-nine",
+# the parser read ten dollars and dropped the rest, and a correct answer about
+# the customer's own Netflix charge was suppressed as an invention.
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("ten dollars ninety-nine", [Decimal("10.99")]),
+        ("two hundred fifteen dollars fifty", [Decimal("215.50")]),
+        ("twenty four dollars ninety nine", [Decimal("24.99")]),
+        # The explicit form still works, and still wins where both could read.
+        ("ten dollars and ninety-nine cents", [Decimal("10.99")]),
+        # No trailing number: unchanged.
+        ("forty dollars", [Decimal("40")]),
+    ],
+)
+def test_dollars_and_cents_without_the_word_cents(text: str, expected: list[Decimal]) -> None:
+    assert money_in_text(text) == expected
+
+
+def test_a_trailing_number_too_large_to_be_cents_is_not_cents() -> None:
+    """ "two dollars one hundred" is not $2.100. Read the dollars, leave the rest."""
+    assert money_in_text("two dollars one hundred") == [Decimal("2")]
+
+
+def test_the_suppressed_netflix_sentence_now_passes() -> None:
+    said = "You paid Netflix ten dollars ninety-nine on October nineteenth, from checking."
+    text, hit = guard(said, [], FALLBACK, sourced_cents=(1_099,))
+
+    assert hit is False
+    assert "Netflix" in text
+
+
+def test_a_wrong_cents_figure_is_still_caught() -> None:
+    _, hit = guard("You paid Netflix ten dollars fifty.", [], FALLBACK, sourced_cents=(1_099,))
+    assert hit is True
+
+
+def test_the_words_are_rewritten_as_one_figure() -> None:
+    assert in_digits("You paid ten dollars ninety-nine.") == "You paid $10.99."
+
+
+def test_words_that_are_not_cents_survive_the_rewrite() -> None:
+    """The rewrite replaces whatever it matched, so what it declines to use
+    has to come back out intact rather than being swallowed."""
+    assert in_digits("two dollars one hundred") == "$2.00 one hundred"
+
+
+def test_the_an_inside_and_is_not_one_cent() -> None:
+    """ "three thousand dollars and savings..." must not become $3,000.01."""
+    said = "Checking is at three thousand dollars and savings at two hundred dollars."
+    assert money_in_text(said) == [Decimal("3000"), Decimal("200")]
+
+
+def test_an_article_after_the_amount_is_not_cents() -> None:
+    assert money_in_text("ten dollars a piece") == [Decimal("10")]
+    assert in_digits("ten dollars a piece") == "$10.00 a piece"

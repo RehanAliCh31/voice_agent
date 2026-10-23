@@ -94,15 +94,22 @@ _MONEY = re.compile(
 # A currency word in front of a bare number: "USD 31415".
 _PREFIXED = re.compile(rf"\b(?:{_USD_WORDS})\s+(?P<amount>\d[\d,]*(?:\.\d+)?)\b", re.IGNORECASE)
 
-# A figure written in words next to a currency word. The value cannot be
-# recovered reliably, and does not need to be: the prompt tells the model to
-# write figures in digits, so words are a violation by policy.
+# A figure written in words next to a currency word, with its cents in either
+# of the two forms people use out loud: "and ninety-nine cents", or just
+# "ninety-nine" straight after the dollars. The bare form is the commoner one
+# in speech and used to be read as no cents at all.
 _SPELLED = re.compile(
     rf"\b(?P<whole>(?:{_NUMBER_WORDS})(?:[\s-]+(?:and[\s-]+)?(?:{_NUMBER_WORDS}))*)"
     rf"\s+(?:{_USD_WORDS})\b"
-    rf"(?:\s+and\s+(?P<cents>(?:{_NUMBER_WORDS})(?:[\s-]+(?:{_NUMBER_WORDS}))*)\s+cents?\b)?",
+    rf"(?:\s+and\s+(?P<cents>(?:{_NUMBER_WORDS})(?:[\s-]+(?:{_NUMBER_WORDS}))*)\s+cents?\b"
+    rf"|\s+(?P<bare>(?:{_NUMBER_WORDS})(?:[\s-]+(?:{_NUMBER_WORDS}))*)\b)?",
     re.IGNORECASE,
 )
+
+# "a" and "an" are number words to this parser, which makes the "an" inside
+# "and" look like one cent. The trailing boundary above stops that; this stops
+# the standalone article in "ten dollars a piece" doing the same.
+_ARTICLES = frozenset({"a", "an"})
 
 # Any amount in a currency the bank does not hold.
 _FOREIGN = re.compile(
@@ -163,15 +170,44 @@ def money_in_text(text: str) -> list[Decimal]:
         if value is not None:
             found.append(value)
     for match in _SPELLED.finditer(text or ""):
-        whole = words_to_number(match.group("whole"))
-        if whole is None:
-            continue
-        amount = Decimal(whole)
-        cents = words_to_number(match.group("cents") or "") if match.group("cents") else None
-        if cents is not None:
-            amount += Decimal(cents) / 100
-        found.append(amount)
+        parsed = _spelled_amount(match)
+        if parsed is not None:
+            found.append(parsed[0])
     return found
+
+
+def _spelled_amount(match: re.Match[str]) -> tuple[Decimal, str] | None:
+    """What one spelled match states, plus any trailing words it declined.
+
+    "ten dollars ninety-nine" is how a person says $10.99, so a bare number
+    after the currency word is read as the cents -- but only when it could be
+    cents. In "two dollars one hundred" the hundred is something else, and it
+    is handed back rather than swallowed, because the rewrite below replaces
+    everything the pattern matched.
+
+    Both the check and the rewrite go through here, so the figure the guard
+    verifies and the figure it prints can never be different figures.
+    """
+    whole = words_to_number(match.group("whole"))
+    if whole is None:
+        return None
+    amount = Decimal(whole)
+
+    explicit = match.group("cents")
+    if explicit:
+        cents = words_to_number(explicit)
+        return None if cents is None else (amount + Decimal(cents) / 100, "")
+
+    bare = match.group("bare")
+    if bare:
+        cents = None if bare.strip().lower() in _ARTICLES else words_to_number(bare)
+        if cents is not None and 1 <= cents <= 99:
+            return amount + Decimal(cents) / 100, ""
+        # Matched, but not as cents -- so it is handed straight back. Anything
+        # the pattern consumed and the rewrite does not use would otherwise
+        # vanish from the sentence.
+        return amount, bare
+    return amount, ""
 
 
 def unverifiable_figure(text: str) -> str | None:
@@ -199,17 +235,12 @@ def in_digits(text: str) -> str:
     """
 
     def replace(match: re.Match[str]) -> str:
-        whole = words_to_number(match.group("whole"))
-        if whole is None:
+        parsed = _spelled_amount(match)
+        if parsed is None:
             return match.group(0)
-        amount = Decimal(whole)
-        spoken_cents = match.group("cents")
-        if spoken_cents:
-            cents = words_to_number(spoken_cents)
-            if cents is None:
-                return match.group(0)
-            amount += Decimal(cents) / 100
-        return f"${amount:,.2f}"
+        amount, trailing = parsed
+        figure = f"${amount:,.2f}"
+        return f"{figure} {trailing}" if trailing else figure
 
     return _SPELLED.sub(replace, text or "")
 
