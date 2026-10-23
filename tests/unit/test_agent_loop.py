@@ -16,6 +16,7 @@ from voicebot.agent.loop import Agent, Conversation
 from voicebot.bank.sqlite_bank import SqliteBank
 from voicebot.llm.base import FakeLLMClient, LLMClient, LLMUnavailable, Reply, ToolCall
 from voicebot.llm.prompts import SYSTEM_PROMPT, UNAVAILABLE
+from voicebot.llm.tools import TOOL_SCHEMAS
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
 
@@ -63,7 +64,7 @@ def test_the_system_prompt_is_sent_once_and_first(executor: ToolExecutor) -> Non
 def test_the_tools_are_offered_on_every_call(executor: ToolExecutor) -> None:
     client = FakeLLMClient([Reply(text="hi")])
     Agent(client, executor).handle("hello", Conversation("s1"))
-    assert len(client.calls[0][1]) == 9
+    assert len(client.calls[0][1]) == len(TOOL_SCHEMAS)
 
 
 # --- tool calling ------------------------------------------------------------

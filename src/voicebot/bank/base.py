@@ -1,6 +1,6 @@
 """What a bank can do, and the vocabulary its callers share.
 
-The interface is deliberately narrow: nine operations, each one a thing a
+The interface is deliberately narrow: ten operations, each one a thing a
 customer can ask for. Anything the dialogue needs that is not on this list is
 a sign the dialogue is inventing capability.
 """
@@ -51,6 +51,23 @@ PERIODS: tuple[str, ...] = (
     "this month",
     "last month",
 )
+
+
+# Where money paid in is allowed to have come from. Closed for the same
+# reason PERIODS is: free text would let the bot record a deposit from a
+# source the bank has no notion of, and money that arrives from nowhere in
+# particular is the thing a bank ledger exists to rule out.
+DEPOSIT_SOURCES: tuple[str, ...] = (
+    "cheque",
+    "cash",
+    "transfer in",
+)
+
+
+def unknown_source_message(source: str) -> str:
+    """Said aloud when a deposit names a source the bank does not take."""
+    allowed = ", ".join(DEPOSIT_SOURCES)
+    return f"I can't take a deposit by {source}. I can record {allowed}."
 
 
 def _midnight(moment: datetime) -> datetime:
@@ -158,10 +175,10 @@ class Bank(ABC):
     def deposit(self, cents: int, account: str, source: str = "deposit") -> int:
         """Pay money in and return the new balance.
 
-        Administrative, not conversational. There is deliberately no tool for
-        this: an assistant that can create money is not an assistant. It
-        exists so a demo account that has been spent down can be topped up
-        from the command line without discarding the audit log.
+        `source` says where the money came from and is written to the ledger,
+        so a deposit is a recorded movement rather than a balance that grew on
+        its own. The conversational path accepts only DEPOSIT_SOURCES; the
+        command line passes its own label when topping up a demo account.
         """
 
     # --- audit ---------------------------------------------------------------

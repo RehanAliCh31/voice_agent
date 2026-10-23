@@ -1,4 +1,4 @@
-"""The nine things the model is allowed to do.
+"""The ten things the model is allowed to do.
 
 This file is the whole surface between a fluent model and a customer's money.
 Anything not described here, the bot cannot do — which is the point. Adding a
@@ -14,12 +14,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from voicebot.bank.base import PERIODS
+from voicebot.bank.base import DEPOSIT_SOURCES, PERIODS
 
 # Tools that move money or change a card. Each one is called twice: the first
 # call returns a summary and a token and changes nothing, the second carries
 # the token back and executes. Enforced in the executor, not in the prompt.
-CONFIRMING: frozenset[str] = frozenset({"transfer_money", "pay_bill", "freeze_card", "order_card"})
+CONFIRMING: frozenset[str] = frozenset(
+    {"transfer_money", "pay_bill", "freeze_card", "order_card", "deposit_money"}
+)
 
 _TOKEN = {
     "type": "string",
@@ -117,6 +119,29 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             "from_account": _ACCOUNT,
         },
         ["amount_cents", "payee", "from_account"],
+    ),
+    _function(
+        "deposit_money",
+        "Pay money into one of the customer's own accounts, recording where it "
+        "came from. Returns needs_confirmation on the first call. Money cannot "
+        "arrive from nowhere: if the customer does not say whether it is a "
+        "cheque, cash or a transfer in, ask them before calling this.",
+        {
+            "amount_cents": {
+                "type": "integer",
+                "description": (
+                    "The amount in whole cents, US dollars. 5000 means $50.00. "
+                    "Must be a positive whole number — never a decimal."
+                ),
+            },
+            "account": _ACCOUNT,
+            "source": {
+                "type": "string",
+                "enum": list(DEPOSIT_SOURCES),
+                "description": "Where the money came from. Only these are accepted.",
+            },
+        },
+        ["amount_cents", "account", "source"],
     ),
     _function(
         "pay_bill",
