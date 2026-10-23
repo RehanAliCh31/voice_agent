@@ -73,6 +73,34 @@ def announces_action(text: str | None) -> bool:
     return bool(_ANNOUNCEMENT.search(said))
 
 
+# Asking the customer to agree to something: "are you sure", "shall I",
+# "would you like me to". Legitimate when the gate is holding an action and
+# broken when it is not, which is why the wording alone never decides.
+_AGREEMENT = re.compile(
+    r"ARE\s+YOU\s+SURE|SHALL\s+I|SHOULD\s+I|DO\s+YOU\s+WANT\s+ME\s+TO"
+    r"|WOULD\s+YOU\s+LIKE\s+ME\s+TO|GO\s+AHEAD|PROCEED|CONFIRM",
+    re.IGNORECASE,
+)
+
+
+def seeks_agreement(text: str | None, armed: bool) -> bool:
+    """True when a reply asks for a yes that nothing is waiting to receive.
+
+    `armed` is the whole of the safety here, and it is a fact rather than a
+    reading: the executor either holds a pending action or it does not. When
+    it does, a read-back is the gate working and is left exactly alone.
+
+    The amount is required so that an offer with no figure in it -- "which
+    account would you like me to check?" -- is not mistaken for a read-back.
+    """
+    if armed:
+        return False
+    said = (text or "").strip()
+    if not said.endswith("?") or not _AGREEMENT.search(said):
+        return False
+    return bool(money_in_text(said))
+
+
 @dataclass
 class Conversation:
     """One caller's message history, in the shape the API expects."""
@@ -280,8 +308,14 @@ class Agent:
                 #
                 # Asking again changes nothing -- it is what already failed --
                 # so the retry compels the call instead of requesting it.
-                if not calls and choice == "auto" and announces_action(reply.text):
+                if not calls and choice == "auto" and self._unfinished(reply.text):
                     log.info("forcing a tool call: the model promised one and made none")
+                    # Struck from the history, not just replaced. The customer
+                    # never heard it -- the turn returns one reply -- and a
+                    # model that finds its own "are you sure?" above a tool
+                    # result answers itself. Every forced deposit came back
+                    # as "Yes" until this line.
+                    conversation.messages.pop()
                     choice = "required"
                     continue
                 break
@@ -304,7 +338,7 @@ class Agent:
             # No words and no rounds left: say something rather than nothing.
             return self._result(NOTHING_SAID, calls, outcomes, rounds, hit=False)
 
-        if not calls and announces_action(spoken):
+        if not calls and self._unfinished(spoken):
             # Compelled to call a tool, it still did not. Whatever it wrote is
             # a promise nothing will keep, so it is not worth saying. Asking
             # the customer to try again is at least true.
@@ -351,6 +385,18 @@ class Agent:
             rounds,
             hit=hit,
             suppressed=spoken if hit else None,
+        )
+
+    def _unfinished(self, text: str | None) -> bool:
+        """True when the reply leaves the turn owing the customer an action.
+
+        Two shapes of the same failure: announcing a lookup and not making
+        one, and asking for a yes with nothing armed to receive it. Both end
+        a turn having told the customer something is happening when nothing
+        is.
+        """
+        return announces_action(text) or seeks_agreement(
+            text, armed=self.executor.pending is not None
         )
 
     def _result(

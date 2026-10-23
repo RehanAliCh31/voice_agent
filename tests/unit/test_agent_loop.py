@@ -19,6 +19,8 @@ from voicebot.llm.prompts import SYSTEM_PROMPT, UNAVAILABLE
 from voicebot.llm.tools import TOOL_SCHEMAS
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
+TO_ALI = {"amount_cents": 40_000, "payee": "ali", "from_account": "checking"}
+DEPOSIT = {"amount_cents": 25_000, "account": "checking", "source": "cheque"}
 
 
 @pytest.fixture
@@ -349,8 +351,18 @@ def test_the_bot_may_repeat_an_amount_the_customer_just_said(
     $400 came from the customer, so no tool had reported it, and the guard
     suppressed the reply -- leaving the conversation unable to proceed, since
     every "yes" produced the same suppression.
+
+    What is under test is the guard: a figure the customer said themselves is
+    theirs to hear back. The loop no longer ends a turn on a words-only
+    question, so the round it forces is scripted rather than asserted here.
     """
-    client = FakeLLMClient([Reply(text="I can transfer $400.00 to Ali. Shall I go ahead?")])
+    client = FakeLLMClient(
+        [
+            Reply(text="I can transfer $400.00 to Ali. Shall I go ahead?"),
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TO_ALI),)),
+            Reply(text="Transfer $400.00 to Ali from checking -- are you sure?"),
+        ]
+    )
     out = Agent(client, executor).handle("Can you please transfer $400 to Ali?", Conversation("s1"))
 
     assert out.guard_hit is False
@@ -362,7 +374,8 @@ def test_a_figure_the_customer_said_earlier_still_counts(executor: ToolExecutor)
     conversation = Conversation("s1")
     client = FakeLLMClient(
         [
-            Reply(text="I can transfer $400.00 to Ali. Shall I go ahead?"),
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TO_ALI),)),
+            Reply(text="Transfer $400.00 to Ali from checking -- are you sure?"),
             Reply(text="Just to confirm, that's $400.00 to Ali?"),
         ]
     )
@@ -718,3 +731,120 @@ def test_a_model_that_still_will_not_call_is_not_left_mid_promise(
     out = agent.handle("my bills?", Conversation("s1"))
 
     assert "Let me pull up" not in out.text
+
+
+# --- asking for a yes with nothing to act on ---------------------------------
+#
+# Found against the live model on a deposit: it said "Deposit $250.00 into
+# checking by cheque -- are you sure?" and called nothing. The sentence is a
+# correct read-back in every respect except that no action was armed behind
+# it, so the customer's yes had nothing to agree to and the money never moved.
+#
+# A promise ending in a question mark is still a promise. What makes this one
+# safe to act on is not the wording: it is that the executor knows whether
+# anything is pending, and nothing was.
+
+
+def test_a_read_back_with_nothing_armed_forces_the_call(executor: ToolExecutor) -> None:
+    agent = agent_with(
+        [
+            Reply(text="Transfer $50.00 to Sarah from checking -- are you sure?"),
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Transfer $50.00 to Sarah from checking -- are you sure?"),
+        ],
+        executor,
+    )
+
+    out = agent.handle("send sarah fifty", Conversation("s1"))
+
+    assert [call.name for call in out.tool_calls] == ["transfer_money"]
+    assert executor.pending is not None, "the yes now has something to act on"
+
+
+def test_a_real_read_back_is_left_alone(executor: ToolExecutor) -> None:
+    """Something is armed, so the question is the gate working, not a promise."""
+    agent = agent_with(
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Transfer $50.00 to Sarah from checking -- are you sure?"),
+        ],
+        executor,
+    )
+
+    out = agent.handle("send sarah fifty", Conversation("s1"))
+
+    assert out.rounds == 2
+    assert out.text.endswith("are you sure?")
+
+
+def test_a_repeated_read_back_while_armed_is_left_alone(executor: ToolExecutor) -> None:
+    """No tool ran this turn, but one is still pending from the last."""
+    agent = agent_with(
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Transfer $50.00 to Sarah from checking -- are you sure?"),
+            Reply(text="Just to check -- transfer $50.00 to Sarah, are you sure?"),
+        ],
+        executor,
+    )
+    conversation = Conversation("s1")
+    agent.handle("send sarah fifty", conversation)
+
+    out = agent.handle("sorry, what?", conversation)
+
+    assert out.rounds == 1
+    assert "are you sure" in out.text
+
+
+def test_a_clarifying_question_is_still_left_alone(executor: ToolExecutor) -> None:
+    """No amount in it, so there is nothing it could be asking agreement for."""
+    agent = agent_with(
+        [Reply(text="Which account would you like me to check, checking or savings?")],
+        executor,
+    )
+
+    out = agent.handle("what is my balance?", Conversation("s1"))
+
+    assert out.rounds == 1
+    assert out.tool_calls == ()
+
+
+def test_an_offer_after_a_lookup_is_left_alone(executor: ToolExecutor) -> None:
+    """The dangerous false positive: forcing a call here could pay a bill."""
+    agent = agent_with(
+        [
+            Reply(tool_calls=(ToolCall("c1", "list_bills", {}),)),
+            Reply(text="Your water bill is $31.00. Would you like me to pay it?"),
+        ],
+        executor,
+    )
+
+    out = agent.handle("what do I owe?", Conversation("s1"))
+
+    assert out.rounds == 2
+    assert [call.name for call in out.tool_calls] == ["list_bills"]
+    assert executor.pending is None, "nothing may be armed by an offer alone"
+
+
+def test_the_unfinished_reply_is_struck_from_the_history(executor: ToolExecutor) -> None:
+    """Observed live: every forced deposit was read back as "Yes".
+
+    The model's own unkept question stayed in the history, so on the next
+    round it found "are you sure?" above a tool result and answered itself
+    rather than the customer. The customer never heard that sentence -- the
+    turn returns only its final reply -- so it does not belong in the record.
+    """
+    conversation = Conversation("s1")
+    agent = agent_with(
+        [
+            Reply(text="Pay $250.00 into checking by cheque -- are you sure?"),
+            Reply(tool_calls=(ToolCall("c1", "deposit_money", DEPOSIT),)),
+            Reply(text="Pay $250.00 into checking by cheque -- are you sure?"),
+        ],
+        executor,
+    )
+
+    agent.handle("pay in two fifty by cheque", conversation)
+
+    spoken = [m.get("content") for m in conversation.messages if m.get("role") == "assistant"]
+    assert spoken.count("Pay $250.00 into checking by cheque -- are you sure?") == 1
