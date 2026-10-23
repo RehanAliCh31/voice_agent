@@ -384,3 +384,51 @@ def test_the_an_inside_and_is_not_one_cent() -> None:
 def test_an_article_after_the_amount_is_not_cents() -> None:
     assert money_in_text("ten dollars a piece") == [Decimal("10")]
     assert in_digits("ten dollars a piece") == "$10.00 a piece"
+
+
+# --- amounts said without a currency word ------------------------------------
+#
+# In a list the model drops the word "dollars" entirely: "Starbucks, seven
+# sixty. Uber, twenty three forty." Those read fine aloud and badly on screen,
+# and the old rewrite could not touch them -- out of context "seven sixty" is
+# as much a time or a date as an amount.
+#
+# So context is not what decides. The bank reported certain figures this turn,
+# and a spoken run is rewritten only when it means one of them. Nothing else
+# is touched, whatever it looks like.
+
+
+@pytest.mark.parametrize(
+    ("said", "sourced", "expected"),
+    [
+        ("Starbucks, seven sixty.", (760,), "Starbucks, $7.60."),
+        ("Uber, twenty three forty.", (2_340,), "Uber, $23.40."),
+        ("Netflix, ten ninety nine.", (1_099,), "Netflix, $10.99."),
+        ("The card bill is two hundred fifteen.", (21_500,), "The card bill is $215.00."),
+    ],
+)
+def test_a_sourced_spoken_amount_becomes_a_figure(
+    said: str, sourced: tuple[int, ...], expected: str
+) -> None:
+    assert in_digits(said, sourced) == expected
+
+
+def test_an_unsourced_run_is_left_exactly_alone() -> None:
+    """The bank said nothing of the sort, so this is not an amount."""
+    said = "It arrives in five working days."
+    assert in_digits(said, (760,)) == said
+
+
+def test_a_date_is_not_an_amount() -> None:
+    said = "Netflix, $10.99, on the twenty second."
+    assert in_digits(said, (1_099, 2_000)) == said
+
+
+def test_a_single_word_is_never_read_as_an_amount() -> None:
+    """ "twenty" alone is a date or a count far more often than $20.00."""
+    assert in_digits("on the twenty second", (2_000,)) == "on the twenty second"
+
+
+def test_the_currency_word_form_still_needs_no_sourcing() -> None:
+    """It says "dollars". There is nothing to disambiguate."""
+    assert in_digits("You paid ten dollars ninety-nine.") == "You paid $10.99."

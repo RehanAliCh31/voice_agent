@@ -120,6 +120,16 @@ _FOREIGN = re.compile(
 )
 
 
+# Two or more number words in a row, with no currency word to mark them:
+# "seven sixty", "twenty three forty". One word alone is deliberately not a
+# run -- "twenty" is a date or a count far more often than it is $20.00, and
+# there is nothing in the sentence to tell them apart.
+_WORD_RUN = re.compile(
+    rf"\b(?:{_NUMBER_WORDS})(?:[\s-]+(?:{_NUMBER_WORDS}))+\b",
+    re.IGNORECASE,
+)
+
+
 def words_to_number(words: str) -> int | None:
     """Read an English number phrase. Returns None if it is not one.
 
@@ -221,7 +231,31 @@ def unverifiable_figure(text: str) -> str | None:
     return foreign.group(0) if foreign else None
 
 
-def in_digits(text: str) -> str:
+def _spoken_amount(run: str, allowed: set[int]) -> int | None:
+    """The cents a bare spoken run means, when the bank reported exactly that.
+
+    "seven sixty" is $7.60 to a person and two numbers to a parser, and the
+    sentence around it does not settle which. So the sentence is not asked:
+    every reading the words could carry is worked out, and one is accepted
+    only if the bank produced that figure this turn. A run that means nothing
+    the bank reported is not an amount, whatever it resembles.
+    """
+    words = [w for w in re.split(r"[\s-]+", run.strip()) if w]
+
+    readings: list[int] = []
+    whole = words_to_number(" ".join(words))
+    if whole is not None:
+        readings.append(whole * 100)
+    for split in range(1, len(words)):
+        dollars = words_to_number(" ".join(words[:split]))
+        cents = words_to_number(" ".join(words[split:]))
+        if dollars is not None and cents is not None and 0 <= cents <= 99:
+            readings.append(dollars * 100 + cents)
+
+    return next((value for value in readings if value in allowed), None)
+
+
+def in_digits(text: str, sourced_cents: Iterable[int] = ()) -> str:
     """Rewrite amounts written in words as figures: "$3,000.00".
 
     The model writes them the way a person says them, because its replies are
@@ -229,6 +263,12 @@ def in_digits(text: str) -> str:
     glance, which matters when the figure is the reader's own money. The same
     parser that verifies a spelled-out amount can rewrite it, so the two can
     never disagree.
+
+    Two passes, because amounts arrive in two shapes. One says "dollars" and
+    needs nothing else to identify it. The other drops the word entirely --
+    "Starbucks, seven sixty" -- and is only an amount if it happens to be one
+    of the figures the bank reported this turn. `sourced_cents` is what
+    settles that, so the rewrite never has to guess from the sentence.
 
     Speech synthesisers read a currency figure back as words, so the spoken
     reply is unchanged by this.
@@ -242,7 +282,17 @@ def in_digits(text: str) -> str:
         figure = f"${amount:,.2f}"
         return f"{figure} {trailing}" if trailing else figure
 
-    return _SPELLED.sub(replace, text or "")
+    written = _SPELLED.sub(replace, text or "")
+
+    allowed = set(sourced_cents)
+    if not allowed:
+        return written
+
+    def replace_run(match: re.Match[str]) -> str:
+        cents = _spoken_amount(match.group(0), allowed)
+        return match.group(0) if cents is None else f"${Decimal(cents) / 100:,.2f}"
+
+    return _WORD_RUN.sub(replace_run, written)
 
 
 def allowed_values(sourced_cents: Iterable[int]) -> set[Decimal]:

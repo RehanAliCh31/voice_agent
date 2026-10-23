@@ -848,3 +848,19 @@ def test_the_unfinished_reply_is_struck_from_the_history(executor: ToolExecutor)
 
     spoken = [m.get("content") for m in conversation.messages if m.get("role") == "assistant"]
     assert spoken.count("Pay $250.00 into checking by cheque -- are you sure?") == 1
+
+
+def test_a_spoken_amount_reaches_the_page_as_a_figure(executor: ToolExecutor) -> None:
+    """The ledger shows $7.60; the sentence beside it should not say seven sixty."""
+    agent = agent_with(
+        [
+            Reply(tool_calls=(ToolCall("c1", "list_transactions", {"merchant": "starbucks"}),)),
+            Reply(text="Starbucks, seven sixty, yesterday."),
+        ],
+        executor,
+    )
+
+    out = agent.handle("what did I spend at starbucks?", Conversation("s1"))
+
+    assert out.text == "Starbucks, $7.60, yesterday."
+    assert out.guard_hit is False

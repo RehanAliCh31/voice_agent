@@ -364,7 +364,9 @@ class Agent:
             fallback_sentence(sourced),
             sourced_cents=allowed,
         )
-        # Amounts go out in figures. The model writes them as words because
+        # Amounts go out in figures, including the ones the model wrote with
+        # no "dollars" attached -- `allowed` is what identifies those, so the
+        # rewrite never guesses. The model writes them as words because
         # its replies are spoken, but "$3,000.00" is easier to read and far
         # easier to check at a glance -- and a speech synthesiser reads a
         # currency figure back as words anyway, so nothing is lost aloud.
@@ -379,7 +381,7 @@ class Agent:
             self.executor.cancel()
 
         return self._result(
-            in_digits(checked),
+            in_digits(checked, allowed),
             calls,
             outcomes,
             rounds,
