@@ -1,9 +1,14 @@
-/* Voice Bot -- the client.
+/* Voice Banking -- the client.
  *
  * One turn is: record, convert to the WAV the API expects, POST it to
- * /v1/converse, render what came back, play the reply. While the reply is
+ * /v1/converse, render what came back, speak the reply. While the reply is
  * playing the barge-in detector is armed, so talking over the bot stops it
  * and starts the next turn.
+ *
+ * ONE SET OF FACTS. Every turn's answer carries the account state as it
+ * stands after that turn, and the page draws the ledger from it. Nothing
+ * fetches balances separately, so the figure in a card and the figure the
+ * bot just spoke can never disagree.
  *
  * No text ever reaches the DOM as markup: every element is built with
  * createElement and textContent. A transcript is user input echoed back, and
@@ -24,6 +29,10 @@
     chunks: [],
     playing: null,
     vad: null,
+    voice: null,
+    toldAboutVoices: false,
+    balances: {}, // account name -> cents, as of the last turn
+    lastTotalMs: null,
   };
 
   var el = {};
@@ -71,6 +80,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: state.sessionId }),
       });
+    },
+
+    accounts: function () {
+      return request("/v1/accounts", { method: "GET" });
     },
 
     reset: function () {
@@ -275,7 +288,7 @@
     });
   }
 
-  // --- rendering ----------------------------------------------------------
+  // --- small helpers ------------------------------------------------------
 
   function node(tag, className, text) {
     var element = document.createElement(tag);
@@ -288,6 +301,80 @@
     return element;
   }
 
+  function money(cents) {
+    return "$" + (cents / 100).toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  }
+
+  // --- the ledger ---------------------------------------------------------
+
+  /**
+   * Draw the accounts from the turn that just happened, marking any whose
+   * balance it changed. Showing which figure moved is the whole reason the
+   * ledger sits beside the conversation.
+   */
+  function renderAccounts(accounts) {
+    el.accounts.replaceChildren();
+
+    if (!accounts || !accounts.length) {
+      var waiting = node("div", "account account--waiting");
+      waiting.appendChild(node("span", "account__name", "—"));
+      waiting.appendChild(node("span", "account__amount", "····"));
+      el.accounts.appendChild(waiting);
+      return;
+    }
+
+    accounts.forEach(function (account) {
+      var before = state.balances[account.name];
+      var change =
+        typeof before === "number" ? account.balance_cents - before : 0;
+
+      var card = node("div", "account");
+      if (change !== 0) {
+        card.classList.add("account--moved");
+      }
+      card.appendChild(node("span", "account__name", account.name));
+      card.appendChild(node("span", "account__amount", account.balance));
+
+      if (change !== 0) {
+        var sign = change > 0 ? "+" : "−";
+        card.appendChild(
+          node("span", "account__delta", sign + money(Math.abs(change)) + " just now")
+        );
+      }
+
+      el.accounts.appendChild(card);
+      state.balances[account.name] = account.balance_cents;
+    });
+  }
+
+  function renderBills(bills) {
+    el.bills.replaceChildren();
+
+    if (!bills || !bills.length) {
+      el.bills.appendChild(node("p", "block__empty", "No bills on file."));
+      return;
+    }
+
+    bills.forEach(function (bill) {
+      var row = node("div", "bill");
+      if (bill.paid) {
+        row.classList.add("bill--paid");
+      }
+      row.appendChild(node("span", "bill__name", bill.name));
+      row.appendChild(
+        bill.paid
+          ? node("span", "bill__paid", "paid")
+          : node("span", "bill__amount", bill.amount)
+      );
+      el.bills.appendChild(row);
+    });
+  }
+
+  // --- the conversation ---------------------------------------------------
+
   function clearEmptyState() {
     if (el.empty && el.empty.parentNode) {
       el.empty.remove();
@@ -298,32 +385,31 @@
     clearEmptyState();
     options = options || {};
 
-    var turn = node("div", "turn turn--" + (who === "YOU" ? "you" : "bot"));
+    var turn = node("div", "turn turn--" + (who === "you" ? "you" : "bot"));
     if (options.error) {
       turn.classList.add("turn--error");
     }
-    turn.appendChild(node("div", "turn__who", who));
+    if (options.notice) {
+      turn.classList.add("turn--notice");
+    }
 
-    var body = node("div", "turn__body");
-    body.appendChild(node("p", "turn__text", text));
+    turn.appendChild(node("p", "turn__text", text));
 
     if (options.guardHit) {
-      var flag = node("div", "turn__flag");
-      flag.textContent = "figure read back from your account";
+      var flag = node("div", "turn__flag", "figure read back from your account");
       flag.title =
         "The model's own wording stated a figure no tool returned, so the " +
         "stored value was spoken instead.";
-      body.appendChild(flag);
+      turn.appendChild(flag);
     }
 
     if (options.audioBlob || options.replayText) {
       var row = node("div", "turn__audio");
-
       var replay = node("button", "replay");
       replay.type = "button";
       replay.setAttribute("aria-label", "Replay this reply");
       replay.innerHTML =
-        '<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">' +
+        '<svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">' +
         '<path d="M2 1.5l8 4.5-8 4.5z" fill="currentColor"></path></svg>';
       replay.addEventListener("click", function () {
         if (options.audioBlob) {
@@ -332,12 +418,10 @@
           speak(options.replayText);
         }
       });
-
       row.appendChild(replay);
-      body.appendChild(row);
+      turn.appendChild(row);
     }
 
-    turn.appendChild(body);
     el.conversation.appendChild(turn);
     el.conversation.scrollTop = el.conversation.scrollHeight;
     return turn;
@@ -347,16 +431,12 @@
     clearEmptyState();
     var turn = node("div", "turn turn--bot");
     turn.id = "thinkingTurn";
-    turn.appendChild(node("div", "turn__who", "BOT"));
 
     var dots = node("div", "thinking");
     dots.appendChild(node("span"));
     dots.appendChild(node("span"));
     dots.appendChild(node("span"));
-
-    var body = node("div", "turn__body");
-    body.appendChild(dots);
-    turn.appendChild(body);
+    turn.appendChild(dots);
 
     el.conversation.appendChild(turn);
     el.conversation.scrollTop = el.conversation.scrollHeight;
@@ -369,10 +449,21 @@
     }
   }
 
-  function formatClock(seconds) {
-    var whole = Math.round(seconds);
-    return Math.floor(whole / 60) + ":" + String(whole % 60).padStart(2, "0");
+  /** Say once that this browser cannot speak, rather than seeming broken. */
+  function noteSilence() {
+    if (state.toldAboutVoices) {
+      return;
+    }
+    state.toldAboutVoices = true;
+    addTurn(
+      "bot",
+      "This browser has no speech voices installed, so replies are shown but " +
+        "not spoken. Everything else works.",
+      { notice: true }
+    );
   }
+
+  // --- status -------------------------------------------------------------
 
   function setStatus(label, hint, tone) {
     el.statusLabel.textContent = label;
@@ -382,204 +473,83 @@
 
   function setPhase(phase) {
     state.phase = phase;
-    el.mic.setAttribute("data-state", phase);
+    el.micButton.setAttribute("data-state", phase);
     el.micButton.setAttribute(
       "aria-label",
       phase === "listening" ? "Stop recording" : "Start recording"
     );
   }
 
-  // --- the inspector ------------------------------------------------------
-
-  /** The inspector before anything has happened: every field blank, not zero. */
-  function resetInspector() {
-    el.asrText.textContent = "awaiting audio";
-    el.asrText.classList.add("transcript--idle");
-    el.asrConf.textContent = "conf —";
-
-    renderToolCalls([]);
-
-    el.guardVerdict.textContent = "idle";
-    el.guardVerdict.removeAttribute("data-verdict");
-    el.guardNote.textContent = "Nothing spoken yet.";
-
-    renderLatency({});
+  function bargeHint() {
+    return el.vadToggle.checked
+      ? "Talk over it to interrupt"
+      : "Barge-in is off — wait for it to finish";
   }
 
-  function renderInspector(turn) {
-    if (!turn) {
-      resetInspector();
-      return;
-    }
-
-    var transcript = turn.transcript || {};
-    el.asrText.textContent = transcript.text || "(nothing heard)";
-    el.asrText.classList.toggle("transcript--idle", !transcript.text);
-    el.asrConf.textContent =
-      typeof transcript.confidence === "number"
-        ? "conf " + transcript.confidence.toFixed(2)
-        : "conf —";
-
-    renderToolCalls(turn.tool_calls || []);
-    renderGuard(turn);
-    renderLatency(turn.latency_ms || {});
-  }
-
-  /** What the model actually did: which tools, with what, and what came back. */
-  function renderToolCalls(calls) {
-    el.tools.replaceChildren();
-
-    if (!calls.length) {
-      var blank = node("div", "tool");
-      blank.appendChild(node("div", "tool__name tool__name--idle", "no tools called"));
-      blank.appendChild(
-        node("div", "tool__result", "The model answered without looking anything up.")
+  function idle() {
+    setPhase("idle");
+    if (state.lastTotalMs) {
+      setStatus(
+        "Answered in " + Math.round(state.lastTotalMs) + " ms",
+        "Tap to start another turn",
+        "done"
       );
-      el.tools.appendChild(blank);
-      return;
+    } else {
+      setStatus("Ready", "Tap the microphone to start a turn", "");
     }
-
-    calls.forEach(function (call) {
-      var row = node("div", "tool");
-      row.appendChild(node("div", "tool__name", call.name));
-
-      var args = call.arguments || {};
-      var argText = Object.keys(args)
-        .filter(function (key) {
-          return key !== "confirmation_token";
-        })
-        .map(function (key) {
-          return key + ": " + args[key];
-        })
-        .join(", ");
-      if (argText) {
-        row.appendChild(node("div", "tool__args", argText));
-      }
-
-      var result = call.result || {};
-      row.appendChild(node("div", "tool__result", summariseResult(result)));
-      if (result.error) {
-        row.classList.add("tool--error");
-      }
-      el.tools.appendChild(row);
-    });
   }
 
-  /** One readable line from a tool's JSON result. */
-  function summariseResult(result) {
-    if (result.error) {
-      return result.error;
-    }
-    if (result.status === "needs_confirmation") {
-      return "waiting: " + result.summary;
-    }
-    var parts = Object.keys(result)
-      .filter(function (key) {
-        return key !== "token" && key.indexOf("_cents") === -1 && typeof result[key] !== "object";
-      })
-      .map(function (key) {
-        return key + ": " + result[key];
-      });
-    return parts.length ? parts.join(", ") : "ok";
-  }
-
-  /** Whether the reply the user heard is the one the model wrote. */
-  function renderGuard(turn) {
-    var hit = Boolean(turn.guard_hit);
-    el.guardVerdict.textContent = hit ? "suppressed" : "verified";
-    el.guardVerdict.setAttribute("data-verdict", hit ? "out" : "in");
-    el.guardNote.textContent = hit
-      ? "A figure in the reply came from no tool. The bot read back the stored value instead."
-      : "Every figure spoken came from the database.";
-  }
-
-  function renderLatency(latency) {
-    el.stages.replaceChildren();
-
-    var total = latency.total || 0;
-    el.latencyTotal.textContent = total ? Math.round(total) + " ms" : "—";
-    el.latencyTotal.setAttribute("data-filled", total ? "true" : "false");
-
-    Object.keys(latency)
-      .filter(function (name) {
-        return name !== "total";
-      })
-      .forEach(function (name) {
-        var ms = latency[name];
-        var share = total ? ms / total : 0;
-
-        var row = node("div", "stage-row");
-        row.appendChild(node("span", "stage-row__name", name));
-
-        var track = node("span", "stage-row__track");
-        var fill = node("span", "stage-row__fill");
-        fill.style.width = Math.round(share * 100) + "%";
-        fill.setAttribute("data-heavy", share > 0.2 ? "true" : "false");
-        track.appendChild(fill);
-        row.appendChild(track);
-
-        row.appendChild(node("span", "stage-row__ms", Math.round(ms) + " ms"));
-        el.stages.appendChild(row);
-      });
+  function fail(message) {
+    hideThinking();
+    setPhase("idle");
+    setStatus("Something went wrong", message, "error");
+    addTurn("bot", message, { error: true });
   }
 
   // --- a turn -------------------------------------------------------------
 
-  /** Say once that this browser cannot speak, rather than seeming broken. */
-  function noteSilence() {
-    if (state.toldAboutVoices) {
-      return;
+  /** The read-back the customer is agreeing to, taken from the pending tool. */
+  function pendingSummary(turn) {
+    var calls = turn.tool_calls || [];
+    for (var i = calls.length - 1; i >= 0; i -= 1) {
+      var result = calls[i].result || {};
+      if (result.status === "needs_confirmation" && result.summary) {
+        return result.summary + "?";
+      }
     }
-    state.toldAboutVoices = true;
-    var notice = node("div", "turn turn--bot turn--notice");
-    notice.appendChild(node("div", "turn__who", ""));
-    var body = node("div", "turn__body");
-    body.appendChild(
-      node(
-        "p",
-        "turn__text",
-        "This browser has no speech voices installed, so replies are shown " +
-          "but not spoken. Everything else works."
-      )
-    );
-    notice.appendChild(body);
-    el.conversation.appendChild(notice);
-    el.conversation.scrollTop = el.conversation.scrollHeight;
-  }
-
-  /** The Yes or Cancel button. Rendered exactly like any other turn. */
-  function resolvePending(promise) {
-    showThinking();
-    setStatus("Working", "", "busy");
-    return promise.then(handleTurn, function (error) {
-      hideThinking();
-      addTurn("BOT", "Sorry — that didn't go through: " + error.message, { error: true });
-      idle();
-    });
+    return "This moves money. Say yes, or choose below.";
   }
 
   function handleTurn(turn) {
     state.sessionId = turn.session_id;
+    state.lastTotalMs = (turn.latency_ms || {}).total || null;
     hideThinking();
-    renderInspector(turn);
 
     if (turn.text) {
-      addTurn("YOU", turn.text);
+      addTurn("you", turn.text);
     }
 
     var blob = turn.audio_b64 ? base64ToBlob(turn.audio_b64, "audio/wav") : null;
     var reply = turn.reply || "";
 
-    addTurn("BOT", reply, {
+    addTurn("bot", reply, {
       audioBlob: blob,
       replayText: turn.speak_client_side && canSpeak() ? reply : null,
       guardHit: Boolean(turn.guard_hit),
     });
 
+    // Drawn after the conversation, so the ledger and the sentence the bot
+    // just spoke come from the same answer and describe the same moment.
+    renderAccounts(turn.accounts);
+    renderBills(turn.bills);
+
     // An action waits on a yes. Buttons remove any doubt about whether the
     // word was heard correctly, which matters more here than anywhere else --
     // and they act on the pending action directly, not through the model.
     el.confirm.hidden = !turn.awaiting_confirmation;
+    if (turn.awaiting_confirmation) {
+      el.confirmText.textContent = pendingSummary(turn);
+    }
 
     if (blob) {
       setPhase("speaking");
@@ -597,27 +567,15 @@
     }
   }
 
-  function bargeHint() {
-    return el.vadToggle.checked
-      ? "Talk over it to interrupt"
-      : "Barge-in is off — wait for it to finish";
-  }
-
-  function idle() {
-    setPhase("idle");
-    var total = el.latencyTotal.textContent;
-    if (total && total !== "—") {
-      setStatus("Answered in " + total, "Tap to start another turn", "done");
-    } else {
-      setStatus("Ready", "Tap the microphone to start a turn", "");
-    }
-  }
-
-  function fail(message) {
-    hideThinking();
-    setPhase("idle");
-    setStatus("Something went wrong", message, "error");
-    addTurn("BOT", message, { error: true });
+  /** The Yes or Cancel button. Rendered exactly like any other turn. */
+  function resolvePending(promise) {
+    showThinking();
+    setStatus("Working", "", "busy");
+    return promise.then(handleTurn, function (error) {
+      hideThinking();
+      addTurn("bot", "Sorry — that didn't go through: " + error.message, { error: true });
+      idle();
+    });
   }
 
   // --- recording ----------------------------------------------------------
@@ -722,7 +680,7 @@
     stopPlayback();
     setPhase("thinking");
     setStatus("Processing", "Thinking", "busy");
-    addTurn("YOU", text);
+    addTurn("you", text);
     showThinking();
 
     api
@@ -741,17 +699,20 @@
     // Resets the conversation AND the demo balances. With one shared bank,
     // a drained checking account would otherwise outlive the conversation
     // that drained it, and every later transfer would fail for want of funds.
-    api.reset()
+    api
+      .reset()
       .catch(function () {})
       .finally(function () {
         return api.endSession().finally(function () {
           state.sessionId = null;
+          state.balances = {};
+          state.lastTotalMs = null;
           stopPlayback();
           el.conversation.replaceChildren(el.empty);
           el.confirm.hidden = true;
-          resetInspector();
           setPhase("idle");
           setStatus("Ready", "Tap the microphone to start a turn", "");
+          loadLedger();
         });
       });
   }
@@ -765,7 +726,7 @@
 
   function describeEngine(name) {
     return String(name || "")
-      .replace(/(ASR|NLU|TTS)?Engine$/, "")
+      .replace(/(ASR|LLM|TTS)?(Engine|Client)$/, "")
       .toLowerCase();
   }
 
@@ -788,6 +749,23 @@
       voices[0];
   }
 
+  /**
+   * Fill the ledger before the first turn, so the page opens showing the
+   * customer's money rather than placeholders. A plain read: it takes no
+   * turn, spends no session, and never reaches the model.
+   */
+  function loadLedger() {
+    api
+      .accounts()
+      .then(function (ledger) {
+        renderAccounts(ledger.accounts);
+        renderBills(ledger.bills);
+      })
+      .catch(function () {
+        // The ledger keeps its placeholder; the first turn will fill it.
+      });
+  }
+
   function boot() {
     loadVoices();
     if (window.speechSynthesis) {
@@ -797,11 +775,11 @@
     api.ready().then(
       function (info) {
         el.chipAsr.textContent = describeEngine(info.asr);
-        el.chipNlu.textContent = describeEngine(info.llm);
+        el.chipLlm.textContent = describeEngine(info.llm);
         el.chipTts.textContent = describeEngine(info.tts);
-        el.asrModel.textContent = describeEngine(info.asr);
         el.chipStatus.textContent = info.device + " ready";
         el.chipStatus.className = "chip chip--ready";
+        loadLedger();
       },
       function () {
         el.chipStatus.textContent = "server down";
@@ -813,19 +791,17 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     [
+      "accounts", "bills",
       "conversation", "empty", "confirm", "confirmYes", "confirmNo",
-      "tools", "guardVerdict", "guardNote",
-      "mic", "micButton", "statusLabel", "statusHint", "levelFill",
+      "micButton", "statusLabel", "statusHint", "levelFill",
       "sayForm", "sayInput", "resetButton",
       "vadToggle", "vadSensitivity", "vadValue", "vadNote",
-      "chipAsr", "chipNlu", "chipTts", "chipStatus",
-      "asrText", "asrConf", "asrModel",
-      "latencyTotal", "stages",
+      "chipAsr", "chipLlm", "chipTts", "chipStatus",
     ].forEach(function (id) {
       el[id] = document.getElementById(id);
     });
 
-    el.mic = document.querySelector(".mic");
+    el.confirmText = document.querySelector(".confirm__text");
     el.bargein = document.querySelector(".bargein");
 
     state.vad = new window.VoiceActivity({
@@ -837,6 +813,7 @@
         // fire, and set the slider by looking rather than by guessing.
         if (state.phase === "listening") {
           el.levelFill.style.width = Math.min(100, Math.round(rms * 400)) + "%";
+          el.levelFill.removeAttribute("data-over");
         } else if (state.phase === "speaking") {
           var share = trigger > 0 ? rms / trigger : 0;
           el.levelFill.style.width = Math.min(100, Math.round(share * 90)) + "%";
@@ -848,6 +825,7 @@
     el.micButton.addEventListener("click", onMicClick);
     el.sayForm.addEventListener("submit", onSay);
     el.resetButton.addEventListener("click", onReset);
+
     el.confirmYes.addEventListener("click", function () {
       el.confirm.hidden = true;
       resolvePending(api.confirm());
@@ -870,7 +848,6 @@
       state.vad.setSensitivity(el.vadSensitivity.value);
     });
 
-    renderInspector({});
     boot();
   });
 })();

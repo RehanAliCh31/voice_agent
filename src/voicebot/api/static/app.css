@@ -1,589 +1,605 @@
-/* Voice Bot -- the instrument-panel look from the approved mockup.
+/* Voice Banking — the interface.
  *
- * Every colour is a token on :root. The palette is deliberately small: one
- * accent for anything the model did, green for "in scope", amber for a
- * decision the user owes us, red for a failure, and five greys.
+ * A retail banking look: the customer's money is on screen before they say
+ * anything, and it moves as they speak. The conversation sits beside the
+ * accounts rather than replacing them, so what the bot is talking about is
+ * always visible.
+ *
+ * One palette, defined once below. Nothing anywhere else uses a literal
+ * colour, so a change here changes the whole page.
  */
 
 :root {
-  --bg: #0F1217;
-  --panel: #13171E;
-  --surface: #1D222B;
-  --border: #2A313D;
-  --border-soft: #1E242D;
-  --track: #22272F;
+  /* paper and ink */
+  --paper: #F6F4EF;
+  --card: #FFFFFF;
+  --ink: #1A1917;
+  --ink-soft: #5F5A50;
+  --ink-faint: #8E8679;
+  --line: #E7E2D8;
+  --line-soft: #F0ECE4;
 
-  --text: #E6E9EE;
-  --muted: #97A1B0;
-  --dim: #6E7A8A;
-  --faint: #3C4553;
+  /* the bank's own colour */
+  --brand: #1C6F6A;
+  --brand-bright: #27847E;
+  --brand-wash: #E3EFEE;
+  --brand-deep: #14504C;
 
-  --accent: #5BB8E8;
-  --accent-bright: #8ACFF0;
+  /* states */
+  --warn: #A96F22;
+  --warn-wash: #FBF2E4;
+  --bad: #A3402F;
+  --bad-wash: #FBEDEA;
 
-  --ok: #5FD0A0;
-  --ok-border: #27553F;
-  --ok-bg: #10231B;
+  --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
 
-  --warn: #F0A64B;
-  --warn-border: #5B4524;
-  --warn-bg: #2A1F10;
+  --radius: 14px;
+  --radius-sm: 10px;
+  --shadow-card: 0 2px 8px -4px rgba(60, 50, 30, 0.18);
+  --shadow-lift: 0 8px 26px -14px rgba(60, 50, 30, 0.38);
 
-  --bad: #F08A8C;
-  --bad-border: #5B2A2C;
-  --bad-bg: #2A1416;
-
-  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  color-scheme: light;
 }
 
-*, *::before, *::after { box-sizing: border-box; }
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
 
 body {
   margin: 0;
-  min-height: 100vh;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--paper);
+  color: var(--ink);
   font-family: var(--sans);
   font-size: 15px;
   line-height: 1.5;
-  display: flex;
-  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
 }
 
-h1, h2, p, dl, dd, dt { margin: 0; }
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--brand);
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 0 0 var(--radius-sm) 0;
+  z-index: 50;
+}
+.skip:focus { left: 0; }
 
-*:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+:where(button, input, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
 
-/* --- header ------------------------------------------------------------- */
+/* --- header --------------------------------------------------------------- */
 
-.topbar {
+.top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  padding: 18px 28px;
-  border-bottom: 1px solid var(--border);
+  padding: 14px 24px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
 }
 
-.brand { display: flex; align-items: center; gap: 13px; }
-.brand__mark rect { fill: var(--accent); }
-.brand__mark--tall { fill: var(--text); }
-.brand__name { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
-.brand__tagline { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.brand { display: flex; align-items: center; gap: 11px; }
 
-.chips {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-  font-family: var(--mono);
-  font-size: 11.5px;
+.brand__mark {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(145deg, var(--brand-bright), var(--brand-deep));
+  display: grid;
+  place-items: center;
+  box-shadow: 0 4px 12px -5px rgba(20, 80, 76, 0.65);
 }
+
+.brand__name { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; }
+
+.engines { display: flex; gap: 7px; flex-wrap: wrap; }
 
 .chip {
+  font-family: var(--mono);
+  font-size: 11.5px;
   padding: 4px 9px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--muted);
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  color: var(--ink-faint);
+  background: var(--paper);
   white-space: nowrap;
 }
 
-.chip--ready { border-color: var(--ok-border); color: var(--ok); background: var(--ok-bg); }
-.chip--pending { border-color: var(--warn-border); color: var(--warn); background: var(--warn-bg); }
-.chip--down { border-color: var(--bad-border); color: var(--bad); background: var(--bad-bg); }
+.chip--ready { border-color: var(--brand); color: var(--brand); background: var(--brand-wash); }
+.chip--pending { border-style: dashed; }
+.chip--down { border-color: var(--bad); color: var(--bad); background: var(--bad-wash); }
 
-/* --- layout ------------------------------------------------------------- */
+/* --- the two columns ------------------------------------------------------ */
 
-.layout { display: flex; flex-wrap: wrap; flex-grow: 1; align-items: stretch; }
+.shell {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  gap: 18px;
+  padding: 18px 24px 24px;
+  align-items: start;
+  max-width: 1320px;
+  margin: 0 auto;
+  min-height: calc(100% - 61px);
+}
 
-.stage {
-  flex: 999 1 560px;
-  min-width: 0;
+@media (max-width: 920px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 560px) {
+  .top { padding: 12px 16px; }
+  .shell { padding: 14px 16px 20px; gap: 14px; }
+}
+
+/* --- the ledger ----------------------------------------------------------- */
+
+.ledger { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+.block { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+.block__title {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.block__empty { margin: 0; font-size: 14px; color: var(--ink-faint); }
+
+.accounts { display: flex; flex-direction: column; gap: 10px; }
+
+.account {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 15px 16px;
   display: flex;
   flex-direction: column;
-  padding: 28px 28px 24px;
+  gap: 4px;
+  box-shadow: var(--shadow-card);
+  min-width: 0;
+}
+
+.account__name {
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.account__amount {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.account--waiting .account__amount { color: var(--ink-faint); }
+
+/* The account a turn just changed. Marked rather than merely updated, so the
+   customer can see which figure moved without comparing two numbers. */
+.account--moved {
+  border-color: var(--brand-bright);
+  box-shadow: 0 0 0 3px var(--brand-wash), var(--shadow-lift);
+}
+
+.account__delta {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Stacked, the two account cards are the tallest thing on the page and push
+   the microphone off a phone screen. Side by side they keep the glance at the
+   money without burying the control that starts a turn. These must stay below
+   the rules they override: at equal specificity the later rule wins, media
+   query or not. */
+@media (max-width: 920px) {
+  .accounts { flex-direction: row; }
+  .account { flex: 1 1 0; padding: 12px 13px; }
+  .account__amount { font-size: 21px; }
+}
+
+.bills {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  box-shadow: var(--shadow-card);
+  min-width: 0;
+}
+
+.bill { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 14px; }
+.bill__name { text-transform: capitalize; min-width: 0; }
+.bill__amount { font-variant-numeric: tabular-nums; font-weight: 500; flex-shrink: 0; }
+
+.bill--paid .bill__name { color: var(--ink-faint); }
+.bill--paid .bill__amount { color: var(--brand); font-weight: 600; }
+
+.bill__paid {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--brand);
+  flex-shrink: 0;
+}
+
+.reset {
+  appearance: none;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  padding: 9px 14px;
+  cursor: pointer;
+}
+.reset:hover { border-color: var(--ink-faint); color: var(--ink); }
+
+/* --- the conversation ----------------------------------------------------- */
+
+.talk {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  min-height: 560px;
 }
 
 .conversation {
-  flex-grow: 1;
-  min-height: 300px;
+  flex: 1;
+  padding: 22px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 14px;
   overflow-y: auto;
+  min-height: 0;
 }
-
-/* --- the empty state ----------------------------------------------------- */
+.conversation:focus { outline: none; }
 
 .empty {
-  flex-grow: 1;
+  margin: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 12px;
   text-align: center;
-  padding: 40px 20px;
-  color: var(--faint);
+  color: var(--ink-faint);
+  max-width: 34ch;
+}
+.empty__text { margin: 0; font-size: 14.5px; line-height: 1.55; }
+
+.turn { display: flex; flex-direction: column; max-width: 78%; }
+.turn--you { align-self: flex-end; align-items: flex-end; }
+.turn--bot { align-self: flex-start; }
+
+.turn__text {
+  margin: 0;
+  font-size: 15.5px;
+  line-height: 1.5;
+  padding: 11px 15px;
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
 }
 
-.empty p { font-size: 15px; color: var(--muted); max-width: 360px; line-height: 1.55; }
-
-/* --- one turn ------------------------------------------------------------ */
-
-.turn { display: flex; gap: 14px; align-items: flex-start; }
-
-.turn__who {
-  flex-shrink: 0;
-  width: 42px;
-  padding-top: 2px;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  color: var(--dim);
+.turn--you .turn__text {
+  background: linear-gradient(145deg, var(--brand-bright), var(--brand-deep));
+  color: #fff;
+  border-bottom-right-radius: 5px;
+  box-shadow: 0 3px 10px -5px rgba(20, 80, 76, 0.55);
 }
 
-.turn--bot .turn__who { color: var(--accent); }
-.turn__body { flex-grow: 1; min-width: 0; }
-.turn__text { font-size: 16.5px; line-height: 1.5; }
-.turn--error .turn__text { color: var(--bad); }
+.turn--bot .turn__text {
+  background: var(--paper);
+  color: var(--ink);
+  border-bottom-left-radius: 5px;
+}
 
-.turn__audio { display: flex; align-items: center; gap: 9px; margin-top: 10px; }
+.turn--error .turn__text {
+  background: var(--bad-wash);
+  color: var(--bad);
+  border: 1px solid rgba(163, 64, 47, 0.25);
+}
+
+.turn--notice { align-self: center; max-width: 46ch; }
+.turn--notice .turn__text {
+  background: none;
+  color: var(--ink-faint);
+  font-size: 13.5px;
+  font-style: italic;
+  text-align: center;
+  padding: 4px 0;
+}
+
+/* A reply whose figures the guard replaced with the stored values. Flagged
+   rather than hidden: the customer should know when the bot overrode its own
+   wording. */
+.turn__flag {
+  font-size: 11.5px;
+  color: var(--warn);
+  margin-top: 5px;
+  padding-left: 4px;
+}
+
+.turn__audio { margin-top: 6px; padding-left: 4px; }
 
 .replay {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
+  appearance: none;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink-soft);
+  display: grid;
+  place-items: center;
   cursor: pointer;
   padding: 0;
 }
+.replay:hover { border-color: var(--brand); color: var(--brand); }
 
-.replay:hover { border-color: var(--accent); color: var(--accent); }
-.turn__length { font-family: var(--mono); font-size: 11px; color: var(--muted); }
-
-.thinking { display: flex; align-items: center; gap: 7px; }
-
+.thinking { display: flex; gap: 5px; padding: 14px 15px; }
 .thinking span {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent);
-  animation: blink 1.1s ease-in-out infinite;
+  background: var(--ink-faint);
+  animation: pulse 1.3s ease-in-out infinite;
+}
+.thinking span:nth-child(2) { animation-delay: 0.16s; }
+.thinking span:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-3px); }
 }
 
-.thinking span:nth-child(2) { animation-delay: 0.18s; }
-.thinking span:nth-child(3) { animation-delay: 0.36s; }
+/* --- the confirmation ----------------------------------------------------- */
 
-/* --- the confirmation a transfer needs ----------------------------------- */
+.confirm {
+  border-top: 1px solid var(--line);
+  background: linear-gradient(160deg, #F4FAF9, var(--brand-wash));
+  padding: 15px 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
 
-.confirm { display: flex; gap: 10px; flex-wrap: wrap; padding: 16px 0 0 56px; }
-
-/* `hidden` is a UA-level display:none, which a class rule outranks. Without
- * this the confirm buttons are on screen before anything has been said. */
+/* The display above outranks the browser's own [hidden] rule, so the bar has
+   to be hidden explicitly. Without this it shows a live "Yes, confirm" button
+   with no action behind it, which is the last thing a bank should offer. */
 .confirm[hidden] { display: none; }
 
-/* --- buttons ------------------------------------------------------------- */
+.confirm__text { margin: 0; font-size: 14.5px; color: var(--brand-deep); font-weight: 500; }
+.confirm__buttons { display: flex; gap: 9px; }
 
-.btn {
-  padding: 9px 18px;
-  border-radius: 7px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  font-family: inherit;
-  font-size: 14px;
+.button {
+  appearance: none;
+  font-family: var(--sans);
+  font-size: 14.5px;
+  font-weight: 600;
+  padding: 10px 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
   cursor: pointer;
 }
 
-.btn:hover { border-color: var(--dim); }
-.btn--affirm { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn); font-weight: 500; }
-.btn--affirm:hover { border-color: var(--warn); }
-.btn--small { padding: 7px 14px; font-size: 13px; }
-.btn--quiet { background: none; border-color: transparent; color: var(--dim); }
-.btn--quiet:hover { color: var(--text); border-color: var(--border); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.button--go {
+  background: var(--brand);
+  color: #fff;
+  box-shadow: 0 3px 10px -5px rgba(20, 80, 76, 0.7);
+}
+.button--go:hover { background: var(--brand-deep); }
 
-/* --- the microphone ------------------------------------------------------- */
+.button--stop { background: var(--card); color: var(--ink-soft); border-color: var(--line); }
+.button--stop:hover { border-color: var(--ink-faint); color: var(--ink); }
 
-.controls {
-  margin-top: 26px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border);
+.button--quiet {
+  background: var(--paper);
+  color: var(--ink-soft);
+  border-color: var(--line);
+  font-size: 14px;
+  padding: 9px 16px;
+}
+.button--quiet:hover { border-color: var(--brand); color: var(--brand); }
+
+/* --- the dock ------------------------------------------------------------- */
+
+.dock {
+  border-top: 1px solid var(--line);
+  padding: 16px 22px;
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: 14px;
 }
 
+.dock__row { display: flex; align-items: center; gap: 16px; }
+
 .mic {
+  appearance: none;
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 76px;
-  height: 76px;
+  width: 54px;
+  height: 54px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
 }
+
+.mic__face {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, var(--brand-bright), var(--brand-deep));
+  box-shadow: 0 5px 16px -7px rgba(20, 80, 76, 0.8);
+  transition: transform 0.15s;
+}
+.mic:hover .mic__face { transform: scale(1.04); }
 
 .mic__ring {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--brand-bright);
   opacity: 0;
 }
 
 .mic[data-state="listening"] .mic__ring { animation: ring 1.6s ease-out infinite; }
+.mic[data-state="listening"] .mic__face { background: linear-gradient(145deg, #C9622F, #9E4319); }
+.mic[data-state="speaking"] .mic__ring { animation: ring 2.4s ease-out infinite; }
+.mic[data-state="thinking"] .mic__face { background: var(--ink-faint); }
 
-.mic__button {
-  position: relative;
-  width: 76px;
-  height: 76px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
+@keyframes ring {
+  0% { transform: scale(1); opacity: 0.5; }
+  100% { transform: scale(1.7); opacity: 0; }
 }
 
-.mic__button:hover { border-color: var(--accent); }
-.mic__button:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.mic[data-state="listening"] .mic__button {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg);
-}
-
-.mic__bars { display: none; align-items: center; gap: 3px; height: 26px; }
-.mic__bars span { width: 3px; background: currentColor; border-radius: 2px; animation: bar 0.9s ease-in-out infinite; }
-.mic__bars span:nth-child(2) { animation-delay: 0.15s; }
-.mic__bars span:nth-child(3) { animation-delay: 0.3s; }
-.mic__bars span:nth-child(4) { animation-delay: 0.45s; }
-.mic__bars span:nth-child(5) { animation-delay: 0.6s; }
-
-.mic[data-state="listening"] .mic__icon { display: none; }
-.mic[data-state="listening"] .mic__bars { display: flex; }
-
-.status { text-align: center; }
-.status__label { font-size: 14.5px; font-weight: 500; }
-.status__label[data-tone="busy"] { color: var(--accent); }
-.status__label[data-tone="done"] { color: var(--ok); }
+.status { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.status__label { margin: 0; font-size: 15px; font-weight: 600; }
+.status__label[data-tone="busy"] { color: var(--brand); }
+.status__label[data-tone="done"] { color: var(--ink); }
 .status__label[data-tone="error"] { color: var(--bad); }
-.status__hint { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
-
-/* --- the live input level ------------------------------------------------- */
+.status__hint { margin: 0; font-size: 13px; color: var(--ink-faint); }
 
 .level {
-  width: 160px;
   height: 4px;
   border-radius: 2px;
-  background: var(--track);
+  background: var(--line-soft);
   overflow: hidden;
+  margin-top: 4px;
+  max-width: 260px;
 }
 
 .level__fill {
   display: block;
   height: 100%;
-  width: 0%;
-  background: var(--accent);
-  border-radius: 2px;
-  transition: width 90ms linear;
+  width: 0;
+  background: var(--brand-bright);
+  transition: width 0.06s linear;
 }
+/* Above the line barge-in has to clear, so the slider can be set by
+   watching rather than by guessing. */
+.level__fill[data-over="true"] { background: var(--warn); }
 
-/* --- typing instead of speaking ------------------------------------------- */
-
-.say { display: flex; align-items: center; gap: 8px; width: min(100%, 520px); }
-.say__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.say { display: flex; align-items: center; gap: 9px; }
+.say__label {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  flex-shrink: 0;
+}
 
 .say__input {
-  flex-grow: 1;
+  flex: 1;
   min-width: 0;
-  padding: 9px 13px;
-  border-radius: 7px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: 14.5px;
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
 }
+.say__input::placeholder { color: var(--ink-faint); }
+.say__input:focus { outline: none; border-color: var(--brand); background: var(--card); }
 
-.say__input::placeholder { color: var(--faint); }
-.say__input:focus { border-color: var(--accent); }
-
-/* --- barge-in controls ---------------------------------------------------- */
+/* --- barge-in ------------------------------------------------------------- */
 
 .bargein {
-  width: min(100%, 520px);
-  margin: 4px 0 0;
-  padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--panel);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 20px;
+  align-items: center;
+  background: var(--paper);
 }
 
-.bargein__legend {
-  padding: 0 6px;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  color: var(--dim);
+@media (max-width: 560px) {
+  .bargein { grid-template-columns: minmax(0, 1fr); }
 }
 
-.bargein__note { font-size: 12px; color: var(--muted); }
-.bargein[data-enabled="false"] .slider { opacity: 0.45; }
+.bargein[data-enabled="false"] { opacity: 0.72; }
 
-.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13.5px; }
+.switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
 .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
 
 .switch__track {
+  width: 40px;
+  height: 23px;
+  border-radius: 999px;
+  background: #CFCBC2;
   position: relative;
+  transition: background 0.18s;
   flex-shrink: 0;
-  width: 36px;
-  height: 20px;
-  border-radius: 10px;
-  background: var(--track);
-  border: 1px solid var(--border);
-  transition: background 120ms ease;
 }
-
-.switch__thumb {
+.switch__track::after {
+  content: "";
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
+  top: 3px;
+  left: 3px;
+  width: 17px;
+  height: 17px;
   border-radius: 50%;
-  background: var(--dim);
-  transition: transform 120ms ease, background 120ms ease;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.18s;
 }
+.switch input:checked + .switch__track { background: var(--brand); }
+.switch input:checked + .switch__track::after { transform: translateX(17px); }
+.switch input:focus-visible + .switch__track { outline: 2px solid var(--brand); outline-offset: 2px; }
 
-.switch input:checked + .switch__track { background: var(--ok-bg); border-color: var(--ok-border); }
-.switch input:checked + .switch__track .switch__thumb { transform: translateX(16px); background: var(--ok); }
-.switch input:focus-visible + .switch__track { outline: 2px solid var(--accent); outline-offset: 3px; }
+.switch__label { font-size: 14px; }
 
-.slider { display: flex; align-items: center; gap: 12px; font-size: 13.5px; }
-.slider__text { flex-shrink: 0; color: var(--muted); }
-.slider__value { flex-shrink: 0; width: 18px; text-align: right; font-family: var(--mono); font-size: 12.5px; color: var(--text); }
-
-.slider input[type="range"] {
-  flex-grow: 1;
-  min-width: 0;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--track);
-  accent-color: var(--accent);
-}
-
-/* --- the inspector -------------------------------------------------------- */
-
-.inspector {
-  flex: 1 1 340px;
-  min-width: 0;
-  border-left: 1px solid var(--border);
-  background: var(--panel);
-  padding: 24px 24px 28px;
-}
-
-.inspector__title {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  color: var(--dim);
-  margin-bottom: 20px;
-}
-
-.panel { margin-bottom: 26px; }
-.panel:last-child { margin-bottom: 0; }
-.panel__title { font-size: 12px; font-weight: 400; color: var(--muted); margin-bottom: 9px; }
-.panel__head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 11px; }
-.panel__head .panel__title { margin-bottom: 0; }
-.panel__total { font-family: var(--mono); font-size: 12.5px; color: var(--faint); }
-.panel__total[data-filled="true"] { color: var(--text); }
-
-.panel__meta {
-  display: flex;
-  justify-content: space-between;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--dim);
-  margin-top: 7px;
-}
-
-.transcript {
+.slider { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.slider__label { font-size: 13px; color: var(--ink-faint); flex-shrink: 0; }
+.slider input { flex: 1; min-width: 80px; accent-color: var(--brand); }
+.slider__value {
   font-family: var(--mono);
   font-size: 13px;
-  line-height: 1.5;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 11px 13px;
-  min-height: 42px;
-  word-break: break-word;
+  width: 16px;
+  text-align: right;
+  flex-shrink: 0;
 }
 
-.transcript--idle { color: var(--faint); }
-
-.intent { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
-.intent__name { font-family: var(--mono); font-size: 14.5px; color: var(--accent); word-break: break-all; }
-.intent__name--idle { color: var(--faint); }
-.intent__conf { font-family: var(--mono); font-size: 13px; }
-
-.bar { height: 5px; border-radius: 3px; background: var(--track); overflow: hidden; }
-.bar__fill { display: block; height: 100%; width: 0%; background: var(--accent); border-radius: 3px; transition: width 220ms ease; }
-
-.slots { display: flex; flex-direction: column; }
-
-.slot {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--border-soft);
-  font-family: var(--mono);
+.bargein__note {
+  grid-column: 1 / -1;
+  margin: 0;
   font-size: 12.5px;
-}
-
-.slot dt { color: var(--dim); }
-.slot dd { margin: 0; text-align: right; word-break: break-word; }
-.slot__empty { color: var(--faint); }
-
-.gate { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-family: var(--mono); font-size: 12.5px; }
-.gate__score { color: var(--dim); }
-
-.gate__verdict {
-  padding: 3px 9px;
-  border-radius: 5px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--dim);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
-.gate__verdict[data-verdict="in"] { border-color: var(--ok-border); background: var(--ok-bg); color: var(--ok); }
-.gate__verdict[data-verdict="out"] { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn); }
-
-.stage-row { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
-/* Wide enough for the longest stage name the pipeline reports ("agent"). */
-.stage-row__name { flex-shrink: 0; width: 62px; font-family: var(--mono); font-size: 11px; color: var(--dim); }
-.stage-row__track { flex-grow: 1; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
-.stage-row__fill { display: block; height: 100%; width: 0%; background: var(--faint); border-radius: 2px; transition: width 220ms ease; }
-.stage-row__fill[data-heavy="true"] { background: var(--accent); }
-.stage-row__ms { flex-shrink: 0; width: 52px; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); }
-
-/* --- animation ------------------------------------------------------------ */
-
-@keyframes ring {
-  0% { transform: scale(1); opacity: 0.5; }
-  70% { transform: scale(1.75); opacity: 0; }
-  100% { opacity: 0; }
-}
-
-@keyframes bar {
-  0%, 100% { height: 16%; }
-  50% { height: 100%; }
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.25; }
+  color: var(--ink-faint);
+  line-height: 1.45;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
-
-/* --- narrow screens ------------------------------------------------------- */
-
-@media (max-width: 860px) {
-  .topbar { padding: 14px 18px; }
-  .stage { padding: 20px 18px; }
-  .inspector { border-left: none; border-top: 1px solid var(--border); padding: 20px 18px 24px; }
-  .confirm { padding-left: 0; }
-}
-
-/* --- tools panel ---------------------------------------------------------
-   Replaces v1's intent, slots and gate panels. What matters now is not a
-   classifier's opinion but the work actually done: which tools ran, with
-   what, and what came back. */
-
-.tools { display: flex; flex-direction: column; gap: 9px; }
-
-.tool {
-  border-left: 2px solid var(--border);
-  padding: 1px 0 1px 10px;
-}
-
-.tool--error { border-left-color: var(--bad-border); }
-
-.tool__name {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--accent);
-  font-weight: 500;
-}
-
-.tool__name--idle { color: var(--dim); font-weight: 400; }
-
-.tool__args {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 3px;
-  word-break: break-word;
-}
-
-.tool__result {
-  font-size: 11.5px;
-  color: var(--dim);
-  margin-top: 3px;
-  line-height: 1.45;
-  word-break: break-word;
-}
-
-.panel__note {
-  font-size: 11.5px;
-  color: var(--dim);
-  margin: 7px 0 0;
-  line-height: 1.45;
-}
-
-/* A reply whose figures were replaced by the stored values. Flagged rather
-   than hidden: the user should know when the bot overrode its own wording. */
-.turn__flag {
-  font-size: 11px;
-  color: var(--warn);
-  margin-top: 5px;
-}
-
-/* A one-off notice from the page itself, not from the bot. */
-.turn--notice .turn__text {
-  color: var(--muted);
-  font-size: 12.5px;
-  font-style: italic;
-}
-
-/* While the bot speaks the meter shows loudness against the barge-in line,
-   so the slider can be set by looking rather than by guessing. */
-.level__fill[data-over="true"] {
-  background: var(--accent-bright);
+  *, *::before, *::after { animation: none !important; transition: none !important; }
 }
