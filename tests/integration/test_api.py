@@ -401,3 +401,108 @@ def test_the_page_and_its_assets_must_be_revalidated(client: TestClient, asset: 
     response = client.get(asset)
     assert response.status_code == 200
     assert "no-cache" in response.headers.get("cache-control", "")
+
+
+# --- the account state travels with every turn -------------------------------
+#
+# Both the balances on screen and the figures the bot speaks have to come from
+# the same answer, or the page can show one number while the bot says another.
+
+
+def test_a_turn_carries_the_current_balances(client: TestClient) -> None:
+    scripted(client, [Reply(text="Hello there.")])
+    body = client.post("/v1/chat", json={"text": "hello"}).json()
+
+    accounts = {a["name"]: a for a in body["accounts"]}
+    assert accounts["checking"]["balance_cents"] == 248_350
+    assert accounts["checking"]["balance"] == "$2,483.50"
+    assert accounts["savings"]["balance_cents"] == 1_902_000
+
+
+def test_a_turn_carries_the_bills(client: TestClient) -> None:
+    scripted(client, [Reply(text="Hello there.")])
+    bills = {b["name"]: b for b in client.post("/v1/chat", json={"text": "hi"}).json()["bills"]}
+
+    assert bills["electricity"]["amount"] == "$72.50"
+    assert bills["electricity"]["paid"] is False
+
+
+def test_the_balances_reflect_the_turn_that_just_happened(client: TestClient) -> None:
+    """The page must never show a figure the turn has already changed."""
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Shall I go ahead?"),
+            Reply(text="Done."),
+        ],
+    )
+    sid = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"]
+
+    settled = client.post("/v1/confirm", json={"session_id": sid}).json()
+
+    checking = next(a for a in settled["accounts"] if a["name"] == "checking")
+    assert checking["balance_cents"] == 243_350
+    assert checking["balance"] == "$2,433.50"
+
+
+def test_paying_a_bill_shows_in_the_same_answer(client: TestClient) -> None:
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "pay_bill", {"bill": "water"}),)),
+            Reply(text="Shall I go ahead?"),
+            Reply(text="Paid."),
+        ],
+    )
+    sid = client.post("/v1/chat", json={"text": "pay the water bill"}).json()["session_id"]
+
+    settled = client.post("/v1/confirm", json={"session_id": sid}).json()
+
+    water = next(b for b in settled["bills"] if b["name"] == "water")
+    assert water["paid"] is True
+
+
+# --- the opening ledger ------------------------------------------------------
+#
+# A turn carries the balances with it, but the page has to show them before
+# there has been a turn. That first paint is a read, not a conversation: it
+# must not reach the model, spend a session, or count against the turn total.
+
+
+def test_the_ledger_can_be_read_without_a_turn(client: TestClient) -> None:
+    """No script is installed, so any call to the model raises instead."""
+    body = client.get("/v1/accounts").json()
+
+    accounts = {a["name"]: a for a in body["accounts"]}
+    assert accounts["checking"]["balance_cents"] == 248_350
+    assert accounts["checking"]["balance"] == "$2,483.50"
+
+    bills = {b["name"]: b for b in body["bills"]}
+    assert bills["electricity"]["amount"] == "$72.50"
+    assert bills["electricity"]["paid"] is False
+
+
+def test_reading_the_ledger_is_not_a_turn(client: TestClient) -> None:
+    before = client.get("/metrics").text
+
+    client.get("/v1/accounts")
+
+    assert client.get("/metrics").text == before
+
+
+def test_the_ledger_shows_what_the_last_turn_did(client: TestClient) -> None:
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Shall I go ahead?"),
+            Reply(text="Done."),
+        ],
+    )
+    sid = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"]
+    client.post("/v1/confirm", json={"session_id": sid})
+
+    ledger = client.get("/v1/accounts").json()
+    checking = next(a for a in ledger["accounts"] if a["name"] == "checking")
+    assert checking["balance_cents"] == 243_350

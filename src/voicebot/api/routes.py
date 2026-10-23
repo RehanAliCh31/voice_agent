@@ -1,9 +1,9 @@
 """The HTTP surface.
 
 A whole turn, the two confirmation buttons, a reset, and the operational
-endpoints. The per-stage debugging routes from v1 are gone with the stages
-they exposed; what the inspector panel shows now is the tool calls, which
-come back with the turn itself.
+endpoints, and a read of the ledger for the page's first paint. The per-stage
+debugging routes from v1 are gone with the stages they exposed; what a turn
+reports about its own work comes back with the turn itself.
 """
 
 from __future__ import annotations
@@ -18,12 +18,14 @@ from voicebot.api.deps import Services, get_services
 from voicebot.api.payloads import (
     AudioPayload,
     HealthPayload,
+    LedgerPayload,
     ReadyPayload,
     SessionRequest,
     SpeakRequest,
     TextRequest,
     TranscriptPayload,
     TurnPayload,
+    ledger_payload,
     turn_payload,
 )
 from voicebot.api.sessions import SessionStore
@@ -67,6 +69,7 @@ def _publish(services: Services, session_id: str, result: TurnResult) -> TurnPay
         result,
         services.speaks_client_side,
         awaiting_confirmation=session.executor.pending is not None,
+        bank=services.bank,
     )
 
 
@@ -157,6 +160,17 @@ def speak(request: SpeakRequest, services: Services = Depends(get_services)) -> 
 
 
 # --- a whole turn ------------------------------------------------------------
+
+
+@router.get("/v1/accounts", response_model=LedgerPayload, tags=["conversation"])
+def accounts(services: Services = Depends(get_services)) -> LedgerPayload:
+    """The balances and bills, with no turn taken.
+
+    The page calls this once on load so it opens showing real money rather
+    than placeholders. Every later figure arrives with the turn that changed
+    it, so this never competes with a reply for which number is current.
+    """
+    return ledger_payload(services.bank)
 
 
 @router.post("/v1/converse", response_model=TurnPayload, tags=["conversation"])

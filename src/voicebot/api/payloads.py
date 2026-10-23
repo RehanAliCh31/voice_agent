@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from voicebot.bank.base import Bank, format_money
 from voicebot.pipeline.audio_io import encode_wav
 from voicebot.pipeline.orchestrator import TurnResult
 
@@ -35,8 +36,23 @@ class ToolCallPayload(BaseModel):
     result: dict[str, Any] = Field(default_factory=dict)
 
 
+class AccountPayload(BaseModel):
+    """One account as the page shows it: the figure and the words for it."""
+
+    name: str
+    balance: str
+    balance_cents: int
+
+
+class BillPayload(BaseModel):
+    name: str
+    amount: str
+    amount_cents: int
+    paid: bool
+
+
 class TurnPayload(BaseModel):
-    """Everything one turn produced, including what the inspector panel shows."""
+    """Everything one turn produced: what was heard, said, done, and changed."""
 
     session_id: str
     transcript: TranscriptPayload
@@ -47,6 +63,13 @@ class TurnPayload(BaseModel):
     # True while an action has been read back and not yet agreed to. The page
     # shows its Yes/Cancel buttons from this.
     awaiting_confirmation: bool = False
+    # The account state as it stands AFTER this turn. It travels with the
+    # reply rather than in a request of its own, so the balances on screen and
+    # the figures the bot just spoke always come from the same answer. Fetched
+    # separately they could disagree for a moment, which in a banking
+    # interface is worse than being slow.
+    accounts: list[AccountPayload] = Field(default_factory=list)
+    bills: list[BillPayload] = Field(default_factory=list)
     latency_ms: dict[str, float] = Field(default_factory=dict)
     # Null when the page is doing the speaking. Nullable rather than absent so
     # a client can tell "no audio" from "field missing".
@@ -92,11 +115,54 @@ class ReadyPayload(BaseModel):
     sessions: int
 
 
+class LedgerPayload(BaseModel):
+    """The accounts and bills on their own, with no turn attached.
+
+    The page needs balances before the first word is spoken. That opening
+    paint is a read, so it gets a read's endpoint rather than an empty turn,
+    which would reach the model and bank a turn nobody had.
+    """
+
+    accounts: list[AccountPayload] = Field(default_factory=list)
+    bills: list[BillPayload] = Field(default_factory=list)
+
+
+def _accounts(bank: Bank | None) -> list[AccountPayload]:
+    if bank is None:
+        return []
+    return [
+        AccountPayload(
+            name=a.name, balance=format_money(a.balance_cents), balance_cents=a.balance_cents
+        )
+        for a in bank.accounts()
+    ]
+
+
+def _bills(bank: Bank | None) -> list[BillPayload]:
+    if bank is None:
+        return []
+    return [
+        BillPayload(
+            name=b.name,
+            amount=format_money(b.amount_cents),
+            amount_cents=b.amount_cents,
+            paid=b.paid,
+        )
+        for b in bank.bills()
+    ]
+
+
+def ledger_payload(bank: Bank) -> LedgerPayload:
+    """The ledger as it stands now. Same shape a turn carries, same source."""
+    return LedgerPayload(accounts=_accounts(bank), bills=_bills(bank))
+
+
 def turn_payload(
     session_id: str,
     result: TurnResult,
     speaks_client_side: bool,
     awaiting_confirmation: bool = False,
+    bank: Bank | None = None,
 ) -> TurnPayload:
     """Convert a pipeline result into the published shape.
 
@@ -132,6 +198,8 @@ def turn_payload(
         tool_calls=calls,
         guard_hit=result.agent.guard_hit,
         awaiting_confirmation=awaiting_confirmation,
+        accounts=_accounts(bank),
+        bills=_bills(bank),
         latency_ms={key: round(value, 2) for key, value in result.latency.as_dict().items()},
         audio_b64=audio_b64,
         speak_client_side=speaks_client_side,
