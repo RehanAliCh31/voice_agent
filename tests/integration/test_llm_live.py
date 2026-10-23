@@ -33,6 +33,15 @@ BALANCE_TOOL = {
     },
 }
 
+BILLS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "list_bills",
+        "description": "List the customer's bills and whether each is paid.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
 pytestmark = pytest.mark.live
 
 
@@ -133,3 +142,45 @@ def test_dictated_card_digits_reach_the_tool_intact(client: OpenAIClient) -> Non
     )
     assert reply.tool_calls, "the model did not reach for the tool"
     assert reply.tool_calls[0].arguments.get("last4") == "4417"
+
+
+# --- the promise, and the mechanism that defeats it --------------------------
+
+
+def test_the_server_honours_a_required_tool_choice(client: OpenAIClient) -> None:
+    """The agent's answer to an unkept promise rests on this.
+
+    Asked about bills after a greeting, the real model often replies "let me
+    pull up your bills" and calls nothing. The loop retries with the call
+    compelled rather than requested, which only works if the server obeys.
+    """
+    reply = client.complete(
+        [
+            {"role": "user", "content": "tell me about my bills"},
+            {"role": "assistant", "content": "Let me pull up your bills."},
+        ],
+        [BILLS_TOOL],
+        tool_choice="required",
+    )
+
+    assert [call.name for call in reply.tool_calls] == ["list_bills"]
+
+
+def test_a_turn_about_money_never_ends_on_a_promise(client: OpenAIClient) -> None:
+    """The whole-loop invariant, against the real model.
+
+    Not that it calls a tool on the first try -- it often does not, which is
+    the bug. That whatever the customer finally hears is an answer or a
+    question, never "I'm checking that now" from something that has stopped.
+    """
+    from voicebot.agent.executor import ToolExecutor
+    from voicebot.agent.loop import Agent, Conversation, announces_action
+    from voicebot.bank.sqlite_bank import SqliteBank
+
+    agent = Agent(OpenAIClient(base_url=BASE_URL, model=MODEL), ToolExecutor(SqliteBank()))
+    conversation = Conversation(session_id="live")
+    agent.handle("Hello can you hear me?", conversation)
+
+    out = agent.handle("Can you please tell me about one bills?", conversation)
+
+    assert not announces_action(out.text), f"turn ended on a promise: {out.text!r}"

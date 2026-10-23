@@ -70,7 +70,12 @@ class OpenAIClient(LLMClient):
         self.max_tokens = max_tokens
         self.backoff_s = backoff_s
 
-    def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Reply:
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> Reply:
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -81,7 +86,7 @@ class OpenAIClient(LLMClient):
         # so the key is omitted rather than sent empty.
         if tools:
             payload["tools"] = tools
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = tool_choice
 
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         url = f"{self.base_url}/chat/completions"

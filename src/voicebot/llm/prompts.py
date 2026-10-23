@@ -47,6 +47,11 @@ returns needs_confirmation with a summary and a token, which is the \
 read-back. Say that summary, wait for a clear yes, then call the same tool \
 again with the same arguments plus the confirmation_token.
 
+Never say you are about to look something up. "Let me check that", "one \
+moment", "I'll pull that up" -- these do nothing on their own, and the \
+customer is left waiting on a lookup that never happened. Call the tool in \
+the same reply, or just answer.
+
 Never ask permission in words before calling the tool. "Shall I transfer four \
 hundred dollars?" on its own does nothing, so the customer's yes has nothing \
 to act on and you have to start again. If they change their mind about any \
@@ -75,6 +80,10 @@ UNAVAILABLE = "Sorry — I can't reach the service just now. Please try again in
 
 # Spoken when the model returns nothing at all, or runs out of tool rounds.
 NOTHING_SAID = "Sorry, I didn't catch that. Could you say it again?"
+
+# Spoken when the model announced a lookup and never made one, even after the
+# call was forced. Better than reading out a promise nothing is going to keep.
+NOT_LOOKED_UP = "Sorry — I couldn't look that up just now. Could you ask me again?"
 
 # Spoken when the guard suppresses a reply and no tool returned a figure to
 # read back instead.

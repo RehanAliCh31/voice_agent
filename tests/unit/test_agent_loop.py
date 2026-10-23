@@ -136,7 +136,7 @@ def test_an_empty_reply_becomes_a_sayable_sentence(executor: ToolExecutor) -> No
 
 def test_an_unreachable_endpoint_is_spoken_not_raised(executor: ToolExecutor) -> None:
     class Down(LLMClient):
-        def complete(self, messages: Any, tools: Any) -> Reply:
+        def complete(self, messages: Any, tools: Any, tool_choice: str = "auto") -> Reply:
             raise LLMUnavailable("down")
 
     out = Agent(Down(), executor).handle("x", Conversation("s1"))
@@ -318,7 +318,7 @@ def test_an_outage_after_a_tool_ran_still_reports_it(bank: SqliteBank) -> None:
         def __init__(self) -> None:
             self.calls = 0
 
-        def complete(self, messages: Any, tools: Any) -> Reply:
+        def complete(self, messages: Any, tools: Any, tool_choice: str = "auto") -> Reply:
             self.calls += 1
             if self.calls == 1:
                 return Reply(
@@ -623,3 +623,97 @@ def test_a_read_back_that_survives_the_guard_stays_armed(bank: SqliteBank) -> No
 
     assert out.guard_hit is False
     assert executor.pending is not None
+
+
+# --- a promise is not an answer ----------------------------------------------
+#
+# Observed against the live model: asked about bills after a greeting, it
+# replies "Let me pull up your bills." and calls nothing. The loop used to
+# treat any reply without tool calls as a finished answer, so the customer
+# heard the promise and the turn ended. Worse, when the conversation carried
+# that promise forward the model went on to invent the bills outright.
+#
+# A turn may not end on an announcement. Detecting one is a guess; acting on
+# it is not -- the retry forces the call rather than asking for it.
+
+
+def test_a_promise_with_no_tool_call_forces_the_call(executor: ToolExecutor) -> None:
+    agent = agent_with(
+        [
+            Reply(text="I can help with that. Let me pull up your bills."),
+            Reply(tool_calls=(ToolCall("c1", "list_bills", {}),)),
+            Reply(text="You have five unpaid bills."),
+        ],
+        executor,
+    )
+
+    out = agent.handle("tell me about my bills", Conversation("s1"))
+
+    assert out.text == "You have five unpaid bills."
+    assert [call.name for call in out.tool_calls] == ["list_bills"]
+
+
+def test_the_forced_round_requires_a_tool(executor: ToolExecutor) -> None:
+    """The retry must compel the call. Asking again politely is what failed."""
+    client = FakeLLMClient(
+        [
+            Reply(text="Let me check that for you."),
+            Reply(tool_calls=(ToolCall("c1", "list_bills", {}),)),
+            Reply(text="You have five unpaid bills."),
+        ]
+    )
+    Agent(client, executor).handle("my bills?", Conversation("s1"))
+
+    assert client.choices == ["auto", "required", "auto"]
+
+
+def test_a_question_back_is_left_alone(executor: ToolExecutor) -> None:
+    """Asking which account is the behaviour we want, not a broken turn."""
+    agent = agent_with([Reply(text="Which account would you like, checking or savings?")], executor)
+
+    out = agent.handle("what is my balance?", Conversation("s1"))
+
+    assert out.text == "Which account would you like, checking or savings?"
+    assert out.rounds == 1
+
+
+def test_a_greeting_is_left_alone(executor: ToolExecutor) -> None:
+    agent = agent_with([Reply(text="Yes, I hear you clearly.")], executor)
+
+    out = agent.handle("can you hear me?", Conversation("s1"))
+
+    assert out.text == "Yes, I hear you clearly."
+    assert out.rounds == 1
+
+
+def test_a_promise_after_a_tool_already_ran_is_final(executor: ToolExecutor) -> None:
+    """The work happened. Whatever it says now is a report, not a promise."""
+    agent = agent_with(
+        [
+            Reply(tool_calls=(ToolCall("c1", "list_bills", {}),)),
+            Reply(text="Let me know if you want me to pay any of them."),
+        ],
+        executor,
+    )
+
+    out = agent.handle("my bills?", Conversation("s1"))
+
+    assert out.text == "Let me know if you want me to pay any of them."
+    assert out.rounds == 2
+
+
+def test_a_model_that_still_will_not_call_is_not_left_mid_promise(
+    executor: ToolExecutor,
+) -> None:
+    """The forced round can come back empty. The customer must not hear the promise."""
+    agent = agent_with(
+        [
+            Reply(text="Let me pull up your bills."),
+            Reply(text="Let me pull up your bills."),
+        ],
+        executor,
+    )
+
+    out = agent.handle("my bills?", Conversation("s1"))
+
+    assert "Let me pull up" not in out.text

@@ -47,8 +47,18 @@ class LLMClient(ABC):
     """Sends a conversation to a model and returns what it said."""
 
     @abstractmethod
-    def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Reply:
-        """One round trip. Raises LLMUnavailable if the model cannot be reached."""
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> Reply:
+        """One round trip. Raises LLMUnavailable if the model cannot be reached.
+
+        `tool_choice` is "auto" normally, or "required" to compel a call. The
+        agent uses the second when the model has announced an action without
+        taking it, where asking again has already been shown not to work.
+        """
 
 
 class FakeLLMClient(LLMClient):
@@ -58,9 +68,18 @@ class FakeLLMClient(LLMClient):
         self._scripted = list(scripted)
         self._index = 0
         self.calls: list[tuple[list[dict[str, Any]], list[dict[str, Any]]]] = []
+        # What was asked of each round, so a test can assert that the retry
+        # compelled a call rather than merely asking for one again.
+        self.choices: list[str] = []
 
-    def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Reply:
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> Reply:
         self.calls.append((messages, tools))
+        self.choices.append(tool_choice)
         if self._index >= len(self._scripted):
             raise IndexError(
                 f"FakeLLMClient ran out of scripted replies after {self._index}; "

@@ -11,6 +11,7 @@ because the alternative is a customer listening to silence.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -19,7 +20,7 @@ from typing import Any
 from voicebot.agent.executor import ToolExecutor, ToolOutcome
 from voicebot.agent.guard import fallback_sentence, guard, in_digits, money_in_text
 from voicebot.llm.base import LLMClient, LLMUnavailable, Reply, ToolCall
-from voicebot.llm.prompts import NOTHING_SAID, SYSTEM_PROMPT, UNAVAILABLE
+from voicebot.llm.prompts import NOT_LOOKED_UP, NOTHING_SAID, SYSTEM_PROMPT, UNAVAILABLE
 from voicebot.llm.tools import TOOL_SCHEMAS
 from voicebot.utils.logging import get_logger
 
@@ -34,6 +35,42 @@ RECALL_TURNS = 6
 # What an out-of-date tool result is replaced with. JSON, because that is what
 # the model expects in a tool message.
 STALE = '{"superseded": true, "note": "the account changed after this; look it up again"}'
+
+
+# Things the model says when it is about to act: "let me check", "I'll pull
+# up", "I'm looking that up", "one moment". Observed against the live model,
+# which says them and then calls nothing at all.
+#
+# The verb has to follow the subject, so "which account would you like me to
+# check?" does not match, and the stems are open-ended so "checking" and
+# "looking" match the same entry as "check".
+_ACTION = r"check|look|pull|grab|fetch|get|retriev|review|see|find|confirm|verify"
+_ANNOUNCEMENT = re.compile(
+    r"\b(?:"
+    r"(?:let\s+me|i'?ll|i\s+will|i'?m|i\s+am|i\s+can|i\s+could)"
+    r"\s+(?:just\s+|quickly\s+|go\s+ahead\s+and\s+)?(?:" + _ACTION + r")\w*"
+    r"|one\s+moment|just\s+a\s+(?:moment|second)|hold\s+on|bear\s+with\s+me"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def announces_action(text: str | None) -> bool:
+    """True when a reply promises to look something up instead of doing it.
+
+    A reply that ends in a question is left alone whatever else it says. The
+    bot is meant to ask which account before fetching a balance, and phrasing
+    that as "I can check that for you -- which one?" must stay a question
+    rather than be turned into a lookup of the wrong account.
+
+    This is a guess about English, and it is allowed to be: a miss leaves the
+    old behaviour, and a false positive costs one extra round. What follows it
+    is not a guess.
+    """
+    said = (text or "").strip()
+    if not said or said.endswith("?"):
+        return False
+    return bool(_ANNOUNCEMENT.search(said))
 
 
 @dataclass
@@ -215,11 +252,14 @@ class Agent:
         outcomes: list[ToolOutcome] = list(seeded or [])
         rounds = 0
         reply = Reply()
+        choice = "auto"
 
         for _ in range(self.max_tool_rounds):
             rounds += 1
             try:
-                reply = self.client.complete(list(conversation.messages), list(TOOL_SCHEMAS))
+                reply = self.client.complete(
+                    list(conversation.messages), list(TOOL_SCHEMAS), choice
+                )
             except LLMUnavailable as exc:
                 # Carry what already ran. A transfer that executed before the
                 # endpoint died still has to appear in the audit log; losing
@@ -231,8 +271,22 @@ class Agent:
             conversation.append_assistant(reply)
 
             if not reply.tool_calls:
+                # The model said it would look something up and then called
+                # nothing. Left alone the turn ends on the promise, and the
+                # customer is told the bot is checking by a bot that has
+                # stopped. Worse, the promise stays in the history, and the
+                # next round answers from a model that has now invented the
+                # figures it never fetched.
+                #
+                # Asking again changes nothing -- it is what already failed --
+                # so the retry compels the call instead of requesting it.
+                if not calls and choice == "auto" and announces_action(reply.text):
+                    log.info("forcing a tool call: the model promised one and made none")
+                    choice = "required"
+                    continue
                 break
 
+            choice = "auto"
             for call in reply.tool_calls:
                 before = self.executor.writes
                 outcome = self.executor.execute(call)
@@ -249,6 +303,15 @@ class Agent:
         if not spoken:
             # No words and no rounds left: say something rather than nothing.
             return self._result(NOTHING_SAID, calls, outcomes, rounds, hit=False)
+
+        if not calls and announces_action(spoken):
+            # Compelled to call a tool, it still did not. Whatever it wrote is
+            # a promise nothing will keep, so it is not worth saying. Asking
+            # the customer to try again is at least true.
+            log.warning("suppressing an unkept promise: %r", spoken)
+            return self._result(
+                NOT_LOOKED_UP, calls, outcomes, rounds, hit=False, suppressed=spoken
+            )
 
         sourced = _sourced(outcomes)
         # The customer's own figures are speakable. Repeating "$400" back to
