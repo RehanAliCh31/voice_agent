@@ -1,4 +1,4 @@
-"""The ten things the model is allowed to do.
+"""The eleven things the model is allowed to do.
 
 This file is the whole surface between a fluent model and a customer's money.
 Anything not described here, the bot cannot do — which is the point. Adding a
@@ -15,6 +15,11 @@ from __future__ import annotations
 from typing import Any
 
 from voicebot.bank.base import DEPOSIT_SOURCES, PERIODS
+
+# How many ledger rows a spoken answer can carry. A reply is read aloud, so a
+# list long enough to be useful on a screen is unusable in a conversation.
+DEFAULT_TRANSACTIONS = 5
+MAX_TRANSACTIONS = 20
 
 # Tools that move money or change a card. Each one is called twice: the first
 # call returns a summary and a token and changes nothing, the second carries
@@ -101,6 +106,28 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             },
         },
         ["period"],
+    ),
+    _function(
+        "list_transactions",
+        "List recent movements on the account -- what was charged, by whom, and "
+        "when. Use this when the customer asks what a charge was or what they "
+        "have paid someone; use get_spending when they want a total rather than "
+        "the individual rows.",
+        {
+            "account": _ACCOUNT,
+            "merchant": {
+                "type": "string",
+                "description": "Optional. Only movements involving this merchant.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": (
+                    "How many to return, newest first. Defaults to "
+                    f"{DEFAULT_TRANSACTIONS}, and never more than {MAX_TRANSACTIONS} "
+                    "-- the reply is read aloud."
+                ),
+            },
+        },
     ),
     # --- writes: each needs confirmation ---
     _function(

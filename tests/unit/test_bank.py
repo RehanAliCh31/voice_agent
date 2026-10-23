@@ -222,3 +222,50 @@ def test_a_deposit_restores_an_emptied_account(bank: SqliteBank) -> None:
     assert bank.balance("checking") == 0
     bank.deposit(100_000, "checking", source="manual top-up")
     assert bank.balance("checking") == 100_000
+
+
+# --- the ledger, row by row --------------------------------------------------
+#
+# `spending` totals the same table. These read it, which is what answers "what
+# was that charge" rather than "how much in all".
+
+
+def test_transactions_come_back_newest_first(bank: SqliteBank) -> None:
+    rows = bank.transactions()
+    stamps = [row.occurred_at for row in rows]
+    assert stamps == sorted(stamps, reverse=True)
+
+
+def test_transactions_are_limited(bank: SqliteBank) -> None:
+    assert len(bank.transactions(limit=2)) == 2
+
+
+def test_transactions_can_be_filtered_by_merchant(bank: SqliteBank) -> None:
+    rows = bank.transactions(merchant="netflix")
+    assert rows and {row.merchant for row in rows} == {"netflix"}
+
+
+def test_transactions_can_be_filtered_by_account(bank: SqliteBank) -> None:
+    rows = bank.transactions(account="checking")
+    assert rows and {row.account for row in rows} == {"checking"}
+
+
+def test_an_unknown_account_is_refused_for_transactions(bank: SqliteBank) -> None:
+    with pytest.raises(BankError):
+        bank.transactions(account="offshore")
+
+
+def test_money_out_is_stored_negative_and_reported_as_spent(bank: SqliteBank) -> None:
+    """The sign is the direction. A caller should not have to infer it."""
+    netflix = bank.transactions(merchant="netflix")[0]
+    assert netflix.cents < 0
+    assert netflix.spent is True
+
+
+def test_a_deposit_shows_in_the_ledger_as_money_in(bank: SqliteBank) -> None:
+    bank.deposit(25_000, "checking", "cheque")
+
+    newest = bank.transactions(limit=1)[0]
+    assert newest.merchant == "cheque"
+    assert newest.cents == 25_000
+    assert newest.spent is False

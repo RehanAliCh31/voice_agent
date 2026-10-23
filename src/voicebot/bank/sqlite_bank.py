@@ -22,6 +22,7 @@ from voicebot.bank.base import (
     BankError,
     Bill,
     Card,
+    Transaction,
     format_money,
     period_range,
     unknown_period_message,
@@ -75,6 +76,40 @@ class SqliteBank(Bank):
         rows = self._db.execute("SELECT name, amount_cents, paid FROM bills ORDER BY name")
         return tuple(
             Bill(name=r["name"], amount_cents=r["amount_cents"], paid=bool(r["paid"])) for r in rows
+        )
+
+    def transactions(
+        self,
+        limit: int = 5,
+        account: str | None = None,
+        merchant: str | None = None,
+    ) -> tuple[Transaction, ...]:
+        sql = "SELECT account, merchant, cents, occurred_at FROM transactions"
+        clauses: list[str] = []
+        params: list[object] = []
+
+        if account:
+            clauses.append("account = ?")
+            params.append(self._account(account))
+        if merchant:
+            clauses.append("merchant = ?")
+            params.append(merchant.lower())
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+
+        # id breaks ties: the seed writes several rows inside one second, and
+        # a timestamp alone would order them arbitrarily between runs.
+        sql += " ORDER BY occurred_at DESC, id DESC LIMIT ?"
+        params.append(max(1, limit))
+
+        return tuple(
+            Transaction(
+                account=row["account"],
+                merchant=row["merchant"],
+                cents=int(row["cents"]),
+                occurred_at=row["occurred_at"],
+            )
+            for row in self._db.execute(sql, params).fetchall()
         )
 
     def spending(self, period: str, merchant: str | None = None) -> int:

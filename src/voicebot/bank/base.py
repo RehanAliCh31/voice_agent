@@ -1,6 +1,6 @@
 """What a bank can do, and the vocabulary its callers share.
 
-The interface is deliberately narrow: ten operations, each one a thing a
+The interface is deliberately narrow: eleven operations, each one a thing a
 customer can ask for. Anything the dialogue needs that is not on this list is
 a sign the dialogue is inventing capability.
 """
@@ -31,6 +31,25 @@ class Card:
     last4: str
     account: str
     frozen: bool
+
+
+@dataclass(frozen=True)
+class Transaction:
+    """One movement on the ledger.
+
+    `cents` keeps its sign, because the sign is the direction and a caller
+    that has to infer it will eventually infer it wrong. `spent` names it so
+    nobody has to remember which way round it goes.
+    """
+
+    account: str
+    merchant: str
+    cents: int
+    occurred_at: str
+
+    @property
+    def spent(self) -> bool:
+        return self.cents < 0
 
 
 @dataclass(frozen=True)
@@ -145,6 +164,21 @@ class Bank(ABC):
     @abstractmethod
     def bills(self) -> tuple[Bill, ...]:
         """Every bill on file."""
+
+    @abstractmethod
+    def transactions(
+        self,
+        limit: int = 5,
+        account: str | None = None,
+        merchant: str | None = None,
+    ) -> tuple[Transaction, ...]:
+        """The most recent movements, newest first.
+
+        The same table `spending` totals, read row by row: this is what
+        answers "what was that charge", where the total cannot.
+
+        Raises BankError when `account` is not one the customer holds.
+        """
 
     @abstractmethod
     def spending(self, period: str, merchant: str | None = None) -> int:

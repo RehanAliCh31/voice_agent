@@ -27,7 +27,7 @@ from voicebot.bank.base import (
     unknown_source_message,
 )
 from voicebot.llm.base import ToolCall
-from voicebot.llm.tools import CONFIRMING
+from voicebot.llm.tools import CONFIRMING, DEFAULT_TRANSACTIONS, MAX_TRANSACTIONS
 from voicebot.utils.logging import get_logger
 
 log = get_logger("agent.executor")
@@ -91,6 +91,16 @@ def _require_positive_int(value: Any, field: str) -> int:
     if value <= 0:
         raise ValueError(f"{field} must be greater than zero.")
     return value
+
+
+def _optional_text(value: Any) -> str | None:
+    """A filter the caller may omit. Only a real string narrows the query.
+
+    An empty or non-string value means "no filter" rather than a filter on
+    nothing, which would quietly match no rows and answer a question the
+    customer did not ask.
+    """
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _require_text(value: Any, field: str) -> str:
@@ -327,6 +337,7 @@ class ToolExecutor:
             "list_cards": self._list_cards,
             "get_balance": self._get_balance,
             "get_spending": self._get_spending,
+            "list_transactions": self._list_transactions,
             "transfer_money": self._transfer_money,
             "pay_bill": self._pay_bill,
             "freeze_card": self._freeze_card,
@@ -405,6 +416,39 @@ class ToolExecutor:
         if merchant:
             out["merchant"] = merchant
         return ToolOutcome(out, sourced_cents=(cents,))
+
+    def _list_transactions(self, arguments: dict[str, Any]) -> ToolOutcome:
+        rows = self.bank.transactions(
+            limit=self._row_count(arguments.get("limit")),
+            account=_optional_text(arguments.get("account")),
+            merchant=_optional_text(arguments.get("merchant")),
+        )
+        return ToolOutcome(
+            {
+                "transactions": [
+                    {
+                        "merchant": row.merchant,
+                        "account": row.account,
+                        "amount": format_money(abs(row.cents)),
+                        "amount_cents": abs(row.cents),
+                        "direction": "out" if row.spent else "in",
+                        "occurred_at": row.occurred_at,
+                    }
+                    for row in rows
+                ]
+            },
+            # Absolute, because that is what gets spoken. The ledger keeps the
+            # sign and the reply states the direction in words; a guard
+            # comparing against a negative would suppress every figure here.
+            sourced_cents=tuple(abs(row.cents) for row in rows),
+        )
+
+    @staticmethod
+    def _row_count(value: Any) -> int:
+        """Clamp rather than refuse: an over-long list is not a bad request."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            return DEFAULT_TRANSACTIONS
+        return max(1, min(value, MAX_TRANSACTIONS))
 
     def _transfer_money(self, arguments: dict[str, Any]) -> ToolOutcome:
         sent = arguments["amount_cents"]

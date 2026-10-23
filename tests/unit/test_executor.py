@@ -44,15 +44,15 @@ def call(name: str, **arguments: Any) -> ToolCall:
 # --- the schemas -------------------------------------------------------------
 
 
-def test_there_are_ten_well_formed_schemas() -> None:
+def test_there_are_eleven_well_formed_schemas() -> None:
     """The count is asserted on purpose: a new tool is a deliberate act.
 
     Every schema added is another choice the model has to get right, and the
     surface between it and a customer's money widening by one.
     """
     names = {schema["function"]["name"] for schema in TOOL_SCHEMAS}
-    assert len(TOOL_SCHEMAS) == 10
-    assert len(names) == 10
+    assert len(TOOL_SCHEMAS) == 11
+    assert len(names) == 11
     assert CONFIRMING <= names
 
     for schema in TOOL_SCHEMAS:
@@ -374,3 +374,49 @@ def test_a_deposit_of_nothing_is_refused(bank: SqliteBank, executor: ToolExecuto
 
     assert "error" in out.result
     assert bank.balance("checking") == 248_350
+
+
+# --- reading the ledger ------------------------------------------------------
+
+
+def test_list_transactions_reports_rows(executor: ToolExecutor) -> None:
+    out = executor.execute(call("list_transactions", limit=3))
+
+    rows = out.result["transactions"]
+    assert len(rows) == 3
+    assert {"merchant", "amount", "amount_cents", "direction", "occurred_at"} <= set(rows[0])
+
+
+def test_transaction_amounts_are_sourced_so_they_can_be_spoken(
+    executor: ToolExecutor,
+) -> None:
+    """Stored negative, spoken positive. The guard compares what is spoken."""
+    out = executor.execute(call("list_transactions", merchant="netflix"))
+
+    assert out.sourced_cents and all(cents > 0 for cents in out.sourced_cents)
+    assert 1_099 in out.sourced_cents
+
+
+def test_the_direction_is_stated_not_implied(executor: ToolExecutor) -> None:
+    out = executor.execute(call("list_transactions", merchant="netflix"))
+    assert out.result["transactions"][0]["direction"] == "out"
+
+
+def test_reading_the_ledger_changes_nothing(bank: SqliteBank, executor: ToolExecutor) -> None:
+    before = bank.balance("checking")
+    executor.execute(call("list_transactions"))
+
+    assert bank.balance("checking") == before
+    assert executor.writes == 0
+    assert executor.pending is None
+
+
+def test_an_absurd_limit_is_clamped(executor: ToolExecutor) -> None:
+    """Replies are spoken aloud; a hundred rows is not an answer."""
+    out = executor.execute(call("list_transactions", limit=500))
+    assert len(out.result["transactions"]) <= 20
+
+
+def test_an_unknown_account_comes_back_as_a_sentence(executor: ToolExecutor) -> None:
+    out = executor.execute(call("list_transactions", account="offshore"))
+    assert "error" in out.result
