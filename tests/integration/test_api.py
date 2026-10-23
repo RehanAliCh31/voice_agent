@@ -84,8 +84,22 @@ def test_metrics_exposes_tool_calls_and_the_guard_hit_rate(client: TestClient) -
 
 
 def test_the_guard_hit_counter_rises_when_a_figure_is_invented(client: TestClient) -> None:
-    scripted(client, [Reply(text="Your balance is $31,415.00.")])
+    """Still counted, now that the loop sends it to look the figure up first.
+
+    The lookup is the better answer when it works. When the model invents the
+    same figure anyway, the guard stops it and the counter has to notice --
+    that number is how anyone sees the model reaching for figures at all.
+    """
+    scripted(
+        client,
+        [
+            Reply(text="Your balance is $31,415.00."),
+            Reply(tool_calls=(ToolCall("c1", "list_cards", {}),)),
+            Reply(text="Your balance is $31,415.00."),
+        ],
+    )
     client.post("/v1/chat", json={"text": "balance?"})
+
     assert "voicebot_guard_hits_total 1" in client.get("/metrics").text
 
 

@@ -18,7 +18,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from voicebot.agent.executor import ToolExecutor, ToolOutcome
-from voicebot.agent.guard import fallback_sentence, guard, in_digits, money_in_text
+from voicebot.agent.guard import (
+    allowed_values,
+    fallback_sentence,
+    guard,
+    in_digits,
+    money_in_text,
+)
 from voicebot.llm.base import LLMClient, LLMUnavailable, Reply, ToolCall
 from voicebot.llm.prompts import NOT_LOOKED_UP, NOTHING_SAID, SYSTEM_PROMPT, UNAVAILABLE
 from voicebot.llm.tools import TOOL_SCHEMAS
@@ -308,7 +314,7 @@ class Agent:
                 #
                 # Asking again changes nothing -- it is what already failed --
                 # so the retry compels the call instead of requesting it.
-                if not calls and choice == "auto" and self._unfinished(reply.text):
+                if not calls and choice == "auto" and self._owes_a_lookup(reply.text, conversation):
                     log.info("forcing a tool call: the model promised one and made none")
                     # Struck from the history, not just replaced. The customer
                     # never heard it -- the turn returns one reply -- and a
@@ -348,16 +354,7 @@ class Agent:
             )
 
         sourced = _sourced(outcomes)
-        # The customer's own figures are speakable. Repeating "$400" back to
-        # someone who just said "transfer $400" is quoting them, not inventing
-        # a fact -- and refusing to left the bot unable to take an instruction
-        # at all, since every confirmation restated the amount.
-        allowed = (
-            sourced
-            + conversation.recall(self.executor.writes)
-            + _quoted(conversation)
-            + _pending(self.executor)
-        )
+        allowed = self._allowed(conversation, sourced)
         checked, hit = guard(
             spoken,
             [o.result for o in outcomes],
@@ -389,6 +386,21 @@ class Agent:
             suppressed=spoken if hit else None,
         )
 
+    def _allowed(self, conversation: Conversation, sourced: tuple[int, ...]) -> tuple[int, ...]:
+        """Every figure this turn is entitled to say.
+
+        The customer's own figures are speakable. Repeating "$400" back to
+        someone who just said "transfer $400" is quoting them, not inventing
+        a fact -- and refusing left the bot unable to take an instruction at
+        all, since every confirmation restated the amount.
+        """
+        return (
+            sourced
+            + conversation.recall(self.executor.writes)
+            + _quoted(conversation)
+            + _pending(self.executor)
+        )
+
     def _unfinished(self, text: str | None) -> bool:
         """True when the reply leaves the turn owing the customer an action.
 
@@ -400,6 +412,22 @@ class Agent:
         return announces_action(text) or seeks_agreement(
             text, armed=self.executor.pending is not None
         )
+
+    def _owes_a_lookup(self, text: str | None, conversation: Conversation) -> bool:
+        """True when the turn cannot honestly end here.
+
+        The two unfinished shapes above, plus a third found live: a figure
+        stated outright with nothing looked up to state it from. The guard
+        stops that reaching the customer, but stopping a wrong answer is not
+        the same as giving a right one, and the right one is a lookup away.
+
+        Deliberately not used to decide what is finally spoken -- that stays
+        the guard's, so an invention is still counted as one.
+        """
+        if self._unfinished(text):
+            return True
+        allowed = allowed_values(self._allowed(conversation, ()))
+        return any(value not in allowed for value in money_in_text(text or ""))
 
     def _result(
         self,

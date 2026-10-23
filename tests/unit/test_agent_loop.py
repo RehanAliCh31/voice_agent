@@ -15,7 +15,7 @@ from voicebot.agent.executor import ToolExecutor
 from voicebot.agent.loop import Agent, Conversation
 from voicebot.bank.sqlite_bank import SqliteBank
 from voicebot.llm.base import FakeLLMClient, LLMClient, LLMUnavailable, Reply, ToolCall
-from voicebot.llm.prompts import SYSTEM_PROMPT, UNAVAILABLE
+from voicebot.llm.prompts import SYSTEM_PROMPT, UNAVAILABLE, UNVERIFIED
 from voicebot.llm.tools import TOOL_SCHEMAS
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
@@ -164,11 +164,20 @@ def test_an_invented_figure_is_replaced_before_it_is_returned(executor: ToolExec
 
 
 def test_the_fallback_is_generic_when_no_tool_returned_money(executor: ToolExecutor) -> None:
-    out = agent_with([Reply(text="Your balance is $500.00.")], executor).handle(
-        "x", Conversation("s1")
-    )
+    # list_cards on purpose: it is the one lookup that reports no figures, so
+    # the turn still ends with nothing the bot is entitled to say.
+    out = agent_with(
+        [
+            Reply(text="Your balance is $500.00."),
+            Reply(tool_calls=(ToolCall("c1", "list_cards", {}),)),
+            Reply(text="Your balance is $500.00."),
+        ],
+        executor,
+    ).handle("x", Conversation("s1"))
+
     assert out.guard_hit is True
     assert "500" not in out.text
+    assert out.text == UNVERIFIED
 
 
 # --- confirmation ------------------------------------------------------------
@@ -398,7 +407,13 @@ def test_a_pending_action_may_be_restated(bank: SqliteBank) -> None:
 
 def test_a_figure_from_nowhere_is_still_caught(executor: ToolExecutor) -> None:
     # The protection that matters must survive the fix.
-    client = FakeLLMClient([Reply(text="Your savings balance is $31,415.00.")])
+    client = FakeLLMClient(
+        [
+            Reply(text="Your savings balance is $31,415.00."),
+            Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "savings"}),)),
+            Reply(text="Your savings balance is $31,415.00."),
+        ]
+    )
     out = Agent(client, executor).handle("what's my balance?", Conversation("s1"))
 
     assert out.guard_hit is True
@@ -441,6 +456,8 @@ def test_memory_does_not_admit_a_figure_the_bank_never_gave(
             Reply(tool_calls=(ToolCall("c1", "list_accounts", {}),)),
             Reply(text="Checking is $2,483.50."),
             Reply(text="Your savings balance is $31,415.00."),
+            Reply(tool_calls=(ToolCall("c2", "list_accounts", {}),)),
+            Reply(text="Your savings balance is $31,415.00."),
         ]
     )
     agent = Agent(client, executor)
@@ -457,6 +474,10 @@ def test_a_suppressed_figure_does_not_become_quotable(executor: ToolExecutor) ->
     client = FakeLLMClient(
         [
             Reply(text="Your balance is $31,415.00."),
+            Reply(tool_calls=(ToolCall("c1", "list_cards", {}),)),
+            Reply(text="Your balance is $31,415.00."),
+            Reply(text="As I said, $31,415.00."),
+            Reply(tool_calls=(ToolCall("c2", "list_cards", {}),)),
             Reply(text="As I said, $31,415.00."),
         ]
     )
@@ -482,6 +503,8 @@ def test_moving_money_forgets_the_balances_it_made_stale(bank: SqliteBank) -> No
             Reply(text="Your checking balance is $2,483.50."),
             Reply(tool_calls=(ToolCall("c2", "transfer_money", TRANSFER),)),
             Reply(text="Transfer $50.00 to sarah. Shall I go ahead?"),
+            Reply(text="Your checking balance is $2,483.50."),
+            Reply(tool_calls=(ToolCall("c3", "list_cards", {}),)),
             Reply(text="Your checking balance is $2,483.50."),
         ]
     )
@@ -864,3 +887,70 @@ def test_a_spoken_amount_reaches_the_page_as_a_figure(executor: ToolExecutor) ->
 
     assert out.text == "Starbucks, $7.60, yesterday."
     assert out.guard_hit is False
+
+
+# --- a figure stated with nothing looked up ----------------------------------
+#
+# Found live: asked what it had paid Netflix, the model answered "$15.49, on
+# the 3rd" with no tool call at all, three times in four. The real charge is
+# $10.99. The guard caught the invention every time -- the customer never
+# heard $15.49 -- but what they heard instead was an apology, when the answer
+# was one lookup away.
+#
+# The guard's job is to stop the wrong figure. Fetching the right one is this
+# loop's job, and the signal is exact: money stated, and nothing looked up to
+# state it from.
+
+
+def test_an_invented_figure_sends_the_model_to_look_it_up(executor: ToolExecutor) -> None:
+    agent = agent_with(
+        [
+            Reply(text="You've paid Netflix $15.49 this month."),
+            Reply(tool_calls=(ToolCall("c1", "list_transactions", {"merchant": "netflix"}),)),
+            Reply(text="You've paid Netflix $10.99."),
+        ],
+        executor,
+    )
+
+    out = agent.handle("what have I paid netflix?", Conversation("s1"))
+
+    assert out.text == "You've paid Netflix $10.99."
+    assert out.guard_hit is False
+    assert [call.name for call in out.tool_calls] == ["list_transactions"]
+
+
+def test_a_figure_invented_twice_is_still_recorded_as_a_guard_hit(
+    executor: ToolExecutor,
+) -> None:
+    """The metric is how anyone notices the model reaching for figures."""
+    agent = agent_with(
+        [
+            Reply(text="You've paid Netflix $15.49 this month."),
+            Reply(tool_calls=(ToolCall("c1", "list_transactions", {"merchant": "netflix"}),)),
+            Reply(text="You've paid Netflix $15.49 this month."),
+        ],
+        executor,
+    )
+
+    out = agent.handle("what have I paid netflix?", Conversation("s1"))
+
+    assert out.guard_hit is True
+    assert "15.49" not in out.text
+
+
+def test_a_figure_the_customer_said_is_not_a_lookup_owed(executor: ToolExecutor) -> None:
+    """Quoting them back is not inventing. It must not trigger a lookup."""
+    agent = agent_with([Reply(text="That's $400.00 to Ali, from checking.")], executor)
+
+    out = agent.handle("transfer $400 to Ali", Conversation("s1"))
+
+    assert out.rounds == 1
+    assert out.tool_calls == ()
+
+
+def test_a_reply_with_no_figures_owes_nothing(executor: ToolExecutor) -> None:
+    agent = agent_with([Reply(text="I'm well, thanks. How can I help?")], executor)
+
+    out = agent.handle("how are you?", Conversation("s1"))
+
+    assert out.rounds == 1
