@@ -427,6 +427,10 @@
         view.hidden = !chosen;
       }
     });
+    // The microphone belongs to the conversation. On a screen that is being
+    // read rather than talked to it is clutter, and the status line under it
+    // would be describing a turn that is not on screen.
+    el.dock.hidden = name !== "assistant";
     el.views.scrollTop = 0;
     if (name === "transactions") {
       loadStatement();
@@ -1169,7 +1173,7 @@
       "screens", "statement", "statementTotal", "statementMonth",
       "statementIn", "statementOut", "cardPicker", "cardPane",
       "monthlyPlans", "monthlyCommitted", "monthlyMonth", "monthlyPaid",
-      "monthlyLeft", "monthlyBar",
+      "monthlyLeft", "monthlyBar", "dock",
     ].forEach(function (id) {
       el[id] = document.getElementById(id);
     });

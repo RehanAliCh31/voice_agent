@@ -509,6 +509,11 @@ body {
   flex-shrink: 0;
 }
 
+/* The display above outranks the browser's own [hidden] rule, so the dock
+   has to be hidden explicitly -- the same trap the confirmation bar fell
+   into. */
+.dock[hidden] { display: none; }
+
 .dock__row { display: flex; align-items: center; gap: 16px; }
 
 .mic {

@@ -131,9 +131,10 @@
 
 </main>
 
-<!-- Outside the screens on purpose: an action waiting on a yes has to stay
-     visible, and the microphone has to stay reachable, whichever screen is
-     being read. -->
+<!-- Outside the screens, but not shown on all of them. A pending action
+     stays visible wherever the customer is reading, because a yes waiting
+     to be given should not be hidden behind a tab. The microphone goes with
+     the conversation it belongs to. -->
 <div class="confirm" id="confirm" hidden>
   <p class="confirm__text">This moves money. Say yes, or choose below.</p>
   <div class="confirm__buttons">
@@ -142,7 +143,7 @@
   </div>
 </div>
 
-<div class="dock">
+<div class="dock" id="dock">
   <div class="dock__row">
     <button class="mic" id="micButton" type="button" data-state="idle" aria-label="Start recording">
       <span class="mic__ring" aria-hidden="true"></span>
