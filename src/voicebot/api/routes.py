@@ -27,6 +27,8 @@ from voicebot.api.payloads import (
     HealthPayload,
     LedgerPayload,
     MonthlyPayload,
+    PinChangeRequest,
+    PinRequest,
     ReadyPayload,
     SessionRequest,
     SpeakRequest,
@@ -42,7 +44,7 @@ from voicebot.api.payloads import (
     turn_payload,
 )
 from voicebot.api.sessions import SessionStore
-from voicebot.bank.base import BankError
+from voicebot.bank.base import PIN_LENGTH, BankError, Card
 from voicebot.llm.base import ToolCall
 from voicebot.pipeline.audio_io import decode_wav, encode_wav
 from voicebot.pipeline.orchestrator import TurnResult
@@ -268,17 +270,75 @@ def monthly(services: Services = Depends(get_services)) -> MonthlyPayload:
     return monthly_payload(services.bank)
 
 
-@router.get("/v1/cards/{last4}/details", response_model=CardDetailsPayload, tags=["screens"])
-def card_details(last4: str, services: Services = Depends(get_services)) -> CardDetailsPayload:
-    """One card's printed details, for the details dialogue.
-
-    Its own request rather than part of the card list: a number nobody asked
-    to see should not travel with every refresh of the screen.
-    """
+def _card_or_404(services: Services, last4: str) -> Card:
     card = next((c for c in services.bank.cards() if c.last4 == last4), None)
     if card is None:
         raise HTTPException(status_code=404, detail=f"No card ending {last4}.")
+    return card
+
+
+def _checked(services: Services, last4: str, pin: str) -> None:
+    """Let a PIN through, or say why not. Nothing here writes it down."""
+    try:
+        if not services.bank.check_pin(last4, pin):
+            # No count, no tries remaining, no hint. Everything that could be
+            # said here is something a person guessing would like to know.
+            raise HTTPException(status_code=403, detail="That PIN is not right.")
+    except BankError as exc:
+        # The bank refuses a locked card rather than answering it, so a lock
+        # arrives here as an error and not as a wrong PIN.
+        raise HTTPException(status_code=423, detail=str(exc)) from exc
+
+
+@router.post("/v1/cards/{last4}/details", response_model=CardDetailsPayload, tags=["screens"])
+def card_details(
+    last4: str, request: PinRequest, services: Services = Depends(get_services)
+) -> CardDetailsPayload:
+    """One card's printed details, once the PIN has been given.
+
+    A POST because it carries a credential and counts a wrong one. Its own
+    request rather than part of the card list: a number nobody asked to see
+    should not travel with every refresh of the screen.
+    """
+    card = _card_or_404(services, last4)
+    _checked(services, last4, request.pin)
     return card_details_payload(card)
+
+
+@router.post("/v1/cards/{last4}/pin/check", tags=["screens"])
+def check_pin(
+    last4: str, request: PinRequest, services: Services = Depends(get_services)
+) -> dict[str, str]:
+    """Does this PIN open the card? Answers that and nothing else.
+
+    The reset flow asks before it offers a new PIN. Separate from the
+    details endpoint on purpose: finding out whether somebody knows the PIN
+    should not hand them the card number for asking.
+    """
+    _card_or_404(services, last4)
+    _checked(services, last4, request.pin)
+    return {"status": "ok"}
+
+
+@router.post("/v1/cards/{last4}/pin", tags=["screens"])
+def change_pin(
+    last4: str, request: PinChangeRequest, services: Services = Depends(get_services)
+) -> dict[str, str]:
+    """Change a card's PIN, given the one it is now."""
+    _card_or_404(services, last4)
+    if len(request.new_pin) != PIN_LENGTH or not request.new_pin.isdigit():
+        raise HTTPException(
+            status_code=422, detail=f"A PIN is {PIN_LENGTH} digits, and nothing else."
+        )
+    _checked(services, last4, request.current_pin)
+
+    try:
+        services.bank.set_pin(last4, request.current_pin, request.new_pin)
+    except BankError as exc:  # pragma: no cover - the checks above cover these
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    log.info("pin changed on card %s", last4)
+    return {"status": "changed"}
 
 
 @router.get("/v1/statement", response_model=StatementPayload, tags=["screens"])

@@ -1,6 +1,6 @@
 """What a bank can do, and the vocabulary its callers share.
 
-The interface is deliberately narrow: eighteen operations, each one a thing a
+The interface is deliberately narrow: twenty-one operations, each one a thing a
 customer can ask for. Anything the dialogue needs that is not on this list is
 a sign the dialogue is inventing capability.
 """
@@ -24,6 +24,40 @@ class BankError(Exception):
 class Account:
     name: str
     balance_cents: int
+
+
+# How many wrong PINs before the card stops accepting them, and for how
+# long. Three and five minutes is roughly what a cash machine gives you, and
+# it is the difference between a secret and a formality.
+PIN_TRIES = 3
+PIN_LOCK_MINUTES = 5
+PIN_LENGTH = 4
+
+
+def pin_locked_message() -> str:
+    """Said aloud when the PIN has been refused too many times."""
+    return (
+        f"That PIN has been entered wrongly {PIN_TRIES} times, so it is locked "
+        f"for {PIN_LOCK_MINUTES} minutes."
+    )
+
+
+def bad_pin_message() -> str:
+    """Said aloud when a new PIN is not a PIN."""
+    return f"A PIN is {PIN_LENGTH} digits, and nothing else."
+
+
+# What a PIN can be asked for. Closed, because each one is a screen the
+# page knows how to open: a reason not on this list has nowhere to go.
+PIN_PURPOSES: tuple[str, ...] = ("details", "reset")
+
+
+def unknown_purpose_message(purpose: str) -> str:
+    """Said aloud when a PIN is asked for something it is not needed for."""
+    return (
+        f"I don't ask for a PIN to {purpose}. I ask for one to show card "
+        f"details or to change the PIN itself."
+    )
 
 
 # What a card can be allowed or refused, one switch each. Closed, because
@@ -373,6 +407,27 @@ class Bank(ABC):
     @abstractmethod
     def pay_bill(self, bill: str) -> int:
         """Pay a bill in full and return the amount paid."""
+
+    @abstractmethod
+    def check_pin(self, last4: str, pin: str, now: datetime | None = None) -> bool:
+        """Is this the card's PIN? Counts the failures and locks on PIN_TRIES.
+
+        A correct PIN clears the count. Raises BankError if the card is
+        unknown, or if it is already locked -- a locked card is not answered
+        with "wrong", because that would be another guess.
+        """
+
+    @abstractmethod
+    def pin_locked(self, last4: str, now: datetime | None = None) -> bool:
+        """Whether the card is refusing PINs for the moment."""
+
+    @abstractmethod
+    def set_pin(self, last4: str, current: str, new: str) -> None:
+        """Change the PIN, given the one it is now.
+
+        Raises BankError when the current PIN is wrong, the card is locked,
+        or the new PIN is not PIN_LENGTH digits.
+        """
 
     @abstractmethod
     def set_card_control(self, last4: str, control: str, enabled: bool) -> Card:

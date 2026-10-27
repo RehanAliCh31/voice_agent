@@ -837,3 +837,95 @@ def test_a_bank_file_made_before_numbers_gains_them(tmp_path) -> None:
     card = next(c for c in SqliteBank(str(path)).cards() if c.last4 == "1234")
     assert card.number.endswith("1234")
     assert card.valid_to
+
+
+# --- the PIN -----------------------------------------------------------------
+#
+# A credential, so it is stored the way credentials are stored: salted, hashed
+# and never readable back. Three wrong tries locks it for a while, because a
+# four-digit secret with unlimited guesses is a four-digit secret that anyone
+# has.
+
+
+def test_the_seeded_pin_opens_a_card(bank: SqliteBank) -> None:
+    assert bank.check_pin("4417", "1234") is True
+
+
+def test_a_wrong_pin_does_not(bank: SqliteBank) -> None:
+    assert bank.check_pin("4417", "9999") is False
+
+
+def test_the_pin_is_not_stored_in_the_clear(bank: SqliteBank) -> None:
+    row = bank._db.execute("SELECT * FROM cards WHERE last4 = '4417'").fetchone()
+    stored = " ".join(str(value) for value in tuple(row))
+
+    assert "1234" not in stored
+    assert row["pin_hash"] and row["pin_salt"]
+
+
+def test_two_cards_with_the_same_pin_do_not_look_alike(bank: SqliteBank) -> None:
+    """Salted per card, so one hash says nothing about another."""
+    rows = bank._db.execute("SELECT pin_hash, pin_salt FROM cards").fetchall()
+    assert len({r["pin_salt"] for r in rows}) == len(rows)
+    assert len({r["pin_hash"] for r in rows}) == len(rows)
+
+
+def test_three_wrong_tries_lock_the_pin(bank: SqliteBank) -> None:
+    for _ in range(3):
+        bank.check_pin("4417", "0000")
+
+    assert bank.pin_locked("4417") is True
+    with pytest.raises(BankError, match="locked"):
+        bank.check_pin("4417", "1234")
+
+
+def test_a_right_pin_forgets_the_wrong_ones(bank: SqliteBank) -> None:
+    bank.check_pin("4417", "0000")
+    bank.check_pin("4417", "0000")
+
+    assert bank.check_pin("4417", "1234") is True
+
+    bank.check_pin("4417", "0000")
+    assert bank.pin_locked("4417") is False, "the count started again"
+
+
+def test_a_lock_lifts_on_its_own(bank: SqliteBank) -> None:
+    from datetime import timedelta
+
+    for _ in range(3):
+        bank.check_pin("4417", "0000")
+
+    later = datetime.now() + timedelta(minutes=10)
+    assert bank.pin_locked("4417", now=later) is False
+    assert bank.check_pin("4417", "1234", now=later) is True
+
+
+def test_a_pin_can_be_changed_with_the_old_one(bank: SqliteBank) -> None:
+    bank.set_pin("4417", "1234", "8765")
+
+    assert bank.check_pin("4417", "8765") is True
+    assert bank.check_pin("4417", "1234") is False
+
+
+def test_a_pin_cannot_be_changed_without_the_old_one(bank: SqliteBank) -> None:
+    with pytest.raises(BankError):
+        bank.set_pin("4417", "0000", "8765")
+
+    assert bank.check_pin("4417", "1234") is True
+
+
+def test_a_new_pin_has_to_be_four_digits(bank: SqliteBank) -> None:
+    for bad in ("123", "12345", "abcd", "", "12 4"):
+        with pytest.raises(BankError):
+            bank.set_pin("4417", "1234", bad)
+
+
+def test_a_replacement_card_carries_the_pin_over(bank: SqliteBank) -> None:
+    """A new card for the same person, not a new person."""
+    issued = bank.order_card("checking")
+    assert bank.check_pin(issued.last4, "1234") is True
+
+
+def test_changing_one_cards_pin_leaves_the_other_alone(bank: SqliteBank) -> None:
+    bank.set_pin("4417", "1234", "8765")
+    assert bank.check_pin("9021", "1234") is True

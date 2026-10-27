@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS accounts (
 -- code shown on that screen is minted for a single viewing and forgotten,
 -- so there is nothing here to leak, log, or back up by accident.
 --
+-- The PIN is here, but never as a PIN: a per-card salt and a hash of the
+-- two, so the column cannot be read back into the number somebody types.
+-- The failure count and the lock are beside it, because a four-digit secret
+-- with unlimited guesses is a four-digit secret anybody has.
+--
 -- The three controls default to on, which is how a card arrives. They are
 -- columns rather than a screen's idea, because a switch nothing can change
 -- is a lie told in CSS.
@@ -31,6 +36,10 @@ CREATE TABLE IF NOT EXISTS cards (
     number     TEXT NOT NULL DEFAULT '',
     valid_from TEXT NOT NULL DEFAULT '',
     valid_to   TEXT NOT NULL DEFAULT '',
+    pin_hash   TEXT NOT NULL DEFAULT '',
+    pin_salt   TEXT NOT NULL DEFAULT '',
+    pin_failures     INTEGER NOT NULL DEFAULT 0,
+    pin_locked_until TEXT NOT NULL DEFAULT '',
     kind      TEXT NOT NULL DEFAULT 'debit',
     holder    TEXT NOT NULL DEFAULT '',
     ecommerce INTEGER NOT NULL DEFAULT 1,

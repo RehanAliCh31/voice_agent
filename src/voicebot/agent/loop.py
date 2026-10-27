@@ -248,6 +248,9 @@ class AgentResult:
     # one means the bot stopped, the other that a claim was raised and the
     # conversation carries on.
     dispute_filed: str | None = None
+    # The card and purpose a PIN was asked for, if one was. The page opens
+    # its keypad from this; nothing in the turn ever holds the PIN itself.
+    pin_request: dict[str, str] | None = None
 
 
 class Agent:
@@ -484,6 +487,7 @@ class Agent:
             rounds=result.rounds,
             handed_off=reference,
             dispute_filed=result.dispute_filed,
+            pin_request=result.pin_request,
         )
 
     def _allowed(self, conversation: Conversation, sourced: tuple[int, ...]) -> tuple[int, ...]:
@@ -548,7 +552,19 @@ class Agent:
             rounds=rounds,
             handed_off=_reference(outcomes, "handed_off"),
             dispute_filed=_reference(outcomes, "filed"),
+            pin_request=_pin_request(outcomes),
         )
+
+
+def _pin_request(outcomes: Sequence[ToolOutcome]) -> dict[str, str] | None:
+    """The keypad this turn asked for, if it asked for one."""
+    for outcome in outcomes:
+        if outcome.result.get("status") == "pin_requested":
+            return {
+                "last4": str(outcome.result.get("last4", "")),
+                "purpose": str(outcome.result.get("purpose", "")),
+            }
+    return None
 
 
 def _reference(outcomes: Sequence[ToolOutcome], status: str) -> str | None:

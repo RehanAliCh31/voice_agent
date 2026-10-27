@@ -25,7 +25,7 @@ ACCOUNTS: tuple[tuple[str, int], ...] = (
 )
 
 # The name printed on the card. One customer, so one name.
-HOLDER = "REHAN ALI CH"
+HOLDER = "Rehan Ali Ch"
 
 # (last four, account it draws on, what kind it is). The credit card is the
 # one the "credit card" bill belongs to, so the two agree with each other.

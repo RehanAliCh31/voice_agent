@@ -49,15 +49,15 @@ def call(name: str, **arguments: Any) -> ToolCall:
 # --- the schemas -------------------------------------------------------------
 
 
-def test_there_are_fourteen_well_formed_schemas() -> None:
+def test_there_are_fifteen_well_formed_schemas() -> None:
     """The count is asserted on purpose: a new tool is a deliberate act.
 
     Every schema added is another choice the model has to get right, and the
     surface between it and a customer's money widening by one.
     """
     names = {schema["function"]["name"] for schema in TOOL_SCHEMAS}
-    assert len(TOOL_SCHEMAS) == 14
-    assert len(names) == 14
+    assert len(TOOL_SCHEMAS) == 15
+    assert len(names) == 15
     assert CONFIRMING <= names
 
     for schema in TOOL_SCHEMAS:
@@ -783,3 +783,50 @@ def test_a_frozen_card_is_still_only_four_digits(executor: ToolExecutor) -> None
     out = executor.execute(call("freeze_card", **arguments, confirmation_token=token))
 
     assert len(out.result["replacement"]["last4"]) == 4
+
+
+# --- asking for the PIN without hearing it -----------------------------------
+#
+# The bot can ask for a PIN and cannot take one. This puts the keypad on the
+# screen; what is typed there goes straight to be checked and never comes
+# back through the conversation, the transcript or the audit log.
+
+
+def test_asking_for_a_pin_opens_the_keypad(executor: ToolExecutor) -> None:
+    out = executor.execute(call("ask_for_pin", last4="4417", purpose="details"))
+
+    assert out.result["status"] == "pin_requested"
+    assert out.result["last4"] == "4417"
+    assert out.result["purpose"] == "details"
+
+
+def test_asking_for_a_pin_is_not_a_confirming_tool() -> None:
+    """Nothing happens yet, so there is nothing to agree to."""
+    assert "ask_for_pin" not in CONFIRMING
+
+
+def test_asking_for_a_pin_changes_nothing(bank: SqliteBank, executor: ToolExecutor) -> None:
+    executor.execute(call("ask_for_pin", last4="4417", purpose="reset"))
+
+    assert executor.writes == 0
+    assert executor.pending is None
+    assert bank.check_pin("4417", "1234") is True
+
+
+def test_a_pin_cannot_be_asked_for_a_card_that_is_not_there(executor: ToolExecutor) -> None:
+    out = executor.execute(call("ask_for_pin", last4="0000", purpose="details"))
+    assert "error" in out.result
+
+
+def test_a_pin_is_only_asked_for_something_it_is_needed_for(executor: ToolExecutor) -> None:
+    out = executor.execute(call("ask_for_pin", last4="4417", purpose="just curious"))
+    assert "error" in out.result
+
+
+def test_the_tool_cannot_be_handed_a_pin(executor: ToolExecutor) -> None:
+    """There is no parameter for one, so the model has nowhere to put it."""
+    schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "ask_for_pin")
+    properties = schema["function"]["parameters"]["properties"]
+
+    assert "pin" not in properties
+    assert not any("pin" == name for name in properties if name != "purpose")

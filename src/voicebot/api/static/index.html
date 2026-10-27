@@ -131,6 +131,35 @@
 
 </main>
 
+<!-- The PIN, asked for on the screen and never spoken. It goes straight to
+     be checked and is not kept, echoed, logged, or put in the conversation. -->
+<dialog class="ask" id="pinAsk" aria-labelledby="pinTitle">
+  <h2 class="ask__title" id="pinTitle">Enter your PIN</h2>
+  <p class="ask__note" id="pinWhy">This card's details are behind your PIN.</p>
+
+  <div class="ask__step" id="pinStepCurrent">
+    <label class="ask__label" for="pinCurrent">PIN</label>
+    <input class="pin" id="pinCurrent" type="password" inputmode="numeric"
+           autocomplete="off" maxlength="4" placeholder="••••">
+  </div>
+
+  <div class="ask__step" id="pinStepNew" hidden>
+    <label class="ask__label" for="pinNew">New PIN</label>
+    <input class="pin" id="pinNew" type="password" inputmode="numeric"
+           autocomplete="off" maxlength="4" placeholder="••••">
+    <label class="ask__label" for="pinAgain">Enter it again</label>
+    <input class="pin" id="pinAgain" type="password" inputmode="numeric"
+           autocomplete="off" maxlength="4" placeholder="••••">
+  </div>
+
+  <p class="ask__error" id="pinError" hidden></p>
+
+  <div class="ask__buttons">
+    <button class="button button--quiet" type="button" id="pinCancel">Cancel</button>
+    <button class="button button--go" type="button" id="pinGo">Continue</button>
+  </div>
+</dialog>
+
 <!-- What is printed on the card. Opened on request, counted down, and
      closed again: a number left on screen is a number over somebody's
      shoulder. -->

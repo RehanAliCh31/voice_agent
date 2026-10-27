@@ -22,6 +22,7 @@ from typing import Any
 from voicebot.bank.base import (
     CARD_CONTROLS,
     DISPUTE_REASONS,
+    PIN_PURPOSES,
     Bank,
     BankError,
     Transaction,
@@ -30,6 +31,7 @@ from voicebot.bank.base import (
     unknown_control_message,
     unknown_dispute_reason_message,
     unknown_payee_message,
+    unknown_purpose_message,
 )
 from voicebot.llm.base import ToolCall
 from voicebot.llm.tools import CONFIRMING, DEFAULT_TRANSACTIONS, MAX_TRANSACTIONS
@@ -445,6 +447,7 @@ class ToolExecutor:
             "hand_off": self._hand_off,
             "dispute_transaction": self._dispute_transaction,
             "set_card_control": self._set_card_control,
+            "ask_for_pin": self._ask_for_pin,
         }
 
     def _list_accounts(self, _: dict[str, Any]) -> ToolOutcome:
@@ -664,6 +667,24 @@ class ToolExecutor:
             },
             sourced_cents=(moved, from_balance, to_balance),
         )
+
+    def _ask_for_pin(self, arguments: dict[str, Any]) -> ToolOutcome:
+        """Ask the page for a PIN. Nothing here ever sees one.
+
+        There is no parameter for a PIN and no way to pass one: what the
+        customer types goes from the keypad to be checked, and never through
+        the model, the transcript or the audit log.
+        """
+        last4 = _require_text(arguments.get("last4"), "last4")
+        if last4 not in {card.last4 for card in self.bank.cards()}:
+            known = ", ".join(card.last4 for card in self.bank.cards())
+            raise ValueError(f"I don't have a card ending {last4}. I have: {known}.")
+
+        purpose = _require_text(arguments.get("purpose"), "purpose").lower()
+        if purpose not in PIN_PURPOSES:
+            raise ValueError(unknown_purpose_message(purpose))
+
+        return ToolOutcome({"status": "pin_requested", "last4": last4, "purpose": purpose})
 
     def _set_card_control(self, arguments: dict[str, Any]) -> ToolOutcome:
         card = self.bank.set_card_control(

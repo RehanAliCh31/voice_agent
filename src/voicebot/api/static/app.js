@@ -38,6 +38,7 @@
     card: null, // the card being looked at, by last four
     ask: null, // the card action being asked about, if any
     detailsTimer: null, // counts the card details off the screen
+    pin: null, // the card and purpose the PIN dialogue is open for
   };
 
   var el = {};
@@ -103,8 +104,22 @@
       return request("/v1/monthly", { method: "GET" });
     },
 
-    details: function (last4) {
-      return request("/v1/cards/" + encodeURIComponent(last4) + "/details", { method: "GET" });
+    // Three requests that carry a PIN. It is sent to be checked and held
+    // nowhere afterwards: not in state, not in the conversation, not in a
+    // log line.
+    details: function (last4, pin) {
+      return post("/v1/cards/" + encodeURIComponent(last4) + "/details", { pin: pin });
+    },
+
+    checkPin: function (last4, pin) {
+      return post("/v1/cards/" + encodeURIComponent(last4) + "/pin/check", { pin: pin });
+    },
+
+    changePin: function (last4, current, next) {
+      return post("/v1/cards/" + encodeURIComponent(last4) + "/pin", {
+        current_pin: current,
+        new_pin: next,
+      });
     },
 
     arm: function (tool, args, reason) {
@@ -137,6 +152,14 @@
       });
     },
   };
+
+  function post(url, body) {
+    return request(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
 
   function request(url, options) {
     return fetch(url, options).then(function (response) {
@@ -691,7 +714,7 @@
 
     row.appendChild(
       tile(card, "details", "View details", null, function () {
-        openDetails(card);
+        openPin(card, "details");
       })
     );
     row.appendChild(
@@ -714,7 +737,9 @@
     // Deliberately dead rather than quietly doing nothing: a tile that looks
     // live and is not is worse than one that says it is not ready.
     row.appendChild(
-      tile(card, "pin", "Reset PIN", null, null, "not available yet")
+      tile(card, "pin", "Reset PIN", null, function () {
+        openPin(card, "reset");
+      })
     );
 
     return row;
@@ -729,10 +754,7 @@
     return pair;
   }
 
-  function openDetails(card) {
-    api
-      .details(card.last4)
-      .then(function (details) {
+  function showDetails(details) {
         el.detailsList.replaceChildren(
           detailPair("Name", details.holder, true),
           detailPair("Card type", details.card_type),
@@ -745,12 +767,6 @@
         el.cardDetails.showModal();
         el.detailsClose.focus();
         countDown(details.expires_in_seconds);
-      })
-      .catch(function (error) {
-        // Nowhere to put a message in a dialogue that never opened, so it
-        // goes where the customer is already looking.
-        addTurn("bot", "Couldn't read that card's details: " + error.message, { error: true });
-      });
   }
 
   /** Close the details when the code they show has run out. */
@@ -780,6 +796,152 @@
     if (el.cardDetails.open) {
       el.cardDetails.close();
     }
+  }
+
+  // --- the PIN --------------------------------------------------------------
+  //
+  // Asked for here and never spoken. A PIN said out loud would be
+  // transcribed, carried to the model and written to the audit log, which is
+  // the one thing a card secret must never be. It goes from this box
+  // straight to be checked, and the box is emptied however the dialogue is
+  // shut.
+
+  var PIN_ASKS = {
+    details: {
+      title: "Enter your PIN",
+      why: "This card's details are behind your PIN.",
+    },
+    reset: {
+      title: "Change your PIN",
+      why: "Start with the PIN you have now.",
+    },
+  };
+
+  /** The loaded card if the screen has one, or just its four digits. */
+  function cardNamed(last4) {
+    return (
+      state.cards.filter(function (card) {
+        return card.last4 === last4;
+      })[0] || { last4: last4 }
+    );
+  }
+
+  function openPin(card, purpose) {
+    state.pin = { card: card, purpose: purpose };
+    el.pinTitle.textContent = PIN_ASKS[purpose].title;
+    el.pinWhy.textContent = PIN_ASKS[purpose].why;
+    forgetPins();
+    el.pinStepCurrent.hidden = false;
+    el.pinStepNew.hidden = true;
+    el.pinError.hidden = true;
+    el.pinGo.textContent = "Continue";
+    el.pinGo.disabled = false;
+    el.pinAsk.showModal();
+    el.pinCurrent.focus();
+  }
+
+  /** Empty every box that has held a PIN. */
+  function forgetPins() {
+    el.pinCurrent.value = "";
+    el.pinNew.value = "";
+    el.pinAgain.value = "";
+  }
+
+  function closePin() {
+    forgetPins();
+    state.pin = null;
+    if (el.pinAsk.open) {
+      el.pinAsk.close();
+    }
+  }
+
+  function pinFailed(message) {
+    el.pinError.textContent = message;
+    el.pinError.hidden = false;
+    el.pinGo.disabled = false;
+  }
+
+  function onPinGo() {
+    if (!state.pin) {
+      return;
+    }
+    el.pinError.hidden = true;
+
+    if (!el.pinStepNew.hidden) {
+      changePin();
+      return;
+    }
+
+    var pin = el.pinCurrent.value.trim();
+    if (pin.length !== 4) {
+      pinFailed("A PIN is four digits.");
+      return;
+    }
+
+    el.pinGo.disabled = true;
+    var card = state.pin.card;
+
+    if (state.pin.purpose === "details") {
+      // One step: the PIN buys the details, so there is nothing in between.
+      api
+        .details(card.last4, pin)
+        .then(function (details) {
+          closePin();
+          showDetails(details);
+        })
+        .catch(function (error) {
+          pinFailed(error.message);
+        });
+      return;
+    }
+
+    api
+      .checkPin(card.last4, pin)
+      .then(function () {
+        state.pin.current = pin;
+        el.pinCurrent.value = "";
+        el.pinStepCurrent.hidden = true;
+        el.pinStepNew.hidden = false;
+        el.pinWhy.textContent = "Choose a new PIN, then enter it again.";
+        el.pinGo.textContent = "Change PIN";
+        el.pinGo.disabled = false;
+        el.pinNew.focus();
+      })
+      .catch(function (error) {
+        pinFailed(error.message);
+      });
+  }
+
+  function changePin() {
+    var next = el.pinNew.value.trim();
+    var again = el.pinAgain.value.trim();
+
+    if (next.length !== 4) {
+      pinFailed("A new PIN is four digits.");
+      return;
+    }
+    if (next !== again) {
+      // The server is sent one new PIN, so this is the only place the two
+      // can be compared -- which is the whole reason for asking twice.
+      pinFailed("Those two do not match.");
+      el.pinAgain.value = "";
+      el.pinAgain.focus();
+      return;
+    }
+
+    el.pinGo.disabled = true;
+    var last4 = state.pin.card.last4;
+    api
+      .changePin(last4, state.pin.current, next)
+      .then(function () {
+        closePin();
+        addTurn("bot", "The PIN on the card ending " + last4 + " has been changed.", {
+          notice: true,
+        });
+      })
+      .catch(function (error) {
+        pinFailed(error.message);
+      });
   }
 
   // --- asking before acting -----------------------------------------------
@@ -1214,6 +1376,13 @@
       loadStatement();
     }
 
+    if (turn.pin_request) {
+      // The bot asked for a PIN, which means it put the keypad here rather
+      // than listening for one. No screen change: the dialogue is above
+      // whatever is being read, and the conversation stays where it was.
+      openPin(cardNamed(turn.pin_request.last4), turn.pin_request.purpose);
+    }
+
     // An action waits on a yes. Buttons remove any doubt about whether the
     // word was heard correctly, which matters more here than anywhere else --
     // and they act on the pending action directly, not through the model.
@@ -1459,6 +1628,8 @@
       "cardAsk", "askTitle", "askWhy", "askReason", "askSure", "askSummary",
       "askError", "askCancel", "askGo",
       "cardDetails", "detailsList", "detailsClock", "detailsClose",
+      "pinAsk", "pinTitle", "pinWhy", "pinStepCurrent", "pinCurrent",
+      "pinStepNew", "pinNew", "pinAgain", "pinError", "pinCancel", "pinGo",
     ].forEach(function (id) {
       el[id] = document.getElementById(id);
     });
@@ -1483,6 +1654,23 @@
           el.levelFill.setAttribute("data-over", share >= 1 ? "true" : "false");
         }
       },
+    });
+
+    el.pinGo.addEventListener("click", onPinGo);
+    el.pinCancel.addEventListener("click", closePin);
+    // However it is shut -- button, Escape, backdrop -- the boxes are
+    // emptied, so nothing is left on the page holding a PIN.
+    el.pinAsk.addEventListener("close", function () {
+      forgetPins();
+      state.pin = null;
+    });
+    [el.pinCurrent, el.pinNew, el.pinAgain].forEach(function (box) {
+      box.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          onPinGo();
+        }
+      });
     });
 
     el.detailsClose.addEventListener("click", closeDetails);

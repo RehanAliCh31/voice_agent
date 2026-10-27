@@ -849,49 +849,53 @@ def test_a_screen_action_puts_what_was_asked_into_the_conversation(client: TestC
     assert "4417" in spoken[-1]["content"]
 
 
-# --- the details screen ------------------------------------------------------
+# --- the details screen, behind a PIN ----------------------------------------
 #
-# What a bank shows you about your own card once you are past the lock
-# screen. The security code is minted for the viewing and is different every
-# time, because nothing anywhere keeps one.
+# Nothing printed on a card is readable without it, and the PIN itself never
+# travels except to be checked. A wrong one is counted; three lock the card.
 
 
-def test_the_details_of_a_card_can_be_read(client: TestClient) -> None:
-    body = client.get("/v1/cards/4417/details").json()
+def details(client: TestClient, pin: str, last4: str = "4417"):
+    return client.post(f"/v1/cards/{last4}/details", json={"pin": pin})
 
-    assert body["holder"]
+
+def test_the_right_pin_shows_what_is_on_the_card(client: TestClient) -> None:
+    body = details(client, "1234").json()
+
+    assert body["holder"] == "Rehan Ali Ch"
     groups = body["number"].split()
-    assert len(groups) == 4 and all(len(g) == 4 and g.isdigit() for g in groups)
-    assert groups[-1] == "4417", "the number and the four digits agree"
+    assert len(groups) == 4 and groups[-1] == "4417"
+    assert len(body["security_code"]) == 3
     assert body["status"] == "Active"
-    assert body["valid_from"] and body["valid_to"]
-    assert len(body["security_code"]) == 3 and body["security_code"].isdigit()
-    assert body["expires_in_seconds"] > 0
+
+
+def test_a_wrong_pin_shows_nothing(client: TestClient) -> None:
+    response = details(client, "9999")
+
+    assert response.status_code == 403
+    assert "number" not in response.json()
+
+
+def test_three_wrong_pins_lock_the_card(client: TestClient) -> None:
+    for _ in range(3):
+        details(client, "9999")
+
+    locked = details(client, "1234")
+    assert locked.status_code == 423
+    assert "locked" in locked.json()["detail"].lower()
 
 
 def test_the_security_code_is_different_every_time(client: TestClient) -> None:
-    """Minted for one viewing. Two the same would mean one was kept."""
-    seen = {client.get("/v1/cards/4417/details").json()["security_code"] for _ in range(12)}
+    seen = {details(client, "1234").json()["security_code"] for _ in range(12)}
     assert len(seen) > 1
 
 
-def test_a_frozen_card_says_so_on_its_details(client: TestClient) -> None:
-    scripted(client, [Reply(text="Frozen.")])
-    armed = client.post(
-        "/v1/action",
-        json={"tool": "freeze_card", "arguments": {"last4": "4417"}, "reason": "lost"},
-    ).json()
-    client.post("/v1/confirm", json={"session_id": armed["session_id"]})
-
-    assert client.get("/v1/cards/4417/details").json()["status"] == "Frozen"
-
-
 def test_a_card_that_is_not_there_has_no_details(client: TestClient) -> None:
-    assert client.get("/v1/cards/0000/details").status_code == 404
+    assert details(client, "1234", last4="0000").status_code == 404
 
 
 def test_the_card_list_still_shows_only_four_digits(client: TestClient) -> None:
-    """Details are a separate, deliberate request. The list is not."""
+    """The list needs no PIN, because it carries nothing that needs one."""
     for card in client.get("/v1/cards").json()["cards"]:
         assert "number" not in card
         assert card["masked"].count("•") >= 12
@@ -899,6 +903,57 @@ def test_the_card_list_still_shows_only_four_digits(client: TestClient) -> None:
 
 def test_reading_details_is_not_a_turn(client: TestClient) -> None:
     before = client.get("/metrics").text
-    client.get("/v1/cards/4417/details")
+    details(client, "1234")
 
     assert client.get("/metrics").text == before
+
+
+# --- changing the PIN --------------------------------------------------------
+
+
+def test_the_pin_can_be_changed_with_the_old_one(client: TestClient) -> None:
+    response = client.post("/v1/cards/4417/pin", json={"current_pin": "1234", "new_pin": "8765"})
+
+    assert response.status_code == 200
+    assert details(client, "8765").status_code == 200
+    assert details(client, "1234").status_code == 403
+
+
+def test_the_pin_cannot_be_changed_without_the_old_one(client: TestClient) -> None:
+    response = client.post("/v1/cards/4417/pin", json={"current_pin": "0000", "new_pin": "8765"})
+
+    assert response.status_code == 403
+    assert details(client, "1234").status_code == 200
+
+
+def test_a_new_pin_has_to_be_four_digits(client: TestClient) -> None:
+    for bad in ("123", "12345", "abcd"):
+        response = client.post("/v1/cards/4417/pin", json={"current_pin": "1234", "new_pin": bad})
+        assert response.status_code == 422, bad
+
+
+def test_a_pin_never_reaches_the_audit_log(client: TestClient) -> None:
+    """The one thing that must not be written down anywhere."""
+    details(client, "1234")
+    client.post("/v1/cards/4417/pin", json={"current_pin": "1234", "new_pin": "8765"})
+
+    bank = client.app.state.services.bank
+    written = " ".join(
+        str(value)
+        for row in bank._db.execute("SELECT * FROM turns").fetchall()
+        for value in tuple(row)
+    )
+    assert "1234" not in written and "8765" not in written
+
+
+def test_a_pin_can_be_checked_without_showing_anything(client: TestClient) -> None:
+    """What the reset flow asks before it offers a new PIN.
+
+    Deliberately not the details endpoint: checking whether somebody knows
+    the PIN should not hand back the card number as a side effect.
+    """
+    good = client.post("/v1/cards/4417/pin/check", json={"pin": "1234"})
+    assert good.status_code == 200
+    assert "number" not in good.json()
+
+    assert client.post("/v1/cards/4417/pin/check", json={"pin": "9999"}).status_code == 403

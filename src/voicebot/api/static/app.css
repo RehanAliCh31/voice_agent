@@ -1484,3 +1484,29 @@ body {
   .cardact { font-size: 11px; padding: 11px 4px; }
   .details { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* --- the PIN -------------------------------------------------------------- */
+
+.pin {
+  width: 100%;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 24px;
+  letter-spacing: 0.5em;
+  text-align: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.pin + .ask__label { margin-top: 16px; }
+
+.pin:focus-visible {
+  outline: 2px solid var(--brand-bright);
+  outline-offset: 1px;
+  border-color: var(--brand);
+}
+
+.pin::placeholder { letter-spacing: 0.4em; color: var(--ink-faint); }

@@ -1,4 +1,4 @@
-"""The fourteen things the model is allowed to do.
+"""The fifteen things the model is allowed to do.
 
 This file is the whole surface between a fluent model and a customer's money.
 Anything not described here, the bot cannot do — which is the point. Adding a
@@ -19,6 +19,7 @@ from voicebot.bank.base import (
     DISPUTE_REASONS,
     HANDOFF_REASONS,
     PERIODS,
+    PIN_PURPOSES,
 )
 
 # How many ledger rows a spoken answer can carry. A reply is read aloud, so a
@@ -260,6 +261,27 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             },
         },
         ["last4"],
+    ),
+    _function(
+        "ask_for_pin",
+        "Put the PIN keypad on the customer's screen. Call this before "
+        "showing card details and before changing a PIN -- those need the "
+        "PIN and you cannot take one. Never ask the customer to say a PIN, "
+        "read one back, or repeat one: tell them it is on screen.",
+        {
+            "last4": {
+                "type": "string",
+                "description": "The card's last four digits, as list_cards reports them.",
+            },
+            "purpose": {
+                "type": "string",
+                "enum": list(PIN_PURPOSES),
+                "description": (
+                    "'details' to show what is printed on the card, 'reset' " "to change the PIN."
+                ),
+            },
+        },
+        ["last4", "purpose"],
     ),
     _function(
         "set_card_control",

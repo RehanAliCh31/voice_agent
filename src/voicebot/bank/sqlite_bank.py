@@ -10,9 +10,10 @@ interruption leaves neither.
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from voicebot.bank.base import (
@@ -21,6 +22,9 @@ from voicebot.bank.base import (
     DISPUTE_WINDOW_DAYS,
     HANDOFF_REASONS,
     PERIODS,
+    PIN_LENGTH,
+    PIN_LOCK_MINUTES,
+    PIN_TRIES,
     Account,
     Bank,
     BankError,
@@ -32,8 +36,10 @@ from voicebot.bank.base import (
     Statement,
     Transaction,
     account_not_payee_message,
+    bad_pin_message,
     format_money,
     period_range,
+    pin_locked_message,
     too_old_to_dispute_message,
     unknown_control_message,
     unknown_dispute_reason_message,
@@ -245,6 +251,60 @@ class SqliteBank(Bank):
             self._ledger("checking", bill.lower(), -amount)
         return amount
 
+    # --- the PIN -------------------------------------------------------------
+
+    def check_pin(self, last4: str, pin: str, now: datetime | None = None) -> bool:
+        moment = now or datetime.now()
+        row = self._card_row(last4)
+        if _locked(row, moment):
+            # Not answered with "wrong": telling a locked card apart from a
+            # wrong PIN would hand back one more guess per lock.
+            raise BankError(pin_locked_message())
+
+        if secrets.compare_digest(_hash(pin, row["pin_salt"]), row["pin_hash"]):
+            self._forget_failures(row["last4"])
+            return True
+
+        self._count_failure(row["last4"], int(row["pin_failures"]), moment)
+        return False
+
+    def pin_locked(self, last4: str, now: datetime | None = None) -> bool:
+        return _locked(self._card_row(last4), now or datetime.now())
+
+    def set_pin(self, last4: str, current: str, new: str) -> None:
+        if len(new) != PIN_LENGTH or not new.isdigit():
+            raise BankError(bad_pin_message())
+        if not self.check_pin(last4, current):
+            raise BankError("That is not your current PIN.")
+
+        card = self._card_row(last4)
+        salt = secrets.token_hex(16)
+        with self._db:
+            self._db.execute(
+                "UPDATE cards SET pin_hash = ?, pin_salt = ?, pin_failures = 0, "
+                "pin_locked_until = '' WHERE last4 = ?",
+                (_hash(new, salt), salt, card["last4"]),
+            )
+
+    def _forget_failures(self, last4: str) -> None:
+        with self._db:
+            self._db.execute(
+                "UPDATE cards SET pin_failures = 0, pin_locked_until = '' WHERE last4 = ?",
+                (last4,),
+            )
+
+    def _count_failure(self, last4: str, so_far: int, now: datetime) -> None:
+        failures = so_far + 1
+        until = ""
+        if failures >= PIN_TRIES:
+            until = _stamp(now + timedelta(minutes=PIN_LOCK_MINUTES))
+            log.warning("pin locked on card %s after %d failures", last4, failures)
+        with self._db:
+            self._db.execute(
+                "UPDATE cards SET pin_failures = ?, pin_locked_until = ? WHERE last4 = ?",
+                (failures, until, last4),
+            )
+
     def set_card_control(self, last4: str, control: str, enabled: bool) -> Card:
         name = control.strip().lower()
         if name not in CARD_CONTROLS:
@@ -296,11 +356,27 @@ class SqliteBank(Bank):
         # read-back and never let a card order through.
         holder = next((card.holder for card in self.cards() if card.holder), "")
         valid_from, valid_to = _validity(datetime.now())
+        # A replacement is a new card for the same person, so the PIN travels
+        # with them. Copied as the stored hash and salt: it is not read back
+        # here any more than it is anywhere else.
+        carried = self._db.execute(
+            "SELECT pin_hash, pin_salt FROM cards WHERE pin_hash != '' LIMIT 1"
+        ).fetchone()
         with self._db:
             self._db.execute(
                 "INSERT INTO cards (last4, account, frozen, kind, holder, "
-                "number, valid_from, valid_to) VALUES (?, ?, 0, 'debit', ?, ?, ?, ?)",
-                (last4, name, holder, _number_for(last4), valid_from, valid_to),
+                "number, valid_from, valid_to, pin_hash, pin_salt) "
+                "VALUES (?, ?, 0, 'debit', ?, ?, ?, ?, ?, ?)",
+                (
+                    last4,
+                    name,
+                    holder,
+                    _number_for(last4),
+                    valid_from,
+                    valid_to,
+                    carried["pin_hash"] if carried else "",
+                    carried["pin_salt"] if carried else "",
+                ),
             )
         return _card(self._card_row(last4))
 
@@ -562,6 +638,10 @@ _ADDED: dict[str, dict[str, str]] = {
         "number": "TEXT NOT NULL DEFAULT ''",
         "valid_from": "TEXT NOT NULL DEFAULT ''",
         "valid_to": "TEXT NOT NULL DEFAULT ''",
+        "pin_hash": "TEXT NOT NULL DEFAULT ''",
+        "pin_salt": "TEXT NOT NULL DEFAULT ''",
+        "pin_failures": "INTEGER NOT NULL DEFAULT 0",
+        "pin_locked_until": "TEXT NOT NULL DEFAULT ''",
         "kind": "TEXT NOT NULL DEFAULT 'debit'",
         "holder": "TEXT NOT NULL DEFAULT ''",
         "ecommerce": "INTEGER NOT NULL DEFAULT 1",
@@ -572,22 +652,30 @@ _ADDED: dict[str, dict[str, str]] = {
 
 
 def _print_cards(db: sqlite3.Connection) -> None:
-    """Give a number and dates to any card that predates them.
+    """Give a number, dates and a PIN to any card that lacks them.
 
-    The columns above default to empty, which is not a card number. Filling
-    them is the same job as filling the categories on the bills: a migration
-    is the rows as well as the columns.
+    The columns default to empty, which is not a card number and not a PIN.
+    Filling them is the same job as filling the categories on the bills: a
+    migration is the rows as well as the columns.
+
+    Every card gets its own salt even though the demo PIN is the same, so
+    two hashes never match and one says nothing about the other.
     """
-    rows = db.execute("SELECT last4 FROM cards WHERE number = ''").fetchall()
-    if not rows:
-        return
+    rows = db.execute("SELECT last4, number, pin_hash FROM cards").fetchall()
     valid_from, valid_to = _validity(datetime.now())
     with db:
         for row in rows:
-            db.execute(
-                "UPDATE cards SET number = ?, valid_from = ?, valid_to = ? WHERE last4 = ?",
-                (_number_for(row["last4"]), valid_from, valid_to, row["last4"]),
-            )
+            if not row["number"]:
+                db.execute(
+                    "UPDATE cards SET number = ?, valid_from = ?, valid_to = ? WHERE last4 = ?",
+                    (_number_for(row["last4"]), valid_from, valid_to, row["last4"]),
+                )
+            if not row["pin_hash"]:
+                salt = secrets.token_hex(16)
+                db.execute(
+                    "UPDATE cards SET pin_hash = ?, pin_salt = ? WHERE last4 = ?",
+                    (_hash(DEMO_PIN, salt), salt, row["last4"]),
+                )
 
 
 def _widen(db: sqlite3.Connection) -> None:
@@ -609,6 +697,11 @@ def _widen(db: sqlite3.Connection) -> None:
 # digits the card is already known by, so the two agree with each other.
 _ISSUER = "220543"
 
+# The PIN every demo card starts with. Not a secret and not meant to be one:
+# it is written here so the demo can be used, and it is stored hashed like a
+# real one so the storage is right even though the value is not.
+DEMO_PIN = "1234"
+
 
 def _number_for(last4: str) -> str:
     middle = f"{secrets.randbelow(1_000_000):06d}"
@@ -618,6 +711,29 @@ def _number_for(last4: str) -> str:
 def _validity(now: datetime) -> tuple[str, str]:
     """Issued this month, good for five years, as MM/YY."""
     return now.strftime("%m/%y"), now.replace(year=now.year + 5).strftime("%m/%y")
+
+
+# How hard the stored PIN is to reverse. Lowered by the test suite, which
+# opens a bank per test and would otherwise spend a minute and a half doing
+# nothing but this.
+#
+# Worth being plain about what it buys: against someone holding a copy of the
+# database, four digits is ten thousand guesses, and no work factor makes
+# that safe. What actually protects a PIN is the lockout three lines up. This
+# protects the file, which is a smaller job and still worth doing.
+PIN_ITERATIONS = 120_000
+
+
+def _hash(pin: str, salt: str) -> str:
+    """A PIN as it is stored: salted and stretched, never reversible."""
+    return hashlib.pbkdf2_hmac(
+        "sha256", pin.encode("utf-8"), salt.encode("utf-8"), PIN_ITERATIONS
+    ).hex()
+
+
+def _locked(row: sqlite3.Row, now: datetime) -> bool:
+    until = row["pin_locked_until"]
+    return bool(until) and _stamp(now) < until
 
 
 def _card(row: sqlite3.Row) -> Card:

@@ -77,6 +77,9 @@ class TurnPayload(BaseModel):
     handed_off: str | None = None
     # The reference of a dispute this turn filed, or null.
     dispute_filed: str | None = None
+    # The keypad this turn asked the page to open, or null. It names a card
+    # and a reason; the PIN itself never travels in either direction.
+    pin_request: dict[str, str] | None = None
     latency_ms: dict[str, float] = Field(default_factory=dict)
     # Null when the page is doing the speaking. Nullable rather than absent so
     # a client can tell "no audio" from "field missing".
@@ -243,6 +246,21 @@ class CardPayload(BaseModel):
     kind: str
     frozen: bool
     controls: list[CardControlPayload] = Field(default_factory=list)
+
+
+class PinRequest(BaseModel):
+    """A PIN on its way to be checked, and no further.
+
+    It is never logged, never answered back, and never put in the
+    conversation. The only thing done with it is a comparison.
+    """
+
+    pin: str = Field(min_length=1)
+
+
+class PinChangeRequest(BaseModel):
+    current_pin: str = Field(min_length=1)
+    new_pin: str = Field(min_length=1)
 
 
 class CardDetailsPayload(BaseModel):
@@ -516,6 +534,7 @@ def turn_payload(
         bills=_bills(bank),
         handed_off=result.agent.handed_off,
         dispute_filed=result.agent.dispute_filed,
+        pin_request=result.agent.pin_request,
         latency_ms={key: round(value, 2) for key, value in result.latency.as_dict().items()},
         audio_b64=audio_b64,
         speak_client_side=speaks_client_side,
