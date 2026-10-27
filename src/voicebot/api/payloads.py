@@ -9,6 +9,7 @@ front end would have to follow every rename.
 from __future__ import annotations
 
 import base64
+from datetime import date
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -120,6 +121,42 @@ class ReadyPayload(BaseModel):
     sessions: int
 
 
+class StatementRowPayload(BaseModel):
+    """One movement as the transactions screen draws it.
+
+    The amount is positive and `direction` says which way it went. The ledger
+    keeps the sign; a row reading "-$7.60" under an Outgoing heading would be
+    saying it twice.
+    """
+
+    id: int
+    merchant: str
+    account: str
+    amount: str
+    amount_cents: int
+    direction: str
+    occurred_at: str
+    # "merchant" when money met the outside world, "transfer" when it only
+    # changed sides between the customer's own accounts. The screen words the
+    # two differently, and only the server knows which names are accounts.
+    kind: str
+
+
+class StatementPayload(BaseModel):
+    """One calendar month, and the balance it ended at."""
+
+    year: int
+    month: int
+    month_label: str
+    total_balance: str
+    total_balance_cents: int
+    incoming: str
+    incoming_cents: int
+    outgoing: str
+    outgoing_cents: int
+    rows: list[StatementRowPayload] = Field(default_factory=list)
+
+
 class LedgerPayload(BaseModel):
     """The accounts and bills on their own, with no turn attached.
 
@@ -130,6 +167,40 @@ class LedgerPayload(BaseModel):
 
     accounts: list[AccountPayload] = Field(default_factory=list)
     bills: list[BillPayload] = Field(default_factory=list)
+
+
+def statement_payload(bank: Bank, year: int, month: int) -> StatementPayload:
+    """One month of movements, with the totals the screen puts above them."""
+    statement = bank.statement(year, month)
+    accounts = bank.accounts()
+    held = sum(account.balance_cents for account in accounts)
+    own = {account.name for account in accounts}
+    return StatementPayload(
+        year=statement.year,
+        month=statement.month,
+        # Named by the server so the heading and the rows cannot disagree
+        # about which month is on screen.
+        month_label=date(statement.year, statement.month, 1).strftime("%B %Y"),
+        total_balance=format_money(held),
+        total_balance_cents=held,
+        incoming=format_money(statement.incoming_cents),
+        incoming_cents=statement.incoming_cents,
+        outgoing=format_money(statement.outgoing_cents),
+        outgoing_cents=statement.outgoing_cents,
+        rows=[
+            StatementRowPayload(
+                id=row.id,
+                merchant=row.merchant,
+                account=row.account,
+                amount=format_money(abs(row.cents)),
+                amount_cents=abs(row.cents),
+                direction="out" if row.spent else "in",
+                occurred_at=row.occurred_at,
+                kind="transfer" if row.merchant in own else "merchant",
+            )
+            for row in statement.rows
+        ],
+    )
 
 
 def _accounts(bank: Bank | None) -> list[AccountPayload]:

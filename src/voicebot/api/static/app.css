@@ -46,6 +46,8 @@
 
 html, body { height: 100%; }
 
+/* A column, so the dock and any pending confirmation stay put while the
+   screen between them changes. Only `.views` scrolls. */
 body {
   margin: 0;
   background: var(--paper);
@@ -54,6 +56,8 @@ body {
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
 }
 
 .skip {
@@ -100,43 +104,77 @@ body {
 
 .brand__name { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; }
 
-.engines { display: flex; gap: 7px; flex-wrap: wrap; }
-
-.chip {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  padding: 4px 9px;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  color: var(--ink-faint);
+/* Which engines are loaded was useful while building and is noise to a
+   customer. Whether the server is reachable at all still matters, and the
+   dock already says so, so nothing was lost by taking the chips out. */
+.screens {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
   background: var(--paper);
-  white-space: nowrap;
+  border: 1px solid var(--line);
+  border-radius: 999px;
 }
 
-.chip--ready { border-color: var(--brand); color: var(--brand); background: var(--brand-wash); }
-.chip--pending { border-style: dashed; }
-.chip--down { border-color: var(--bad); color: var(--bad); background: var(--bad-wash); }
+.screens__tab {
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  background: none;
+  border: 0;
+  padding: 7px 15px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
 
-/* --- the two columns ------------------------------------------------------ */
+.screens__tab:hover { color: var(--ink); }
 
-.shell {
+.screens__tab[aria-current="page"] {
+  background: var(--brand);
+  color: #fff;
+  box-shadow: var(--shadow-card);
+}
+
+.screens__tab:focus-visible {
+  outline: 2px solid var(--brand-bright);
+  outline-offset: 2px;
+}
+
+/* --- the screens ---------------------------------------------------------- */
+
+.views {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 24px 24px;
+}
+
+.view {
+  max-width: 1320px;
+  margin: 0 auto;
+}
+
+.view[hidden] { display: none; }
+
+/* Assistant: the ledger beside the conversation. */
+.view--assistant {
   display: grid;
   grid-template-columns: 310px minmax(0, 1fr);
   gap: 18px;
-  padding: 18px 24px 24px;
   align-items: start;
-  max-width: 1320px;
-  margin: 0 auto;
-  min-height: calc(100% - 61px);
 }
 
 @media (max-width: 920px) {
-  .shell { grid-template-columns: minmax(0, 1fr); }
+  .view--assistant { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 560px) {
   .top { padding: 12px 16px; }
-  .shell { padding: 14px 16px 20px; gap: 14px; }
+  .views { padding: 14px 16px 20px; }
+  .screens__tab { padding: 7px 12px; font-size: 13px; }
 }
 
 /* --- the ledger ----------------------------------------------------------- */
@@ -264,7 +302,7 @@ body {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-  min-height: 560px;
+  min-height: 420px;
 }
 
 .conversation {
@@ -410,6 +448,7 @@ body {
 /* --- the confirmation ----------------------------------------------------- */
 
 .confirm {
+  flex-shrink: 0;
   border-top: 1px solid var(--line);
   background: linear-gradient(160deg, #F4FAF9, var(--brand-wash));
   padding: 15px 22px;
@@ -462,10 +501,12 @@ body {
 
 .dock {
   border-top: 1px solid var(--line);
-  padding: 16px 22px;
+  padding: 16px 22px calc(16px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
   gap: 14px;
+  background: var(--card);
+  flex-shrink: 0;
 }
 
 .dock__row { display: flex; align-items: center; gap: 16px; }
@@ -634,4 +675,183 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* --- the transactions screen ---------------------------------------------- */
+/*
+ * One month: what is held, what came in against what went out, then every
+ * movement grouped by the day it happened. The totals sit above the list
+ * because they are the answer to "how did this month go"; the rows are the
+ * working behind it.
+ */
+
+.summary {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 26px 22px 20px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.summary__label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.summary__total {
+  margin: 6px 0 0;
+  font-size: 38px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--brand-deep);
+}
+
+.summary__month {
+  display: inline-block;
+  margin: 14px 0 0;
+  padding: 5px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: var(--paper);
+}
+
+.flows {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.flow { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.flow--in { align-items: flex-start; text-align: left; }
+.flow--out { align-items: flex-end; text-align: right; }
+
+.flow__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+
+.flow__arrow {
+  display: inline-grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1;
+  background: var(--line-soft);
+  color: var(--ink-soft);
+}
+
+.flow--in .flow__arrow { background: var(--brand-wash); color: var(--brand); }
+.flow--out .flow__arrow { background: var(--bad-wash); color: var(--bad); }
+
+.flow__amount {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.statement {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 6px 0 4px;
+  overflow: hidden;
+}
+
+.statement__day {
+  margin: 0;
+  padding: 16px 20px 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.movement {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  padding: 12px 20px;
+}
+
+/* A hairline between rows but not under the last one before a day heading,
+   which already separates them. */
+.movement + .movement { border-top: 1px solid var(--line-soft); }
+
+/* Initials rather than a logo: the bank has no brand assets for a merchant,
+   and an invented logo would be a claim about who was paid. */
+.movement__mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--brand-wash);
+  color: var(--brand-deep);
+  text-transform: uppercase;
+}
+
+.movement--in .movement__mark { background: var(--brand); color: #fff; }
+
+.movement__who { min-width: 0; }
+
+.movement__name {
+  display: block;
+  font-weight: 500;
+  text-transform: capitalize;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.movement__where {
+  display: block;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  text-transform: capitalize;
+}
+
+.movement__side { text-align: right; white-space: nowrap; }
+
+.movement__time {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.movement__amount {
+  display: block;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--bad);
+}
+
+.movement--in .movement__amount { color: var(--brand); }
+
+@media (max-width: 560px) {
+  .summary__total { font-size: 32px; }
+  .movement { padding: 12px 14px; gap: 11px; }
+  .statement__day { padding: 14px 14px 8px; }
 }

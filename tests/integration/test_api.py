@@ -22,6 +22,7 @@ from voicebot.pipeline.audio_io import encode_wav
 from voicebot.schemas import AudioBuffer
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
+MOVE = {"amount_cents": 5_000, "from_account": "checking", "to_account": "savings"}
 
 
 def _wav(seconds: float = 1.0, rate: int = 16_000, silent: bool = False) -> bytes:
@@ -574,3 +575,65 @@ def test_a_turn_reports_a_dispute_it_filed(client: TestClient) -> None:
 def test_an_ordinary_turn_files_no_dispute(client: TestClient) -> None:
     scripted(client, [Reply(text="Hello there.")])
     assert client.post("/v1/chat", json={"text": "hi"}).json()["dispute_filed"] is None
+
+
+# --- the transactions screen -------------------------------------------------
+
+
+def test_the_statement_endpoint_returns_a_month(client: TestClient) -> None:
+    body = client.get("/v1/statement").json()
+
+    assert body["rows"]
+    assert body["month_label"]
+    assert body["total_balance"] == "$21,503.50"
+    assert body["outgoing_cents"] > 0
+
+
+def test_a_statement_row_carries_what_the_screen_shows(client: TestClient) -> None:
+    row = client.get("/v1/statement").json()["rows"][0]
+
+    shown = {"id", "merchant", "account", "amount", "amount_cents", "direction", "occurred_at"}
+    assert shown <= set(row)
+    assert row["amount_cents"] > 0, "amounts are positive; direction says which way"
+
+
+def test_a_statement_can_be_asked_for_by_month(client: TestClient) -> None:
+    body = client.get("/v1/statement", params={"year": 1999, "month": 1}).json()
+
+    assert body["rows"] == []
+    assert body["incoming_cents"] == 0
+
+
+def test_an_impossible_month_is_a_bad_request(client: TestClient) -> None:
+    assert client.get("/v1/statement", params={"year": 2026, "month": 13}).status_code == 400
+
+
+def test_reading_a_statement_is_not_a_turn(client: TestClient) -> None:
+    before = client.get("/metrics").text
+    client.get("/v1/statement")
+
+    assert client.get("/metrics").text == before
+
+
+def test_a_statement_row_says_whether_it_was_a_transfer(client: TestClient) -> None:
+    """ "Checking / Savings" reads as neither one thing nor the other.
+
+    A row whose counterparty is one of the customer's own accounts is a
+    transfer between them, and the screen has to word it differently from a
+    shop. The server decides, because only the server knows which names are
+    accounts.
+    """
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "move_money", MOVE),)),
+            Reply(text="Shall I?"),
+            Reply(text="Done."),
+        ],
+    )
+    sid = client.post("/v1/chat", json={"text": "move fifty to savings"}).json()["session_id"]
+    client.post("/v1/confirm", json={"session_id": sid})
+
+    rows = client.get("/v1/statement").json()["rows"]
+    assert [row["kind"] for row in rows[:2]] == ["transfer", "transfer"]
+    assert all(row["kind"] == "merchant" for row in rows[2:])

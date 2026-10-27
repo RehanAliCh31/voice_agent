@@ -1,6 +1,6 @@
 """What a bank can do, and the vocabulary its callers share.
 
-The interface is deliberately narrow: sixteen operations, each one a thing a
+The interface is deliberately narrow: seventeen operations, each one a thing a
 customer can ask for. Anything the dialogue needs that is not on this list is
 a sign the dialogue is inventing capability.
 """
@@ -51,6 +51,22 @@ class Transaction:
     @property
     def spent(self) -> bool:
         return self.cents < 0
+
+
+@dataclass(frozen=True)
+class Statement:
+    """One calendar month of movements, with its totals.
+
+    Both totals are positive: the ledger keeps the sign, and a screen reading
+    "Outgoing -Rs. 42,877" has said the same thing twice. Summed here rather
+    than in the page, so what is shown and what the bot says are one sum.
+    """
+
+    year: int
+    month: int
+    rows: tuple[Transaction, ...]
+    incoming_cents: int
+    outgoing_cents: int
 
 
 @dataclass(frozen=True)
@@ -341,6 +357,14 @@ class Bank(ABC):
         """
 
     # --- audit ---------------------------------------------------------------
+
+    @abstractmethod
+    def statement(self, year: int, month: int) -> Statement:
+        """Every movement in one calendar month, newest first, with totals.
+
+        A month holding nothing is an empty statement, not an error. Raises
+        BankError only when the month is not a month.
+        """
 
     @abstractmethod
     def transaction(self, transaction_id: int) -> Transaction | None:

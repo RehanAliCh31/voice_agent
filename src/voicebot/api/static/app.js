@@ -33,6 +33,7 @@
     toldAboutVoices: false,
     balances: {}, // account name -> cents, as of the last turn
     lastTotalMs: null,
+    view: "assistant",
   };
 
   var el = {};
@@ -84,6 +85,10 @@
 
     accounts: function () {
       return request("/v1/accounts", { method: "GET" });
+    },
+
+    statement: function () {
+      return request("/v1/statement", { method: "GET" });
     },
 
     reset: function () {
@@ -373,6 +378,155 @@
     });
   }
 
+  // --- the screens ----------------------------------------------------------
+
+  /**
+   * Show one screen. The dock and any pending confirmation live outside the
+   * screens, so switching never interrupts a turn or loses a yes that is
+   * still waiting to be given.
+   */
+  function showView(name) {
+    state.view = name;
+    var tabs = el.screens.querySelectorAll(".screens__tab");
+    Array.prototype.forEach.call(tabs, function (tab) {
+      var chosen = tab.getAttribute("data-view") === name;
+      var view = document.getElementById("view" + capitalise(tab.getAttribute("data-view")));
+      if (chosen) {
+        tab.setAttribute("aria-current", "page");
+      } else {
+        tab.removeAttribute("aria-current");
+      }
+      if (view) {
+        view.hidden = !chosen;
+      }
+    });
+    el.views.scrollTop = 0;
+    if (name === "transactions") {
+      loadStatement();
+    }
+  }
+
+  function capitalise(word) {
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  }
+
+  // --- the transactions screen ------------------------------------------------
+
+  function loadStatement() {
+    api
+      .statement()
+      .then(renderStatement)
+      .catch(function () {
+        el.statement.replaceChildren(
+          node("p", "block__empty", "Couldn't load your transactions just now.")
+        );
+      });
+  }
+
+  /** A stamp like "2026-10-27 10:15:00" as a local Date. */
+  function momentOf(stamp) {
+    return new Date(String(stamp || "").replace(" ", "T"));
+  }
+
+  /**
+   * The heading a movement sits under. Today and yesterday are named because
+   * that is how someone thinks about a charge they are trying to place; older
+   * ones get their date.
+   */
+  function dayLabel(moment) {
+    // Both ends normalised to midnight first. Comparing the raw gap counts
+    // calendar days wrong whenever the clock disagrees with the date: a
+    // charge at 1am yesterday is 23 hours old and still yesterday.
+    var midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    var that = new Date(moment.getTime());
+    that.setHours(0, 0, 0, 0);
+
+    var days = Math.round((midnight - that) / 86400000);
+    if (days <= 0) {
+      return "Today";
+    }
+    if (days === 1) {
+      return "Yesterday";
+    }
+    return moment.toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "long",
+      year: moment.getFullYear() === midnight.getFullYear() ? undefined : "numeric",
+    });
+  }
+
+  function renderStatement(data) {
+    el.statementTotal.textContent = data.total_balance;
+    el.statementMonth.textContent = data.month_label;
+    el.statementIn.textContent = data.incoming;
+    el.statementOut.textContent = data.outgoing;
+
+    el.statement.replaceChildren();
+    if (!data.rows.length) {
+      el.statement.appendChild(node("p", "block__empty", "Nothing moved this month."));
+      return;
+    }
+
+    var day = null;
+    data.rows.forEach(function (row) {
+      var moment = momentOf(row.occurred_at);
+      var label = dayLabel(moment);
+      if (label !== day) {
+        day = label;
+        el.statement.appendChild(node("p", "statement__day", label));
+      }
+      el.statement.appendChild(movementRow(row, moment));
+    });
+  }
+
+  function movementRow(row, moment) {
+    var movement = node("div", "movement movement--" + (row.direction === "in" ? "in" : "out"));
+
+    // An arrow for a transfer, an initial for a shop: a "C" against a move
+    // between Checking and Savings says nothing the row does not already.
+    movement.appendChild(
+      node(
+        "span",
+        "movement__mark",
+        row.kind === "transfer"
+          ? row.direction === "in"
+            ? "↓"
+            : "↑"
+          : row.merchant.slice(0, 1)
+      )
+    );
+
+    // A shop is named; an account is said as a direction. "Checking /
+    // Savings" reads as neither one thing nor the other when both sides are
+    // the customer's own.
+    var incoming = row.direction === "in";
+    var name =
+      row.kind === "transfer"
+        ? (incoming ? "From " : "To ") + row.merchant
+        : row.merchant;
+
+    var who = node("div", "movement__who");
+    who.appendChild(node("span", "movement__name", name));
+    who.appendChild(node("span", "movement__where", row.account));
+    movement.appendChild(who);
+
+    var side = node("div", "movement__side");
+    side.appendChild(
+      node(
+        "span",
+        "movement__time",
+        moment.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+      )
+    );
+    side.appendChild(
+      node("span", "movement__amount", (row.direction === "in" ? "+" : "−") + row.amount)
+    );
+    movement.appendChild(side);
+
+    return movement;
+  }
+
   // --- the conversation ---------------------------------------------------
 
   function clearEmptyState() {
@@ -555,6 +709,11 @@
     // just spoke come from the same answer and describe the same moment.
     renderAccounts(turn.accounts);
     renderBills(turn.bills);
+    if (state.view === "transactions") {
+      // The turn may have moved money, and a statement left as it was would
+      // disagree with the balances drawn a line above it.
+      loadStatement();
+    }
 
     // An action waits on a yes. Buttons remove any doubt about whether the
     // word was heard correctly, which matters more here than anywhere else --
@@ -737,12 +896,6 @@
     });
   }
 
-  function describeEngine(name) {
-    return String(name || "")
-      .replace(/(ASR|LLM|TTS)?(Engine|Client)$/, "")
-      .toLowerCase();
-  }
-
   /** Pick a voice once. Chrome populates the list asynchronously. */
   function loadVoices() {
     if (!window.speechSynthesis) {
@@ -785,21 +938,12 @@
       window.speechSynthesis.onvoiceschanged = loadVoices;
     }
 
-    api.ready().then(
-      function (info) {
-        el.chipAsr.textContent = describeEngine(info.asr);
-        el.chipLlm.textContent = describeEngine(info.llm);
-        el.chipTts.textContent = describeEngine(info.tts);
-        el.chipStatus.textContent = info.device + " ready";
-        el.chipStatus.className = "chip chip--ready";
-        loadLedger();
-      },
-      function () {
-        el.chipStatus.textContent = "server down";
-        el.chipStatus.className = "chip chip--down";
-        setStatus("No server", "The API did not answer /ready", "error");
-      }
-    );
+    // Which engines are loaded was a builder's question, not a customer's.
+    // Whether the server answers at all still matters, and the dock is where
+    // that is said, so the check stays and only the chips went.
+    api.ready().then(loadLedger, function () {
+      setStatus("No server", "The API did not answer /ready", "error");
+    });
   }
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -809,11 +953,13 @@
       "micButton", "statusLabel", "statusHint", "levelFill",
       "sayForm", "sayInput", "resetButton",
       "vadToggle", "vadSensitivity", "vadValue", "vadNote",
-      "chipAsr", "chipLlm", "chipTts", "chipStatus",
+      "screens", "statement", "statementTotal", "statementMonth",
+      "statementIn", "statementOut",
     ].forEach(function (id) {
       el[id] = document.getElementById(id);
     });
 
+    el.views = document.getElementById("views");
     el.confirmText = document.querySelector(".confirm__text");
     el.bargein = document.querySelector(".bargein");
 
@@ -833,6 +979,13 @@
           el.levelFill.setAttribute("data-over", share >= 1 ? "true" : "false");
         }
       },
+    });
+
+    el.screens.addEventListener("click", function (event) {
+      var tab = event.target.closest(".screens__tab");
+      if (tab) {
+        showView(tab.getAttribute("data-view"));
+      }
     });
 
     el.micButton.addEventListener("click", onMicClick);

@@ -25,100 +25,132 @@
     <span class="brand__name">Voice Banking</span>
   </div>
 
-  <div class="engines" aria-label="Engines in use">
-    <span class="chip" id="chipAsr">asr</span>
-    <span class="chip" id="chipLlm">llm</span>
-    <span class="chip" id="chipTts">voice</span>
-    <span class="chip chip--pending" id="chipStatus">connecting</span>
-  </div>
+  <nav class="screens" id="screens" aria-label="Screens">
+    <button class="screens__tab" type="button" data-view="assistant" aria-current="page">Assistant</button>
+    <button class="screens__tab" type="button" data-view="transactions">Transactions</button>
+  </nav>
 </header>
 
-<main class="shell">
+<main class="views" id="views">
 
-  <aside class="ledger" aria-label="Your accounts">
-    <section class="block">
-      <h2 class="block__title">Accounts</h2>
-      <div class="accounts" id="accounts">
-        <div class="account account--waiting">
-          <span class="account__name">—</span>
-          <span class="account__amount">····</span>
+  <!-- Assistant: the conversation, and the balances it talks about. -->
+  <section class="view view--assistant" id="viewAssistant">
+    <aside class="ledger" aria-label="Your accounts">
+      <section class="block">
+        <h2 class="block__title">Accounts</h2>
+        <div class="accounts" id="accounts">
+          <div class="account account--waiting">
+            <span class="account__name">—</span>
+            <span class="account__amount">····</span>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="block">
-      <h2 class="block__title">Bills</h2>
-      <div class="bills" id="bills">
-        <p class="block__empty">Loading…</p>
-      </div>
-    </section>
+      <section class="block">
+        <h2 class="block__title">Bills</h2>
+        <div class="bills" id="bills">
+          <p class="block__empty">Loading…</p>
+        </div>
+      </section>
 
-    <button class="reset" id="resetButton" type="button">New conversation</button>
-  </aside>
+      <button class="reset" id="resetButton" type="button">New conversation</button>
+    </aside>
 
-  <section class="talk" aria-label="Conversation">
-    <div class="conversation" id="conversation" tabindex="-1">
-      <div class="empty" id="empty">
-        <span class="empty__icon" aria-hidden="true">
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>
-          </svg>
-        </span>
-        <p class="empty__text">Press the microphone and ask about a balance, a transfer, or a bill.</p>
-      </div>
-    </div>
-
-    <div class="confirm" id="confirm" hidden>
-      <p class="confirm__text">This moves money. Say yes, or choose below.</p>
-      <div class="confirm__buttons">
-        <button class="button button--go" id="confirmYes" type="button">Yes, confirm</button>
-        <button class="button button--stop" id="confirmNo" type="button">Cancel</button>
-      </div>
-    </div>
-
-    <div class="dock">
-      <div class="dock__row">
-        <button class="mic" id="micButton" type="button" data-state="idle" aria-label="Start recording">
-          <span class="mic__ring" aria-hidden="true"></span>
-          <span class="mic__face" aria-hidden="true">
-            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round">
+    <section class="talk" aria-label="Conversation">
+      <div class="conversation" id="conversation" tabindex="-1">
+        <div class="empty" id="empty">
+          <span class="empty__icon" aria-hidden="true">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
               <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>
             </svg>
           </span>
-        </button>
-
-        <div class="status">
-          <p class="status__label" id="statusLabel">Ready</p>
-          <p class="status__hint" id="statusHint">Tap the microphone to start a turn</p>
-          <div class="level" aria-hidden="true"><span class="level__fill" id="levelFill"></span></div>
+          <p class="empty__text">Press the microphone and ask about a balance, a transfer, or a bill.</p>
         </div>
       </div>
+    </section>
+  </section>
 
-      <form class="say" id="sayForm" autocomplete="off">
-        <label class="say__label" for="sayInput">Type instead</label>
-        <input class="say__input" id="sayInput" type="text" placeholder="what is my checking balance">
-        <button class="button button--quiet" type="submit">Send</button>
-      </form>
+  <!-- Transactions: one calendar month, newest first. -->
+  <section class="view view--statement" id="viewTransactions" hidden>
+    <header class="summary">
+      <p class="summary__label">Total balance</p>
+      <p class="summary__total" id="statementTotal">····</p>
+      <p class="summary__month" id="statementMonth">—</p>
 
-      <div class="bargein" data-enabled="true">
-        <label class="switch" for="vadToggle">
-          <input type="checkbox" id="vadToggle" checked>
-          <span class="switch__track" aria-hidden="true"></span>
-          <span class="switch__label">Interrupt by speaking</span>
-        </label>
-
-        <div class="slider">
-          <label class="slider__label" for="vadSensitivity">Sensitivity</label>
-          <input type="range" id="vadSensitivity" min="1" max="10" value="5">
-          <output class="slider__value" id="vadValue">5</output>
+      <div class="flows">
+        <div class="flow flow--in">
+          <span class="flow__label">
+            <span class="flow__arrow" aria-hidden="true">↓</span> Incoming
+          </span>
+          <span class="flow__amount" id="statementIn">—</span>
         </div>
-
-        <p class="bargein__note" id="vadNote">Speak while the bot is talking and it will stop and listen.</p>
+        <div class="flow flow--out">
+          <span class="flow__label">
+            Outgoing <span class="flow__arrow" aria-hidden="true">↑</span>
+          </span>
+          <span class="flow__amount" id="statementOut">—</span>
+        </div>
       </div>
+    </header>
+
+    <div class="statement" id="statement">
+      <p class="block__empty">Loading…</p>
     </div>
   </section>
 
 </main>
+
+<!-- Outside the screens on purpose: an action waiting on a yes has to stay
+     visible, and the microphone has to stay reachable, whichever screen is
+     being read. -->
+<div class="confirm" id="confirm" hidden>
+  <p class="confirm__text">This moves money. Say yes, or choose below.</p>
+  <div class="confirm__buttons">
+    <button class="button button--go" id="confirmYes" type="button">Yes, confirm</button>
+    <button class="button button--stop" id="confirmNo" type="button">Cancel</button>
+  </div>
+</div>
+
+<div class="dock">
+  <div class="dock__row">
+    <button class="mic" id="micButton" type="button" data-state="idle" aria-label="Start recording">
+      <span class="mic__ring" aria-hidden="true"></span>
+      <span class="mic__face" aria-hidden="true">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>
+        </svg>
+      </span>
+    </button>
+
+    <div class="status">
+      <p class="status__label" id="statusLabel">Ready</p>
+      <p class="status__hint" id="statusHint">Tap the microphone to start a turn</p>
+      <div class="level" aria-hidden="true"><span class="level__fill" id="levelFill"></span></div>
+    </div>
+  </div>
+
+  <form class="say" id="sayForm" autocomplete="off">
+    <label class="say__label" for="sayInput">Type instead</label>
+    <input class="say__input" id="sayInput" type="text" placeholder="what is my checking balance">
+    <button class="button button--quiet" type="submit">Send</button>
+  </form>
+
+  <div class="bargein" data-enabled="true">
+    <label class="switch" for="vadToggle">
+      <input type="checkbox" id="vadToggle" checked>
+      <span class="switch__track" aria-hidden="true"></span>
+      <span class="switch__label">Interrupt by speaking</span>
+    </label>
+
+    <div class="slider">
+      <label class="slider__label" for="vadSensitivity">Sensitivity</label>
+      <input type="range" id="vadSensitivity" min="1" max="10" value="5">
+      <output class="slider__value" id="vadValue">5</output>
+    </div>
+
+    <p class="bargein__note" id="vadNote">Speak while the bot is talking and it will stop and listen.</p>
+  </div>
+</div>
 
 <script src="vad.js"></script>
 <script src="app.js"></script>

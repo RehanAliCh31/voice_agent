@@ -28,6 +28,7 @@ from voicebot.bank.base import (
     Dispute,
     Handoff,
     Payee,
+    Statement,
     Transaction,
     account_not_payee_message,
     format_money,
@@ -270,6 +271,30 @@ class SqliteBank(Bank):
         return self.balance(name)
 
     # --- audit ---------------------------------------------------------------
+
+    def statement(self, year: int, month: int) -> Statement:
+        if not 1 <= month <= 12:
+            raise BankError(f"{month} is not a month.")
+
+        # String comparison on a "YYYY-MM-DD HH:MM:SS" stamp: the format is
+        # fixed by _stamp, so a prefix match is the whole month and needs no
+        # date arithmetic or timezone opinion.
+        prefix = f"{year:04d}-{month:02d}-%"
+        rows = tuple(
+            _transaction(row)
+            for row in self._db.execute(
+                "SELECT id, account, merchant, cents, occurred_at FROM transactions "
+                "WHERE occurred_at LIKE ? ORDER BY occurred_at DESC, id DESC",
+                (prefix,),
+            ).fetchall()
+        )
+        return Statement(
+            year=year,
+            month=month,
+            rows=rows,
+            incoming_cents=sum(row.cents for row in rows if row.cents > 0),
+            outgoing_cents=sum(-row.cents for row in rows if row.cents < 0),
+        )
 
     def transaction(self, transaction_id: int) -> Transaction | None:
         row = self._db.execute(

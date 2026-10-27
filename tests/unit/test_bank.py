@@ -512,3 +512,50 @@ def test_a_dispute_survives_the_demo_reset(bank: SqliteBank) -> None:
     bank.reset()
 
     assert len(bank.disputes()) == 1
+
+
+# --- a month's statement -----------------------------------------------------
+#
+# The transactions screen shows one calendar month: every movement in it, and
+# what came in against what went out. Totalled here rather than in the page,
+# so the figures on screen and the figures the bot speaks come from the same
+# arithmetic.
+
+
+def test_a_statement_holds_the_months_movements(bank: SqliteBank) -> None:
+    now = datetime.now()
+    statement = bank.statement(now.year, now.month)
+
+    assert statement.rows
+    assert all(row.occurred_at.startswith(now.strftime("%Y-%m")) for row in statement.rows)
+
+
+def test_a_statement_is_newest_first(bank: SqliteBank) -> None:
+    now = datetime.now()
+    stamps = [row.occurred_at for row in bank.statement(now.year, now.month).rows]
+
+    assert stamps == sorted(stamps, reverse=True)
+
+
+def test_a_statement_totals_both_directions(bank: SqliteBank) -> None:
+    now = datetime.now()
+    bank.deposit(25_000, "checking", "manual top-up")
+
+    statement = bank.statement(now.year, now.month)
+
+    assert statement.incoming_cents == 25_000
+    assert statement.outgoing_cents > 0
+    assert all(total >= 0 for total in (statement.incoming_cents, statement.outgoing_cents))
+
+
+def test_a_month_with_nothing_in_it_is_empty_not_an_error(bank: SqliteBank) -> None:
+    statement = bank.statement(1999, 1)
+
+    assert statement.rows == ()
+    assert statement.incoming_cents == 0
+    assert statement.outgoing_cents == 0
+
+
+def test_an_impossible_month_is_refused(bank: SqliteBank) -> None:
+    with pytest.raises(BankError):
+        bank.statement(2026, 13)

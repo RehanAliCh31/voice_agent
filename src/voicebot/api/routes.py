@@ -9,6 +9,7 @@ reports about its own work comes back with the turn itself.
 from __future__ import annotations
 
 import base64
+from datetime import date
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
@@ -22,13 +23,16 @@ from voicebot.api.payloads import (
     ReadyPayload,
     SessionRequest,
     SpeakRequest,
+    StatementPayload,
     TextRequest,
     TranscriptPayload,
     TurnPayload,
     ledger_payload,
+    statement_payload,
     turn_payload,
 )
 from voicebot.api.sessions import SessionStore
+from voicebot.bank.base import BankError
 from voicebot.pipeline.audio_io import decode_wav, encode_wav
 from voicebot.pipeline.orchestrator import TurnResult
 from voicebot.schemas import AudioBuffer
@@ -171,6 +175,24 @@ def accounts(services: Services = Depends(get_services)) -> LedgerPayload:
     it, so this never competes with a reply for which number is current.
     """
     return ledger_payload(services.bank)
+
+
+@router.get("/v1/statement", response_model=StatementPayload, tags=["screens"])
+def statement(
+    year: int | None = None,
+    month: int | None = None,
+    services: Services = Depends(get_services),
+) -> StatementPayload:
+    """One calendar month of movements, for the transactions screen.
+
+    Defaults to the month the server is in. A month with nothing in it is an
+    empty statement; only a month that is not a month is a bad request.
+    """
+    today = date.today()
+    try:
+        return statement_payload(services.bank, year or today.year, month or today.month)
+    except BankError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/v1/converse", response_model=TurnPayload, tags=["conversation"])
