@@ -114,9 +114,20 @@ def _require_text(value: Any, field: str) -> str:
 class ToolExecutor:
     """Runs tools for one conversation, and holds its one pending action."""
 
-    def __init__(self, bank: Bank, ttl_s: float = DEFAULT_TTL_S) -> None:
+    def __init__(
+        self,
+        bank: Bank,
+        ttl_s: float = DEFAULT_TTL_S,
+        session_id: str = "",
+    ) -> None:
         self.bank = bank
         self.ttl_s = ttl_s
+        # Which conversation this executor belongs to, and how far into it we
+        # are. A handoff has to say where it was raised so the person picking
+        # it up can read the exchange that caused it. The agent keeps the turn
+        # in step; the executor never advances it itself.
+        self.session_id = session_id
+        self.turn_index = 0
         self.pending: PendingAction | None = None
         # Counts balance-changing writes. A figure reported before a write is
         # stale after it, and the count is how a caller knows. Kept here
@@ -381,6 +392,7 @@ class ToolExecutor:
             "order_card": self._order_card,
             "deposit_money": self._deposit_money,
             "move_money": self._move_money,
+            "hand_off": self._hand_off,
         }
 
     def _list_accounts(self, _: dict[str, Any]) -> ToolOutcome:
@@ -515,6 +527,27 @@ class ToolExecutor:
                 "paid_cents": paid,
             },
             sourced_cents=(paid,),
+        )
+
+    def _hand_off(self, arguments: dict[str, Any]) -> ToolOutcome:
+        reason = _require_text(arguments.get("reason"), "reason")
+        note = _optional_text(arguments.get("note"))
+        case = self.bank.open_handoff(self.session_id, self.turn_index, reason, note)
+
+        # Whatever was waiting on a yes is dropped. A conversation that needs
+        # a person must not also leave money one word away from moving, and a
+        # customer reporting fraud is the likeliest of all to say "yes" to
+        # something they have stopped listening to.
+        if self.pending is not None:
+            log.info("cancelling %s: the conversation is going to a person", self.pending.tool)
+            self.pending = None
+
+        return ToolOutcome(
+            {
+                "status": "handed_off",
+                "reference": case.reference,
+                "reason": case.reason,
+            }
         )
 
     def _move_money(self, arguments: dict[str, Any]) -> ToolOutcome:

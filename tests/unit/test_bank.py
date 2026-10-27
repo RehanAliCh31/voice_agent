@@ -367,3 +367,60 @@ def test_a_transfer_to_a_known_payee_still_works(bank: SqliteBank) -> None:
     """The existing behaviour, which must survive the fix."""
     remaining = bank.transfer(5_000, "sarah", "checking")
     assert remaining == 243_350
+
+
+# --- handing a customer to a person ------------------------------------------
+#
+# The bot cannot do everything, and the cases it must not try are the ones
+# where being wrong costs most: fraud, complaints, money trouble. A handoff
+# records that the conversation left the bot, and points at the turns already
+# logged for the session rather than copying them, so the person picking it up
+# reads what was actually said.
+
+
+def test_a_handoff_gets_a_reference(bank: SqliteBank) -> None:
+    case = bank.open_handoff("s1", 3, "fraud", "card used in another country")
+
+    assert case.reference
+    assert case.reason == "fraud"
+    assert case.session_id == "s1"
+    assert case.turn_index == 3
+
+
+def test_a_reference_can_be_read_aloud(bank: SqliteBank) -> None:
+    """It is spoken down a phone, so it holds no letters that sound alike."""
+    reference = bank.open_handoff("s1", 1, "complaint").reference
+
+    assert reference.isupper() or reference.isdigit() or "-" in reference
+    assert not set(reference) & set("OIS015")
+
+
+def test_every_handoff_gets_its_own_reference(bank: SqliteBank) -> None:
+    made = {bank.open_handoff("s1", i, "complaint").reference for i in range(20)}
+    assert len(made) == 20
+
+
+def test_a_handoff_can_be_found_by_session(bank: SqliteBank) -> None:
+    bank.open_handoff("s1", 1, "fraud")
+    bank.open_handoff("s2", 1, "complaint")
+
+    assert [c.reason for c in bank.handoffs(session_id="s1")] == ["fraud"]
+
+
+def test_an_unknown_reason_is_refused(bank: SqliteBank) -> None:
+    with pytest.raises(BankError):
+        bank.open_handoff("s1", 1, "because I felt like it")
+
+
+def test_the_refusal_names_the_reasons_that_exist(bank: SqliteBank) -> None:
+    with pytest.raises(BankError, match="fraud"):
+        bank.open_handoff("s1", 1, "nonsense")
+
+
+def test_a_handoff_survives_the_demo_reset(bank: SqliteBank) -> None:
+    """A fraud report is not undone by someone starting a new conversation."""
+    bank.open_handoff("s1", 1, "fraud")
+
+    bank.reset()
+
+    assert len(bank.handoffs()) == 1

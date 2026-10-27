@@ -26,7 +26,13 @@ from voicebot.agent.guard import (
     money_in_text,
 )
 from voicebot.llm.base import LLMClient, LLMUnavailable, Reply, ToolCall
-from voicebot.llm.prompts import NOT_LOOKED_UP, NOTHING_SAID, SYSTEM_PROMPT, UNAVAILABLE
+from voicebot.llm.prompts import (
+    HANDED_OVER,
+    NOT_LOOKED_UP,
+    NOTHING_SAID,
+    SYSTEM_PROMPT,
+    UNAVAILABLE,
+)
 from voicebot.llm.tools import TOOL_SCHEMAS
 from voicebot.utils.logging import get_logger
 
@@ -105,6 +111,30 @@ def seeks_agreement(text: str | None, armed: bool) -> bool:
     if not said.endswith("?") or not _AGREEMENT.search(said):
         return False
     return bool(money_in_text(said))
+
+
+# Asking for a human, in the ways people actually ask. Matched against what
+# the customer said, never against what the model replied.
+_WANTS_A_PERSON = re.compile(
+    r"(?:speak|talk|put\s+me\s+through|transfer\s+me|get\s+me)"
+    r"(?:\s+\w+){0,3}?\s+"
+    r"(?:a\s+|an\s+|the\s+)?"
+    r"(?:human|person|someone|somebody|agent|representative|advis[eo]r|operator|staff)"
+    r"|real\s+(?:human|person)"
+    r"|customer\s+(?:service|support)"
+    r"|human\s+being",
+    re.IGNORECASE,
+)
+
+
+def asked_for_a_person(text: str | None) -> bool:
+    """True when the customer asked to be put through to a human.
+
+    Reading English is a guess, and this one is allowed to be: a miss leaves
+    the model's own judgement, which the prompt already directs. What follows
+    a match is not a guess -- the case is opened in Python either way.
+    """
+    return bool(_WANTS_A_PERSON.search((text or "").strip()))
 
 
 @dataclass
@@ -210,6 +240,10 @@ class AgentResult:
     guard_hit: bool = False
     suppressed: str | None = None
     rounds: int = 0
+    # The reference of a case this turn opened, however it was opened. The
+    # page shows it; a caller can tell a handed-off turn from an ordinary one
+    # without reading the reply.
+    handed_off: str | None = None
 
 
 class Agent:
@@ -233,9 +267,16 @@ class Agent:
         """Advance the conversation by one turn."""
         self._ensure_system(conversation)
         conversation.turn_index += 1
+        # The executor opens handoffs and has to say which turn raised one.
+        # It never advances this itself; the conversation owns the count.
+        self.executor.turn_index = conversation.turn_index
         conversation.append_user(text)
         conversation.trim(self.max_turns)
-        return self._run(conversation)
+
+        result = self._run(conversation)
+        if result.handed_off is None and asked_for_a_person(text):
+            result = self._hand_off_by_rule(conversation, result)
+        return result
 
     def resolve_pending(self, confirmed: bool, conversation: Conversation) -> AgentResult:
         """Act on the Yes or Cancel button, then let the model say what happened.
@@ -245,6 +286,7 @@ class Agent:
         next "did that go through?" is answered from a history that is wrong.
         """
         self._ensure_system(conversation)
+        self.executor.turn_index = conversation.turn_index
         pending = self.executor.pending
         before = self.executor.writes
         outcome = self.executor.confirm() if confirmed else self.executor.cancel()
@@ -386,6 +428,47 @@ class Agent:
             suppressed=spoken if hit else None,
         )
 
+    def _hand_off_by_rule(self, conversation: Conversation, result: AgentResult) -> AgentResult:
+        """Open a case because the customer asked, whatever the model replied.
+
+        The model is told to do this and usually will. When it does not --
+        and a model that has just been asked to step aside is exactly the one
+        inclined to argue -- the rule does it anyway. Enforced here for the
+        same reason the confirmation gate is enforced in Python: a model can
+        be talked out of an instruction and a function cannot.
+
+        The sentence spoken is assembled from the case, not written by the
+        model, because the reference is the one part that has to be right.
+        """
+        call = ToolCall(
+            id=f"handoff-{secrets.token_urlsafe(6)}",
+            name="hand_off",
+            arguments={"reason": "customer asked"},
+        )
+        outcome = self.executor.execute(call)
+        reference = _reference([outcome])
+        if reference is None:  # pragma: no cover - the bank refused its own reason
+            log.warning("could not open a handoff the customer asked for")
+            return result
+
+        # Recorded in the history too, so the next turn knows the conversation
+        # has already left the bot.
+        conversation.append_assistant(Reply(tool_calls=(call,)))
+        conversation.append_tool_result(call.id, outcome.result)
+        conversation.trim(self.max_turns)
+        log.info("handing off by rule: the customer asked for a person")
+
+        return AgentResult(
+            text=HANDED_OVER.format(reference=reference),
+            tool_calls=(*result.tool_calls, call),
+            tool_results=(*result.tool_results, outcome.result),
+            sourced_cents=result.sourced_cents,
+            guard_hit=result.guard_hit,
+            suppressed=result.suppressed,
+            rounds=result.rounds,
+            handed_off=reference,
+        )
+
     def _allowed(self, conversation: Conversation, sourced: tuple[int, ...]) -> tuple[int, ...]:
         """Every figure this turn is entitled to say.
 
@@ -446,7 +529,18 @@ class Agent:
             guard_hit=hit,
             suppressed=suppressed,
             rounds=rounds,
+            handed_off=_reference(outcomes),
         )
+
+
+def _reference(outcomes: Sequence[ToolOutcome]) -> str | None:
+    """The case reference this turn opened, if it opened one."""
+    for outcome in outcomes:
+        if outcome.result.get("status") == "handed_off":
+            reference = outcome.result.get("reference")
+            if isinstance(reference, str):
+                return reference
+    return None
 
 
 def _sourced(outcomes: Sequence[ToolOutcome]) -> tuple[int, ...]:

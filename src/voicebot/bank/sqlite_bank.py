@@ -16,12 +16,14 @@ from datetime import datetime
 from pathlib import Path
 
 from voicebot.bank.base import (
+    HANDOFF_REASONS,
     PERIODS,
     Account,
     Bank,
     BankError,
     Bill,
     Card,
+    Handoff,
     Payee,
     Transaction,
     account_not_payee_message,
@@ -29,6 +31,7 @@ from voicebot.bank.base import (
     period_range,
     unknown_payee_message,
     unknown_period_message,
+    unknown_reason_message,
 )
 from voicebot.bank.seed import clear, seed, seed_payees
 from voicebot.utils.logging import get_logger
@@ -271,6 +274,42 @@ class SqliteBank(Bank):
 
     # --- audit ---------------------------------------------------------------
 
+    # --- handing a customer to a person --------------------------------------
+
+    def open_handoff(
+        self,
+        session_id: str,
+        turn_index: int,
+        reason: str,
+        note: str | None = None,
+    ) -> Handoff:
+        key = reason.strip().lower()
+        if key not in HANDOFF_REASONS:
+            raise BankError(unknown_reason_message(reason))
+
+        reference = _reference()
+        with self._db:
+            self._db.execute(
+                "INSERT INTO handoffs (reference, session_id, turn_index, reason, note) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (reference, session_id, turn_index, key, note),
+            )
+        row = self._db.execute(
+            "SELECT * FROM handoffs WHERE reference = ?", (reference,)
+        ).fetchone()
+        return _handoff(row)
+
+    def handoffs(self, session_id: str | None = None) -> tuple[Handoff, ...]:
+        sql = "SELECT * FROM handoffs"
+        params: list[object] = []
+        if session_id:
+            sql += " WHERE session_id = ?"
+            params.append(session_id)
+        sql += " ORDER BY created_at DESC, rowid DESC"
+        return tuple(_handoff(row) for row in self._db.execute(sql, params).fetchall())
+
+    # --- audit ---------------------------------------------------------------
+
     def log_turn(
         self,
         session_id: str,
@@ -342,6 +381,28 @@ class SqliteBank(Bank):
             "INSERT INTO transactions (account, merchant, cents, occurred_at) VALUES (?, ?, ?, ?)",
             (account, merchant, cents, _stamp(datetime.now())),
         )
+
+
+# Read down a phone, so the alphabet holds nothing that sounds or looks like
+# anything else in it: no O or 0, no I or 1, no S or 5.
+_REFERENCE_ALPHABET = "ACDEFHJKLMNPRTUVWXY2346789"
+
+
+def _reference() -> str:
+    """A short case reference a customer can repeat without spelling it out."""
+    body = "".join(secrets.choice(_REFERENCE_ALPHABET) for _ in range(6))
+    return f"VB-{body}"
+
+
+def _handoff(row: sqlite3.Row) -> Handoff:
+    return Handoff(
+        reference=row["reference"],
+        session_id=row["session_id"],
+        turn_index=row["turn_index"],
+        reason=row["reason"],
+        note=row["note"],
+        created_at=row["created_at"],
+    )
 
 
 def _stamp(moment: datetime) -> str:

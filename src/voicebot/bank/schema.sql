@@ -40,6 +40,21 @@ CREATE TABLE IF NOT EXISTS transactions (
     occurred_at TEXT NOT NULL
 );
 
+-- Conversations that left the bot for a person. The transcript is not copied
+-- here: `turns` already holds it for the session, and two copies of the same
+-- exchange are two things that can disagree. The reference is what the
+-- customer is given and what the specialist searches by.
+CREATE TABLE IF NOT EXISTS handoffs (
+    reference  TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    turn_index INTEGER NOT NULL,
+    reason     TEXT NOT NULL,
+    note       TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_handoffs_session ON handoffs(session_id);
+
 -- The audit log: what was said, what was called, and whether the numeric guard
 -- had to suppress the model's sentence. Survives a reset; the account tables
 -- do not.

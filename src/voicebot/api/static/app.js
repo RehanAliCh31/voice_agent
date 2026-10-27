@@ -403,6 +403,15 @@
       turn.appendChild(flag);
     }
 
+    if (options.reference) {
+      // Shown as its own line rather than left inside the sentence: this is
+      // the one thing the customer may need to write down.
+      var case_ = node("div", "turn__case");
+      case_.appendChild(node("span", "turn__case-label", "Passed to a specialist"));
+      case_.appendChild(node("span", "turn__case-ref", options.reference));
+      turn.appendChild(case_);
+    }
+
     if (options.audioBlob || options.replayText) {
       var row = node("div", "turn__audio");
       var replay = node("button", "replay");
@@ -536,6 +545,7 @@
       audioBlob: blob,
       replayText: turn.speak_client_side && canSpeak() ? reply : null,
       guardHit: Boolean(turn.guard_hit),
+      reference: turn.handed_off || null,
     });
 
     // Drawn after the conversation, so the ledger and the sentence the bot

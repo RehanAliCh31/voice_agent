@@ -954,3 +954,81 @@ def test_a_reply_with_no_figures_owes_nothing(executor: ToolExecutor) -> None:
     out = agent.handle("how are you?", Conversation("s1"))
 
     assert out.rounds == 1
+
+
+# --- asking for a person is not a request the model gets to decline ----------
+#
+# Every source agreed on two things: a handoff must be able to fire by rule
+# rather than by the model's confidence, and a customer who wants a human and
+# cannot get one loses more trust than the bot ever saves. So this is enforced
+# here, the way the confirmation gate is -- the model is told to hand off, and
+# the code does it whether or not the model agreed.
+
+
+def test_asking_for_a_person_hands_off_even_if_the_model_ignores_it(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    agent = agent_with([Reply(text="I can help you with that myself!")], executor)
+
+    out = agent.handle("I want to speak to a human", Conversation("s1"))
+
+    assert bank.handoffs(), "the model declined; the rule did not"
+    assert bank.handoffs()[0].reason == "customer asked"
+    assert out.handed_off is not None
+
+
+def test_the_reply_gives_the_customer_the_reference(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    agent = agent_with([Reply(text="I can help you with that myself!")], executor)
+
+    out = agent.handle("put me through to a real person", Conversation("s1"))
+
+    assert bank.handoffs()[0].reference in out.text
+
+
+def test_an_ordinary_question_hands_off_nothing(bank: SqliteBank, executor: ToolExecutor) -> None:
+    agent = agent_with([Reply(text="Your balance is fine.")], executor)
+
+    agent.handle("what is my checking balance?", Conversation("s1"))
+
+    assert bank.handoffs() == ()
+
+
+def test_the_model_handing_off_itself_opens_exactly_one_case(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    """The rule must not raise a second case on top of the model's."""
+    agent = agent_with(
+        [
+            Reply(tool_calls=(ToolCall("c1", "hand_off", {"reason": "fraud"}),)),
+            Reply(text="I'm putting you through to our fraud team."),
+        ],
+        executor,
+    )
+
+    agent.handle("someone used my card, I want to speak to a person", Conversation("s1"))
+
+    assert len(bank.handoffs()) == 1
+    assert bank.handoffs()[0].reason == "fraud"
+
+
+def test_a_handoff_by_rule_drops_an_armed_transfer(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    conversation = Conversation("s1")
+    agent = agent_with(
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Transfer $50.00 to Sarah from checking -- are you sure?"),
+            Reply(text="Of course."),
+        ],
+        executor,
+    )
+    agent.handle("send sarah fifty", conversation)
+    assert executor.pending is not None
+
+    agent.handle("actually, let me talk to a person", conversation)
+
+    assert executor.pending is None
+    assert bank.balance("checking") == 248_350

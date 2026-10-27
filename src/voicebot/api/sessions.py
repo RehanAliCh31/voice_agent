@@ -92,7 +92,7 @@ class InMemorySessionStore(SessionStore):
         if entry is None:
             session = Session(
                 conversation=Conversation(session_id=session_id),
-                executor=ToolExecutor(self.bank),
+                executor=ToolExecutor(self.bank, session_id=session_id),
             )
             self._entries[session_id] = _Entry(session=session, touched=time.monotonic())
             self._evict_overflow()

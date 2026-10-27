@@ -1,6 +1,6 @@
 """What a bank can do, and the vocabulary its callers share.
 
-The interface is deliberately narrow: thirteen operations, each one a thing a
+The interface is deliberately narrow: fourteen operations, each one a thing a
 customer can ask for. Anything the dialogue needs that is not on this list is
 a sign the dialogue is inventing capability.
 """
@@ -53,6 +53,23 @@ class Transaction:
 
 
 @dataclass(frozen=True)
+class Handoff:
+    """A conversation that left the bot for a person.
+
+    Holds no transcript. `session_id` and `turn_index` locate the exchange in
+    the turns already logged, so there is one record of what was said rather
+    than two that can drift apart.
+    """
+
+    reference: str
+    session_id: str
+    turn_index: int
+    reason: str
+    note: str | None
+    created_at: str
+
+
+@dataclass(frozen=True)
 class Payee:
     """Someone money may be sent to. Never one of the customer's accounts."""
 
@@ -77,6 +94,24 @@ PERIODS: tuple[str, ...] = (
     "this month",
     "last month",
 )
+
+
+# Why a conversation left the bot. Closed, because the reason decides who
+# picks the case up and how fast -- a fraud report and a complaint do not go
+# to the same desk, and free text would route neither.
+HANDOFF_REASONS: tuple[str, ...] = (
+    "fraud",
+    "complaint",
+    "hardship",
+    "not permitted",
+    "customer asked",
+    "stuck",
+)
+
+
+def unknown_reason_message(reason: str) -> str:
+    """Said aloud when a handoff names a reason the bank does not route."""
+    return f"{reason!r} is not a reason I can raise. I can raise: {', '.join(HANDOFF_REASONS)}."
 
 
 # Where money paid in is allowed to have come from. Closed for the same
@@ -264,6 +299,23 @@ class Bank(ABC):
         """
 
     # --- audit ---------------------------------------------------------------
+
+    @abstractmethod
+    def open_handoff(
+        self,
+        session_id: str,
+        turn_index: int,
+        reason: str,
+        note: str | None = None,
+    ) -> Handoff:
+        """Record that this conversation needs a person, and return the case.
+
+        Raises BankError when `reason` is not one of HANDOFF_REASONS.
+        """
+
+    @abstractmethod
+    def handoffs(self, session_id: str | None = None) -> tuple[Handoff, ...]:
+        """Open cases, newest first, optionally for one conversation."""
 
     @abstractmethod
     def log_turn(

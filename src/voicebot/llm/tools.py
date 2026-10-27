@@ -1,4 +1,4 @@
-"""The twelve things the model is allowed to do.
+"""The thirteen things the model is allowed to do.
 
 This file is the whole surface between a fluent model and a customer's money.
 Anything not described here, the bot cannot do — which is the point. Adding a
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from voicebot.bank.base import DEPOSIT_SOURCES, PERIODS
+from voicebot.bank.base import DEPOSIT_SOURCES, HANDOFF_REASONS, PERIODS
 
 # How many ledger rows a spoken answer can carry. A reply is read aloud, so a
 # list long enough to be useful on a screen is unusable in a conversation.
@@ -135,6 +135,30 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                 ),
             },
         },
+    ),
+    # --- leaving ---
+    _function(
+        "hand_off",
+        "Pass the conversation to a person, and tell the customer their "
+        "reference. Call this as soon as one of the reasons applies -- "
+        "especially fraud, a complaint, or money trouble. Do not try to "
+        "settle those yourself, and never ask the customer to confirm that "
+        "they want a human.",
+        {
+            "reason": {
+                "type": "string",
+                "enum": list(HANDOFF_REASONS),
+                "description": (
+                    "Why a person is needed. 'not permitted' is for anything "
+                    "beyond what your tools can do, such as waiving a fee."
+                ),
+            },
+            "note": {
+                "type": "string",
+                "description": "One short line for the person picking it up.",
+            },
+        },
+        ["reason"],
     ),
     # --- writes: each needs confirmation ---
     _function(

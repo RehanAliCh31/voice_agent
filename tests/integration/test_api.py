@@ -520,3 +520,34 @@ def test_the_ledger_shows_what_the_last_turn_did(client: TestClient) -> None:
     ledger = client.get("/v1/accounts").json()
     checking = next(a for a in ledger["accounts"] if a["name"] == "checking")
     assert checking["balance_cents"] == 243_350
+
+
+# --- handing the conversation to a person ------------------------------------
+
+
+def test_a_turn_reports_the_case_it_opened(client: TestClient) -> None:
+    scripted(client, [Reply(text="I can sort that out for you myself.")])
+
+    body = client.post("/v1/chat", json={"text": "I want to speak to a human"}).json()
+
+    assert body["handed_off"]
+    assert body["handed_off"] in body["reply"]
+
+
+def test_an_ordinary_turn_reports_no_case(client: TestClient) -> None:
+    scripted(client, [Reply(text="Hello there.")])
+    body = client.post("/v1/chat", json={"text": "hello"}).json()
+
+    assert body["handed_off"] is None
+
+
+def test_the_case_knows_which_conversation_raised_it(client: TestClient) -> None:
+    """Without the real session id a specialist cannot find the transcript."""
+    scripted(client, [Reply(text="I can sort that out myself.")])
+
+    body = client.post("/v1/chat", json={"text": "put me through to a person"}).json()
+
+    bank = client.app.state.services.bank
+    case = bank.handoffs(session_id=body["session_id"])
+    assert case and case[0].reference == body["handed_off"]
+    assert case[0].turn_index == 1

@@ -46,15 +46,15 @@ def call(name: str, **arguments: Any) -> ToolCall:
 # --- the schemas -------------------------------------------------------------
 
 
-def test_there_are_twelve_well_formed_schemas() -> None:
+def test_there_are_thirteen_well_formed_schemas() -> None:
     """The count is asserted on purpose: a new tool is a deliberate act.
 
     Every schema added is another choice the model has to get right, and the
     surface between it and a customer's money widening by one.
     """
     names = {schema["function"]["name"] for schema in TOOL_SCHEMAS}
-    assert len(TOOL_SCHEMAS) == 12
-    assert len(names) == 12
+    assert len(TOOL_SCHEMAS) == 13
+    assert len(names) == 13
     assert CONFIRMING <= names
 
     for schema in TOOL_SCHEMAS:
@@ -516,3 +516,59 @@ def test_an_account_named_as_a_payee_never_becomes_pending(executor: ToolExecuto
     assert "error" in out.result
     assert "own account" in out.result["error"]
     assert executor.pending is None
+
+
+# --- handing the conversation to a person ------------------------------------
+#
+# Deliberately not a confirming tool. Asking someone to confirm that they
+# would like to speak to a human is the opposite of the point, and the one
+# thing every source agreed on is that resisting the handoff costs more trust
+# than it saves.
+
+
+def test_handing_off_is_not_a_confirming_tool() -> None:
+    assert "hand_off" not in CONFIRMING
+
+
+def test_handing_off_returns_a_reference(executor: ToolExecutor) -> None:
+    out = executor.execute(call("hand_off", reason="fraud", note="card used abroad"))
+
+    assert out.result["status"] == "handed_off"
+    assert out.result["reference"]
+    assert out.result["reason"] == "fraud"
+
+
+def test_handing_off_records_which_conversation_it_came_from(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    executor.session_id = "s-42"
+    executor.turn_index = 7
+
+    executor.execute(call("hand_off", reason="complaint"))
+
+    case = bank.handoffs(session_id="s-42")[0]
+    assert case.turn_index == 7
+    assert case.reason == "complaint"
+
+
+def test_handing_off_cancels_an_armed_transfer(bank: SqliteBank, executor: ToolExecutor) -> None:
+    """A conversation that needs a person must not leave money one yes away."""
+    executor.execute(call("transfer_money", **TRANSFER))
+    assert executor.pending is not None
+
+    executor.execute(call("hand_off", reason="fraud"))
+
+    assert executor.pending is None
+    assert bank.balance("checking") == 248_350
+
+
+def test_handing_off_moves_no_money(executor: ToolExecutor) -> None:
+    executor.execute(call("hand_off", reason="hardship"))
+    assert executor.writes == 0
+
+
+def test_an_unroutable_reason_comes_back_as_a_sentence(executor: ToolExecutor) -> None:
+    out = executor.execute(call("hand_off", reason="because I said so"))
+
+    assert "error" in out.result
+    assert "fraud" in out.result["error"]

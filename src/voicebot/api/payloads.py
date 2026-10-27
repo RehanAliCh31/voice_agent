@@ -70,6 +70,9 @@ class TurnPayload(BaseModel):
     # interface is worse than being slow.
     accounts: list[AccountPayload] = Field(default_factory=list)
     bills: list[BillPayload] = Field(default_factory=list)
+    # The reference of a case this turn opened, or null. The page shows the
+    # conversation has left the bot without having to read the reply for it.
+    handed_off: str | None = None
     latency_ms: dict[str, float] = Field(default_factory=dict)
     # Null when the page is doing the speaking. Nullable rather than absent so
     # a client can tell "no audio" from "field missing".
@@ -200,6 +203,7 @@ def turn_payload(
         awaiting_confirmation=awaiting_confirmation,
         accounts=_accounts(bank),
         bills=_bills(bank),
+        handed_off=result.agent.handed_off,
         latency_ms={key: round(value, 2) for key, value in result.latency.as_dict().items()},
         audio_b64=audio_b64,
         speak_client_side=speaks_client_side,

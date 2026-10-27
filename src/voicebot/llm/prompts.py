@@ -70,6 +70,11 @@ looked up before it is out of date. Look it up again rather than answering \
 from what a tool told you earlier. A result marked superseded is exactly \
 that, and holds no values at all.
 
+Some things are not yours to settle. Fraud, a complaint, money trouble, or \
+anything your tools cannot do -- hand those to a person with hand_off, say \
+the reference out loud, and do not attempt the task yourself. If the customer \
+asks for a human, call hand_off straight away and never talk them out of it.
+
 If a tool returns an error, tell the customer what it says in your own words \
 and offer what you can do instead.
 
@@ -83,6 +88,14 @@ UNAVAILABLE = "Sorry — I can't reach the service just now. Please try again in
 
 # Spoken when the model returns nothing at all, or runs out of tool rounds.
 NOTHING_SAID = "Sorry, I didn't catch that. Could you say it again?"
+
+# Spoken when the customer asked for a person and the model carried on anyway.
+# Assembled from the case the bank opened rather than written by the model,
+# because the one thing in it that must be exactly right is the reference.
+HANDED_OVER = (
+    "Of course — I'm passing you to a colleague. "
+    "Your reference is {reference}, and someone will pick this up shortly."
+)
 
 # Spoken when the model announced a lookup and never made one, even after the
 # call was forced. Better than reading out a promise nothing is going to keep.
