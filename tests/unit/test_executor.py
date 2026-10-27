@@ -693,3 +693,93 @@ def test_a_confirmed_card_order_issues_one(bank: SqliteBank, executor: ToolExecu
 
     assert out.result["status"] == "done"
     assert len(bank.cards()) == before + 1
+
+
+# --- reporting a card lost or stolen -----------------------------------------
+#
+# One event, one confirmation. Freezing and replacing were separate tools, so
+# losing a card meant agreeing twice to the same thing, and the replacement
+# was ordered against an account rather than against the card it replaced.
+#
+# Stolen is not the same as lost. A theft is a fraud report, and a fraud
+# report has to reach a person -- so it opens a case here rather than
+# depending on the model to think of it.
+
+
+def test_a_confirmed_freeze_actually_freezes(bank: SqliteBank, executor: ToolExecutor) -> None:
+    """No test had ever let a freeze through: the gate tests stop at the
+    read-back, which is what they are for."""
+    token = executor.execute(call("freeze_card", last4="4417")).result["token"]
+
+    executor.execute(call("freeze_card", last4="4417", confirmation_token=token))
+
+    assert next(c for c in bank.cards() if c.last4 == "4417").frozen is True
+
+
+def test_the_read_back_covers_the_whole_event(executor: ToolExecutor) -> None:
+    out = executor.execute(
+        call("freeze_card", last4="4417", report_fraud=True, order_replacement=True)
+    )
+
+    summary = out.result["summary"].lower()
+    assert "4417" in summary
+    assert "stolen" in summary
+    assert "replacement" in summary
+
+
+def test_losing_a_card_freezes_it_and_sends_another(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    arguments = {"last4": "4417", "order_replacement": True}
+    token = executor.execute(call("freeze_card", **arguments)).result["token"]
+
+    out = executor.execute(call("freeze_card", **arguments, confirmation_token=token))
+
+    replacement = out.result["replacement"]
+    assert replacement["last4"] != "4417"
+    assert replacement["arrives_in_working_days"] == 5
+    frozen = next(c for c in bank.cards() if c.last4 == "4417")
+    issued = next(c for c in bank.cards() if c.last4 == replacement["last4"])
+    assert frozen.frozen is True
+    assert issued.frozen is False
+    assert issued.account == frozen.account, "the replacement draws on the same account"
+
+
+def test_freezing_without_asking_sends_no_card(bank: SqliteBank, executor: ToolExecutor) -> None:
+    before = len(bank.cards())
+    token = executor.execute(call("freeze_card", last4="4417")).result["token"]
+
+    out = executor.execute(call("freeze_card", last4="4417", confirmation_token=token))
+
+    assert out.result["replacement"] is None
+    assert len(bank.cards()) == before
+
+
+def test_a_stolen_card_opens_a_fraud_case(bank: SqliteBank, executor: ToolExecutor) -> None:
+    """A theft has to reach a person, and not because the model remembered."""
+    arguments = {"last4": "4417", "report_fraud": True}
+    token = executor.execute(call("freeze_card", **arguments)).result["token"]
+
+    out = executor.execute(call("freeze_card", **arguments, confirmation_token=token))
+
+    cases = bank.handoffs()
+    assert len(cases) == 1
+    assert cases[0].reason == "fraud"
+    assert out.result["reference"] == cases[0].reference
+
+
+def test_a_card_merely_lost_opens_no_case(bank: SqliteBank, executor: ToolExecutor) -> None:
+    arguments = {"last4": "4417", "order_replacement": True}
+    token = executor.execute(call("freeze_card", **arguments)).result["token"]
+    executor.execute(call("freeze_card", **arguments, confirmation_token=token))
+
+    assert bank.handoffs() == ()
+
+
+def test_a_frozen_card_is_still_only_four_digits(executor: ToolExecutor) -> None:
+    arguments = {"last4": "4417", "order_replacement": True}
+    token = executor.execute(call("freeze_card", **arguments)).result["token"]
+
+    out = executor.execute(call("freeze_card", **arguments, confirmation_token=token))
+
+    assert len(out.result["replacement"]["last4"]) == 4

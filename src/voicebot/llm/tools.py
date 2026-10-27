@@ -237,8 +237,11 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
     ),
     _function(
         "freeze_card",
-        "Freeze a card so nothing further goes through on it. Returns "
-        "needs_confirmation on the first call.",
+        "Freeze a card so nothing further goes through on it, and optionally "
+        "send a replacement. Returns needs_confirmation on the first call. "
+        "Use this for a card reported lost or stolen: it is one event and one "
+        "confirmation, so do not call order_card as well. Ask whether the "
+        "card was lost or stolen -- stolen means report_fraud.",
         {
             "last4": {
                 "type": "string",
@@ -246,8 +249,14 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             },
             "report_fraud": {
                 "type": "boolean",
-                "description": "True if the customer is reporting fraud rather than "
-                "just freezing the card.",
+                "description": (
+                    "True when the card was stolen or used by someone else, "
+                    "rather than simply mislaid. This reaches a specialist."
+                ),
+            },
+            "order_replacement": {
+                "type": "boolean",
+                "description": "True to send a new card on the same account.",
             },
         },
         ["last4"],

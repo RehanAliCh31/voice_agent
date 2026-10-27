@@ -1222,3 +1222,10 @@ body {
 }
 
 .bills__more:hover { color: var(--brand-deep); text-decoration: underline; }
+
+/* A frozen card allows nothing, so its switches are shown as not in force
+   rather than as permissions the card still grants. */
+.controls--frozen .control__name,
+.controls--frozen .control__detail { color: var(--ink-faint); }
+.controls--frozen .control__state { opacity: 0.4; }
+.controls--frozen .controls__hint { color: var(--bad); }

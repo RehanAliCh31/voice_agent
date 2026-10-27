@@ -643,7 +643,12 @@
   }
 
   function cardControls(card) {
-    var controls = node("div", "controls");
+    // A frozen card allows nothing, whatever its switches say. They are left
+    // showing their real values rather than flipped to off, because the
+    // columns have not changed and unfreezing restores exactly this -- but
+    // they are shown as not in force, so the screen is not telling the
+    // customer that online purchases work on a card that is dead.
+    var controls = node("div", "controls" + (card.frozen ? " controls--frozen" : ""));
 
     card.controls.forEach(function (control) {
       var row = node("div", "control");
@@ -668,8 +673,11 @@
       node(
         "p",
         "controls__hint",
-        "Ask to change one — say “turn off online purchases on my card”. " +
-          "Every change goes through the same confirmation as moving money."
+        card.frozen
+          ? "This card is frozen, so none of these are in force. They come " +
+            "back as they are when it is unfrozen."
+          : "Ask to change one — say “turn off online purchases on my card”. " +
+            "Every change goes through the same confirmation as moving money."
       )
     );
     return controls;

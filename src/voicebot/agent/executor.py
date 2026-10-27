@@ -297,9 +297,14 @@ class ToolExecutor:
         if name == "pay_bill":
             return {"bill": _require_text(arguments.get("bill"), "bill")}
         if name == "freeze_card":
+            last4 = _require_text(arguments.get("last4"), "last4")
+            if last4 not in {card.last4 for card in self.bank.cards()}:
+                known = ", ".join(card.last4 for card in self.bank.cards())
+                raise ValueError(f"I don't have a card ending {last4}. I have: {known}.")
             return {
-                "last4": _require_text(arguments.get("last4"), "last4"),
+                "last4": last4,
                 "report_fraud": bool(arguments.get("report_fraud", False)),
+                "order_replacement": bool(arguments.get("order_replacement", False)),
             }
         if name == "order_card":
             return {"account": _require_text(arguments.get("account"), "account")}
@@ -383,10 +388,17 @@ class ToolExecutor:
                 return f"Pay your {arguments['bill']} bill in full, {format_money(due)}"
             return f"Pay your {arguments['bill']} bill in full"
         if name == "freeze_card":
+            # Built from the parts rather than written out four times, so
+            # every combination reads as one sentence about one event.
             card = f"the card ending {arguments['last4']}"
-            if arguments.get("report_fraud"):
-                return f"Report {card} as fraudulent and freeze it"
-            return f"Freeze {card}"
+            opening = (
+                f"Report {card} as stolen and freeze it"
+                if arguments.get("report_fraud")
+                else f"Freeze {card}"
+            )
+            if arguments.get("order_replacement"):
+                return f"{opening}, and send a replacement"
+            return opening
         if name == "order_card":
             return f"Order a new card for {arguments['account']}"
         if name == "set_card_control":
@@ -671,12 +683,41 @@ class ToolExecutor:
 
     def _freeze_card(self, arguments: dict[str, Any]) -> ToolOutcome:
         card = self.bank.freeze_card(arguments["last4"])
+        stolen = bool(arguments.get("report_fraud"))
+
+        replacement = None
+        if arguments.get("order_replacement"):
+            # Against the card that was lost, not against an account chosen
+            # separately: the replacement draws on whatever the old one did.
+            issued = self.bank.order_card(card.account)
+            replacement = {
+                "last4": issued.last4,
+                "account": issued.account,
+                "arrives_in_working_days": 5,
+            }
+
+        # A theft is a fraud report, and a fraud report reaches a person.
+        # Opened here rather than left to the model to think of, for the same
+        # reason the customer's own request for a human is.
+        reference = None
+        if stolen:
+            case = self.bank.open_handoff(
+                self.session_id,
+                self.turn_index,
+                "fraud",
+                f"card ending {card.last4} reported stolen",
+            )
+            reference = case.reference
+            log.info("card %s reported stolen; opened %s", card.last4, reference)
+
         return ToolOutcome(
             {
                 "status": "done",
                 "last4": card.last4,
                 "frozen": True,
-                "reported_fraud": bool(arguments.get("report_fraud")),
+                "reported_fraud": stolen,
+                "replacement": replacement,
+                "reference": reference,
             }
         )
 
