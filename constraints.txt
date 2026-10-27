@@ -1,0 +1,32 @@
+# The versions this project is developed and tested against.
+#
+# pyproject.toml declares what is needed; this says which versions of it
+# were actually used, so an install in six months resolves to the same set
+# rather than to whatever is newest. Install with:
+#
+#     pip install -e ".[dev,serve]" -c constraints.txt
+#
+# Direct dependencies only, deliberately: a full freeze of the working
+# virtualenv would also pin packages left over from earlier iterations that
+# the project no longer declares.
+
+# core
+numpy==2.5.4
+pyyaml==6.0.3
+pydantic==2.14.1
+torch==2.14.1
+transformers==5.20.2
+
+# serve
+fastapi==0.159.1
+uvicorn==0.54.0
+python-multipart==0.0.32
+
+# dev
+pytest==9.1.1
+pytest-cov==7.0.0
+ruff==0.17.1
+black==26.10.1
+mypy==2.4.0
+types-PyYAML==6.0.12.20260906
+httpx==0.28.1

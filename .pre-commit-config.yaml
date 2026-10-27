@@ -1,0 +1,32 @@
+# The same gates CI runs, before the commit rather than after the push.
+#
+#   pip install pre-commit && pre-commit install
+#
+# Formatting and linting only. The test suite is not here on purpose: it
+# takes the best part of a minute, and a hook slow enough to be worth
+# skipping is a hook that gets skipped.
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(src|tests)/
+
+  - repo: https://github.com/psf/black
+    rev: 26.10.1
+    hooks:
+      - id: black
+        files: ^(src|tests)/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-toml
+      # The demo bank and any model checkpoint are not source.
+      - id: check-added-large-files
+        args: [--maxkb=500]

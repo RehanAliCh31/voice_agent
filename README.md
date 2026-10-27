@@ -118,9 +118,13 @@ could be removed outright.
 
 ```bash
 python -m venv .venv
-.venv/Scripts/pip install -e ".[dev,serve]"
+.venv/Scripts/pip install -e ".[dev,serve]" -c constraints.txt
 .venv/Scripts/python -m pytest
 ```
+
+`constraints.txt` pins the versions this was built and tested against, so an
+install months from now resolves to the same set rather than to whatever is
+newest.
 
 275 tests in about 15 seconds, plus 16 for the barge-in detector under
 `node --test "tests/js/*.test.js"`. Every external dependency sits behind an
@@ -244,8 +248,21 @@ each other's transfer.
 .venv/Scripts/python -m ruff check src tests     # lint
 .venv/Scripts/python -m black --check src tests  # formatting
 .venv/Scripts/python -m mypy src                 # types
-.venv/Scripts/python -m pytest                   # 275 tests
-node --test "tests/js/*.test.js"                 # 16 barge-in tests
+.venv/Scripts/python -m pytest                   # 472 tests
+.venv/Scripts/python -m pytest --cov=voicebot    # with coverage
+node --test tests/js/vad.test.js                 # 16 barge-in tests
+```
+
+All of these run on every push: see `.github/workflows/ci.yml`. The `live`
+tests are not among them, because the model endpoint is on a private network
+no runner can reach — run those by hand with `pytest -m live`.
+
+Coverage is gated at 90% and currently sits at 93%.
+
+To have the same checks run before a commit rather than after a push:
+
+```bash
+pip install pre-commit && pre-commit install
 ```
 
 ---
@@ -308,7 +325,10 @@ templates.
 
 ## Licences
 
-Check these before any commercial use — they are not all permissive:
+This project is MIT licensed — see `LICENSE`.
+
+The models it can load are not all permissive. Check these before any
+commercial use — they are not all permissive:
 
 | Component | Licence |
 |---|---|

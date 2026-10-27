@@ -14,6 +14,13 @@ env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Coverage artefacts. The report is produced on demand and in CI; the
+# database behind it is a build product like any other.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 .ipynb_checkpoints/
 
 # Editors
