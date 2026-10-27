@@ -1,4 +1,4 @@
-"""The thirteen things the model is allowed to do.
+"""The fourteen things the model is allowed to do.
 
 This file is the whole surface between a fluent model and a customer's money.
 Anything not described here, the bot cannot do — which is the point. Adding a
@@ -14,7 +14,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from voicebot.bank.base import DEPOSIT_SOURCES, HANDOFF_REASONS, PERIODS
+from voicebot.bank.base import (
+    DEPOSIT_SOURCES,
+    DISPUTE_REASONS,
+    HANDOFF_REASONS,
+    PERIODS,
+)
 
 # How many ledger rows a spoken answer can carry. A reply is read aloud, so a
 # list long enough to be useful on a screen is unusable in a conversation.
@@ -26,6 +31,7 @@ MAX_TRANSACTIONS = 20
 # the token back and executes. Enforced in the executor, not in the prompt.
 CONFIRMING: frozenset[str] = frozenset(
     {
+        "dispute_transaction",
         "transfer_money",
         "pay_bill",
         "freeze_card",
@@ -179,6 +185,30 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             "from_account": _ACCOUNT,
         },
         ["amount_cents", "payee", "from_account"],
+    ),
+    _function(
+        "dispute_transaction",
+        "File a dispute against one charge the customer says is wrong. Find "
+        "the charge with list_transactions first and pass its id. Returns "
+        "needs_confirmation on the first call. This files a claim and nothing "
+        "more: you cannot decide it, no money comes back now, and you must "
+        "not tell the customer the charge will be refunded.",
+        {
+            "transaction_id": {
+                "type": "integer",
+                "description": "The id of the charge, as list_transactions reports it.",
+            },
+            "reason": {
+                "type": "string",
+                "enum": list(DISPUTE_REASONS),
+                "description": "What the customer says is wrong with it.",
+            },
+            "note": {
+                "type": "string",
+                "description": "One short line in the customer's own words.",
+            },
+        },
+        ["transaction_id", "reason"],
     ),
     _function(
         "move_money",

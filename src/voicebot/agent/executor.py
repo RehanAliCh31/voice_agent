@@ -21,10 +21,13 @@ from typing import Any
 
 from voicebot.bank.base import (
     DEPOSIT_SOURCES,
+    DISPUTE_REASONS,
     Bank,
     BankError,
+    Transaction,
     account_not_payee_message,
     format_money,
+    unknown_dispute_reason_message,
     unknown_payee_message,
     unknown_source_message,
 )
@@ -300,6 +303,25 @@ class ToolExecutor:
             }
         if name == "order_card":
             return {"account": _require_text(arguments.get("account"), "account")}
+        if name == "dispute_transaction":
+            charge = self._charge(arguments.get("transaction_id"))
+            reason = _require_text(arguments.get("reason"), "reason").lower()
+            if reason not in DISPUTE_REASONS:
+                raise ValueError(unknown_dispute_reason_message(reason))
+            raised = {case.transaction_id for case in self.bank.disputes()}
+            if charge.id in raised:
+                # Checked here as well as in the bank: confirming a dispute
+                # that will be rejected means reading it back as though it
+                # will be filed, and the customer agreeing to nothing.
+                raise ValueError(
+                    f"The {charge.merchant} charge for "
+                    f"{format_money(abs(charge.cents))} has already been disputed."
+                )
+            return {
+                "transaction_id": charge.id,
+                "reason": reason,
+                "note": _optional_text(arguments.get("note")),
+            }
         if name == "move_money":
             source = _require_text(arguments.get("from_account"), "from_account")
             target = _require_text(arguments.get("to_account"), "to_account")
@@ -369,6 +391,14 @@ class ToolExecutor:
         if name == "deposit_money":
             amount = format_money(arguments["amount_cents"])
             return f"Pay {amount} into {arguments['account']} by {arguments['source']}"
+        if name == "dispute_transaction":
+            charge = self.bank.transaction(arguments["transaction_id"])
+            if charge is None:  # pragma: no cover - validated before this runs
+                return "Raise a dispute"
+            return (
+                f"Dispute the {format_money(abs(charge.cents))} {charge.merchant} "
+                f"charge as {arguments['reason']}"
+            )
         if name == "move_money":
             amount = format_money(arguments["amount_cents"])
             return (
@@ -393,6 +423,7 @@ class ToolExecutor:
             "deposit_money": self._deposit_money,
             "move_money": self._move_money,
             "hand_off": self._hand_off,
+            "dispute_transaction": self._dispute_transaction,
         }
 
     def _list_accounts(self, _: dict[str, Any]) -> ToolOutcome:
@@ -477,6 +508,10 @@ class ToolExecutor:
             {
                 "transactions": [
                     {
+                        # The handle a dispute refers to. Two $10.99 charges
+                        # are not interchangeable, and a merchant and amount
+                        # cannot tell them apart.
+                        "id": row.id,
                         "merchant": row.merchant,
                         "account": row.account,
                         "amount": format_money(abs(row.cents)),
@@ -527,6 +562,38 @@ class ToolExecutor:
                 "paid_cents": paid,
             },
             sourced_cents=(paid,),
+        )
+
+    def _charge(self, transaction_id: Any) -> Transaction:
+        """The ledger row a dispute is about, or a sentence saying it is not there."""
+        if isinstance(transaction_id, bool) or not isinstance(transaction_id, int):
+            raise ValueError("transaction_id must be the id list_transactions reported.")
+        charge = self.bank.transaction(transaction_id)
+        if charge is None:
+            raise ValueError("I can't find that charge on your account.")
+        return charge
+
+    def _dispute_transaction(self, arguments: dict[str, Any]) -> ToolOutcome:
+        case = self.bank.open_dispute(
+            arguments["transaction_id"], arguments["reason"], arguments["note"]
+        )
+        # No write counted: a dispute changes no balance. Saying otherwise
+        # would mark every figure looked up before it as stale, for a tool
+        # that moved nothing.
+        return ToolOutcome(
+            {
+                "status": "filed",
+                "reference": case.reference,
+                "merchant": case.merchant,
+                "amount": format_money(case.amount_cents),
+                "amount_cents": case.amount_cents,
+                "reason": case.reason,
+                # Named `outcome` rather than `status` so the model cannot
+                # read "filed" as a decision. It is open, and it stays open
+                # until a person closes it.
+                "outcome": case.status,
+            },
+            sourced_cents=(case.amount_cents,),
         )
 
     def _hand_off(self, arguments: dict[str, Any]) -> ToolOutcome:

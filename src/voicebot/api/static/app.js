@@ -403,12 +403,14 @@
       turn.appendChild(flag);
     }
 
-    if (options.reference) {
+    if (options.caseRef) {
       // Shown as its own line rather than left inside the sentence: this is
-      // the one thing the customer may need to write down.
+      // the one thing the customer may need to write down. The label says
+      // which kind it is, because a dispute and a handoff mean different
+      // things -- one filed a claim, the other ended the bot's part.
       var case_ = node("div", "turn__case");
-      case_.appendChild(node("span", "turn__case-label", "Passed to a specialist"));
-      case_.appendChild(node("span", "turn__case-ref", options.reference));
+      case_.appendChild(node("span", "turn__case-label", options.caseLabel));
+      case_.appendChild(node("span", "turn__case-ref", options.caseRef));
       turn.appendChild(case_);
     }
 
@@ -545,7 +547,8 @@
       audioBlob: blob,
       replayText: turn.speak_client_side && canSpeak() ? reply : null,
       guardHit: Boolean(turn.guard_hit),
-      reference: turn.handed_off || null,
+      caseRef: turn.handed_off || turn.dispute_filed || null,
+      caseLabel: turn.handed_off ? "Passed to a specialist" : "Dispute filed",
     });
 
     // Drawn after the conversation, so the ledger and the sentence the bot

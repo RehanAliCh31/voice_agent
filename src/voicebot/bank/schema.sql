@@ -40,6 +40,28 @@ CREATE TABLE IF NOT EXISTS transactions (
     occurred_at TEXT NOT NULL
 );
 
+-- Charges the customer says are wrong. Always open when the bot writes one:
+-- deciding a dispute needs evidence the bot has not got and authority it
+-- should not be given, so it files and a person rules.
+--
+-- The charge is copied in rather than referenced. A dispute is a claim about
+-- what happened on a date, so it has to stay readable whatever becomes of the
+-- ledger row -- and the demo reset empties that table. `transaction_id` is
+-- kept to locate the row while it exists, and is UNIQUE so one charge cannot
+-- be raised twice; ids are AUTOINCREMENT and never reused, so a cleared
+-- ledger cannot collide with an old case.
+CREATE TABLE IF NOT EXISTS disputes (
+    reference      TEXT PRIMARY KEY,
+    transaction_id INTEGER NOT NULL UNIQUE,
+    merchant       TEXT NOT NULL,
+    amount_cents   INTEGER NOT NULL,
+    occurred_at    TEXT NOT NULL,
+    reason         TEXT NOT NULL,
+    note           TEXT,
+    status         TEXT NOT NULL DEFAULT 'open',
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Conversations that left the bot for a person. The transcript is not copied
 -- here: `turns` already holds it for the session, and two copies of the same
 -- exchange are two things that can disagree. The reference is what the

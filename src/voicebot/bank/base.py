@@ -1,6 +1,6 @@
 """What a bank can do, and the vocabulary its callers share.
 
-The interface is deliberately narrow: fourteen operations, each one a thing a
+The interface is deliberately narrow: sixteen operations, each one a thing a
 customer can ask for. Anything the dialogue needs that is not on this list is
 a sign the dialogue is inventing capability.
 """
@@ -42,6 +42,7 @@ class Transaction:
     nobody has to remember which way round it goes.
     """
 
+    id: int
     account: str
     merchant: str
     cents: int
@@ -50,6 +51,25 @@ class Transaction:
     @property
     def spent(self) -> bool:
         return self.cents < 0
+
+
+@dataclass(frozen=True)
+class Dispute:
+    """A charge the customer says is wrong, and the case raised for it.
+
+    `amount_cents` is the charge as the ledger holds it, positive, so the
+    figure read back is the bank's and not the model's.
+    """
+
+    reference: str
+    transaction_id: int
+    merchant: str
+    amount_cents: int
+    occurred_at: str
+    reason: str
+    note: str | None
+    status: str
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -94,6 +114,39 @@ PERIODS: tuple[str, ...] = (
     "this month",
     "last month",
 )
+
+
+# What can be wrong with a charge. Closed, because the reason decides what
+# evidence the disputes team asks for, and "other" would mean asking for all
+# of it every time.
+DISPUTE_REASONS: tuple[str, ...] = (
+    "not recognised",
+    "never arrived",
+    "wrong amount",
+    "charged twice",
+    "subscription cancelled",
+)
+
+# How long after a charge it can still be raised. Card schemes impose a
+# window; a bot that ignores it files cases that are thrown out later, after
+# the customer has been told theirs was accepted.
+DISPUTE_WINDOW_DAYS = 120
+
+
+def unknown_dispute_reason_message(reason: str) -> str:
+    """Said aloud when a dispute names a reason the bank does not file."""
+    return (
+        f"{reason!r} is not something I can raise a dispute for. "
+        f"I can raise: {', '.join(DISPUTE_REASONS)}."
+    )
+
+
+def too_old_to_dispute_message(days: int) -> str:
+    """Said aloud when the charge is outside the window."""
+    return (
+        f"That charge is {days} days old, and a dispute has to be raised "
+        f"within {DISPUTE_WINDOW_DAYS} days. A colleague can still look at it."
+    )
 
 
 # Why a conversation left the bot. Closed, because the reason decides who
@@ -299,6 +352,33 @@ class Bank(ABC):
         """
 
     # --- audit ---------------------------------------------------------------
+
+    @abstractmethod
+    def transaction(self, transaction_id: int) -> Transaction | None:
+        """One ledger row by id, or None. Needed to read a charge back before
+        a dispute is filed against it."""
+
+    @abstractmethod
+    def open_dispute(
+        self,
+        transaction_id: int,
+        reason: str,
+        note: str | None = None,
+        now: datetime | None = None,
+    ) -> Dispute:
+        """File a dispute against one charge and return the case.
+
+        Files only. The returned case is always open, no money moves, and
+        nothing here decides whether the customer is right.
+
+        Raises BankError when the transaction is unknown, is money arriving
+        rather than a charge, has already been disputed, is older than
+        DISPUTE_WINDOW_DAYS, or the reason is not one of DISPUTE_REASONS.
+        """
+
+    @abstractmethod
+    def disputes(self) -> tuple[Dispute, ...]:
+        """Every dispute on file, newest first."""
 
     @abstractmethod
     def open_handoff(

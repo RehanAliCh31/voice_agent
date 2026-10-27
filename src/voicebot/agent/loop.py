@@ -244,6 +244,10 @@ class AgentResult:
     # page shows it; a caller can tell a handed-off turn from an ordinary one
     # without reading the reply.
     handed_off: str | None = None
+    # The reference of a dispute this turn filed. Separate from a handoff:
+    # one means the bot stopped, the other that a claim was raised and the
+    # conversation carries on.
+    dispute_filed: str | None = None
 
 
 class Agent:
@@ -446,7 +450,7 @@ class Agent:
             arguments={"reason": "customer asked"},
         )
         outcome = self.executor.execute(call)
-        reference = _reference([outcome])
+        reference = _reference([outcome], "handed_off")
         if reference is None:  # pragma: no cover - the bank refused its own reason
             log.warning("could not open a handoff the customer asked for")
             return result
@@ -467,6 +471,7 @@ class Agent:
             suppressed=result.suppressed,
             rounds=result.rounds,
             handed_off=reference,
+            dispute_filed=result.dispute_filed,
         )
 
     def _allowed(self, conversation: Conversation, sourced: tuple[int, ...]) -> tuple[int, ...]:
@@ -529,14 +534,15 @@ class Agent:
             guard_hit=hit,
             suppressed=suppressed,
             rounds=rounds,
-            handed_off=_reference(outcomes),
+            handed_off=_reference(outcomes, "handed_off"),
+            dispute_filed=_reference(outcomes, "filed"),
         )
 
 
-def _reference(outcomes: Sequence[ToolOutcome]) -> str | None:
-    """The case reference this turn opened, if it opened one."""
+def _reference(outcomes: Sequence[ToolOutcome], status: str) -> str | None:
+    """The reference of a case this turn opened with that status, if any."""
     for outcome in outcomes:
-        if outcome.result.get("status") == "handed_off":
+        if outcome.result.get("status") == status:
             reference = outcome.result.get("reference")
             if isinstance(reference, str):
                 return reference

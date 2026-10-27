@@ -551,3 +551,26 @@ def test_the_case_knows_which_conversation_raised_it(client: TestClient) -> None
     case = bank.handoffs(session_id=body["session_id"])
     assert case and case[0].reference == body["handed_off"]
     assert case[0].turn_index == 1
+
+
+def test_a_turn_reports_a_dispute_it_filed(client: TestClient) -> None:
+    claim = {"transaction_id": 1, "reason": "not recognised"}
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "dispute_transaction", claim),)),
+            Reply(text="Shall I raise that?"),
+            Reply(text="Filed."),
+        ],
+    )
+    sid = client.post("/v1/chat", json={"text": "I don't know that charge"}).json()["session_id"]
+
+    body = client.post("/v1/confirm", json={"session_id": sid}).json()
+
+    assert body["dispute_filed"]
+    assert body["handed_off"] is None, "a dispute is filed, not a handoff"
+
+
+def test_an_ordinary_turn_files_no_dispute(client: TestClient) -> None:
+    scripted(client, [Reply(text="Hello there.")])
+    assert client.post("/v1/chat", json={"text": "hi"}).json()["dispute_filed"] is None

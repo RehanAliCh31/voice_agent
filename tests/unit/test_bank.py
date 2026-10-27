@@ -6,7 +6,7 @@ other and from any file on disk, and they exercise real SQL rather than a mock.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -424,3 +424,91 @@ def test_a_handoff_survives_the_demo_reset(bank: SqliteBank) -> None:
     bank.reset()
 
     assert len(bank.handoffs()) == 1
+
+
+def test_a_transaction_carries_its_id(bank: SqliteBank) -> None:
+    """Without it nothing downstream can name one row rather than another."""
+    rows = bank.transactions(limit=3)
+
+    assert all(row.id for row in rows)
+    assert len({row.id for row in rows}) == 3
+
+
+# --- disputing a charge ------------------------------------------------------
+#
+# The bank files a dispute. It never settles one. Deciding whether a charge
+# was really unauthorised needs evidence the bot does not have and authority
+# it should not be given, so every case it opens is open, and a person closes
+# it. That is also why nothing is credited back here.
+
+
+def _netflix(bank: SqliteBank) -> int:
+    return bank.transactions(merchant="netflix")[0].id
+
+
+def test_a_dispute_is_filed_against_one_transaction(bank: SqliteBank) -> None:
+    case = bank.open_dispute(_netflix(bank), "not recognised", "I cancelled this")
+
+    assert case.reference
+    assert case.transaction_id == _netflix(bank)
+    assert case.reason == "not recognised"
+    assert case.amount_cents == 1_099
+
+
+def test_a_filed_dispute_is_always_open(bank: SqliteBank) -> None:
+    """The bot has no authority to decide one, so it records none."""
+    assert bank.open_dispute(_netflix(bank), "not recognised").status == "open"
+
+
+def test_filing_a_dispute_moves_no_money(bank: SqliteBank) -> None:
+    before = bank.balance("checking")
+    bank.open_dispute(_netflix(bank), "charged twice")
+
+    assert bank.balance("checking") == before
+
+
+def test_the_same_charge_cannot_be_disputed_twice(bank: SqliteBank) -> None:
+    bank.open_dispute(_netflix(bank), "not recognised")
+
+    with pytest.raises(BankError, match="already"):
+        bank.open_dispute(_netflix(bank), "charged twice")
+
+
+def test_a_charge_that_does_not_exist_is_refused(bank: SqliteBank) -> None:
+    with pytest.raises(BankError):
+        bank.open_dispute(999_999, "not recognised")
+
+
+def test_an_unknown_reason_is_refused_for_a_dispute(bank: SqliteBank) -> None:
+    with pytest.raises(BankError, match="not recognised"):
+        bank.open_dispute(_netflix(bank), "I just don't like it")
+
+
+def test_money_arriving_cannot_be_disputed(bank: SqliteBank) -> None:
+    """A dispute is about a charge. Being paid is not one."""
+    bank.deposit(25_000, "checking", "cheque")
+    paid_in = bank.transactions(limit=1)[0]
+
+    with pytest.raises(BankError):
+        bank.open_dispute(paid_in.id, "not recognised")
+
+
+def test_a_charge_too_old_to_dispute_is_refused(bank: SqliteBank) -> None:
+    """Card schemes give a window, and a bot that ignores it raises cases
+    that are rejected later -- after the customer was told it was filed."""
+    long_after = datetime.now() + timedelta(days=400)
+
+    with pytest.raises(BankError, match="120 days"):
+        bank.open_dispute(_netflix(bank), "not recognised", now=long_after)
+
+
+def test_disputes_can_be_listed(bank: SqliteBank) -> None:
+    bank.open_dispute(_netflix(bank), "not recognised")
+    assert len(bank.disputes()) == 1
+
+
+def test_a_dispute_survives_the_demo_reset(bank: SqliteBank) -> None:
+    bank.open_dispute(_netflix(bank), "not recognised")
+    bank.reset()
+
+    assert len(bank.disputes()) == 1

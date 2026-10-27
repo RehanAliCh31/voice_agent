@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 
 from voicebot.bank.base import (
+    DISPUTE_REASONS,
+    DISPUTE_WINDOW_DAYS,
     HANDOFF_REASONS,
     PERIODS,
     Account,
@@ -23,12 +25,15 @@ from voicebot.bank.base import (
     BankError,
     Bill,
     Card,
+    Dispute,
     Handoff,
     Payee,
     Transaction,
     account_not_payee_message,
     format_money,
     period_range,
+    too_old_to_dispute_message,
+    unknown_dispute_reason_message,
     unknown_payee_message,
     unknown_period_message,
     unknown_reason_message,
@@ -99,7 +104,7 @@ class SqliteBank(Bank):
         account: str | None = None,
         merchant: str | None = None,
     ) -> tuple[Transaction, ...]:
-        sql = "SELECT account, merchant, cents, occurred_at FROM transactions"
+        sql = "SELECT id, account, merchant, cents, occurred_at FROM transactions"
         clauses: list[str] = []
         params: list[object] = []
 
@@ -117,15 +122,7 @@ class SqliteBank(Bank):
         sql += " ORDER BY occurred_at DESC, id DESC LIMIT ?"
         params.append(max(1, limit))
 
-        return tuple(
-            Transaction(
-                account=row["account"],
-                merchant=row["merchant"],
-                cents=int(row["cents"]),
-                occurred_at=row["occurred_at"],
-            )
-            for row in self._db.execute(sql, params).fetchall()
-        )
+        return tuple(_transaction(row) for row in self._db.execute(sql, params).fetchall())
 
     def spending(self, period: str, merchant: str | None = None) -> int:
         if period not in PERIODS:
@@ -274,6 +271,90 @@ class SqliteBank(Bank):
 
     # --- audit ---------------------------------------------------------------
 
+    def transaction(self, transaction_id: int) -> Transaction | None:
+        row = self._db.execute(
+            "SELECT id, account, merchant, cents, occurred_at FROM transactions WHERE id = ?",
+            (transaction_id,),
+        ).fetchone()
+        return None if row is None else _transaction(row)
+
+    # --- disputing a charge --------------------------------------------------
+
+    def open_dispute(
+        self,
+        transaction_id: int,
+        reason: str,
+        note: str | None = None,
+        now: datetime | None = None,
+    ) -> Dispute:
+        key = reason.strip().lower()
+        if key not in DISPUTE_REASONS:
+            raise BankError(unknown_dispute_reason_message(reason))
+
+        row = self._db.execute(
+            "SELECT id, merchant, cents, occurred_at FROM transactions WHERE id = ?",
+            (transaction_id,),
+        ).fetchone()
+        if row is None:
+            raise BankError("I can't find that charge on your account.")
+        if row["cents"] >= 0:
+            raise BankError(
+                f"That is money paid in, not a charge. "
+                f"There is nothing to dispute about {row['merchant']}."
+            )
+
+        age = (now or datetime.now()) - datetime.fromisoformat(row["occurred_at"])
+        if age.days > DISPUTE_WINDOW_DAYS:
+            raise BankError(too_old_to_dispute_message(age.days))
+
+        if self._db.execute(
+            "SELECT 1 FROM disputes WHERE transaction_id = ?", (transaction_id,)
+        ).fetchone():
+            raise BankError(
+                f"The {row['merchant']} charge for "
+                f"{format_money(abs(int(row['cents'])))} has already been disputed."
+            )
+
+        reference = _reference()
+        with self._db:
+            self._db.execute(
+                "INSERT INTO disputes (reference, transaction_id, merchant, "
+                "amount_cents, occurred_at, reason, note) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    reference,
+                    transaction_id,
+                    row["merchant"],
+                    abs(int(row["cents"])),
+                    row["occurred_at"],
+                    key,
+                    note,
+                ),
+            )
+        return self._dispute(reference)
+
+    def disputes(self) -> tuple[Dispute, ...]:
+        rows = self._db.execute(
+            "SELECT reference FROM disputes ORDER BY created_at DESC, rowid DESC"
+        ).fetchall()
+        return tuple(self._dispute(row["reference"]) for row in rows)
+
+    def _dispute(self, reference: str) -> Dispute:
+        """Read one case back. No join: the charge is held on the case."""
+        row = self._db.execute(
+            "SELECT * FROM disputes WHERE reference = ?", (reference,)
+        ).fetchone()
+        return Dispute(
+            reference=row["reference"],
+            transaction_id=int(row["transaction_id"]),
+            merchant=row["merchant"],
+            amount_cents=int(row["amount_cents"]),
+            occurred_at=row["occurred_at"],
+            reason=row["reason"],
+            note=row["note"],
+            status=row["status"],
+            created_at=row["created_at"],
+        )
+
     # --- handing a customer to a person --------------------------------------
 
     def open_handoff(
@@ -392,6 +473,16 @@ def _reference() -> str:
     """A short case reference a customer can repeat without spelling it out."""
     body = "".join(secrets.choice(_REFERENCE_ALPHABET) for _ in range(6))
     return f"VB-{body}"
+
+
+def _transaction(row: sqlite3.Row) -> Transaction:
+    return Transaction(
+        id=int(row["id"]),
+        account=row["account"],
+        merchant=row["merchant"],
+        cents=int(row["cents"]),
+        occurred_at=row["occurred_at"],
+    )
 
 
 def _handoff(row: sqlite3.Row) -> Handoff:

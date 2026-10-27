@@ -19,6 +19,8 @@ from voicebot.llm.tools import CONFIRMING, TOOL_SCHEMAS
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
 DEPOSIT = {"amount_cents": 25_000, "account": "checking", "source": "cheque"}
 MOVE = {"amount_cents": 50_000, "from_account": "checking", "to_account": "savings"}
+# The seed writes its spending rows first, so id 1 is a real charge.
+DISPUTE = {"transaction_id": 1, "reason": "not recognised"}
 CONFIRMING_CALLS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("transfer_money", TRANSFER),
     ("pay_bill", {"bill": "electricity"}),
@@ -26,6 +28,7 @@ CONFIRMING_CALLS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("order_card", {"account": "checking"}),
     ("deposit_money", DEPOSIT),
     ("move_money", MOVE),
+    ("dispute_transaction", DISPUTE),
 )
 
 
@@ -46,15 +49,15 @@ def call(name: str, **arguments: Any) -> ToolCall:
 # --- the schemas -------------------------------------------------------------
 
 
-def test_there_are_thirteen_well_formed_schemas() -> None:
+def test_there_are_fourteen_well_formed_schemas() -> None:
     """The count is asserted on purpose: a new tool is a deliberate act.
 
     Every schema added is another choice the model has to get right, and the
     surface between it and a customer's money widening by one.
     """
     names = {schema["function"]["name"] for schema in TOOL_SCHEMAS}
-    assert len(TOOL_SCHEMAS) == 13
-    assert len(names) == 13
+    assert len(TOOL_SCHEMAS) == 14
+    assert len(names) == 14
     assert CONFIRMING <= names
 
     for schema in TOOL_SCHEMAS:
@@ -572,3 +575,85 @@ def test_an_unroutable_reason_comes_back_as_a_sentence(executor: ToolExecutor) -
 
     assert "error" in out.result
     assert "fraud" in out.result["error"]
+
+
+def test_a_listed_transaction_can_be_named_again(executor: ToolExecutor) -> None:
+    """The id is what a dispute refers to; two $10.99 charges are not alike."""
+    out = executor.execute(call("list_transactions", limit=3))
+
+    rows = out.result["transactions"]
+    assert all(isinstance(row["id"], int) for row in rows)
+
+
+# --- disputing a charge ------------------------------------------------------
+
+
+def _netflix_id(bank: SqliteBank) -> int:
+    return bank.transactions(merchant="netflix")[0].id
+
+
+def test_a_dispute_is_read_back_with_the_charge(bank: SqliteBank, executor: ToolExecutor) -> None:
+    """The customer agrees to a specific charge, not to the idea of one."""
+    out = executor.execute(
+        call("dispute_transaction", transaction_id=_netflix_id(bank), reason="not recognised")
+    )
+
+    summary = out.result["summary"]
+    assert "netflix" in summary.lower()
+    assert "$10.99" in summary
+    assert "not recognised" in summary
+
+
+def test_a_confirmed_dispute_is_filed(bank: SqliteBank, executor: ToolExecutor) -> None:
+    arguments = {"transaction_id": _netflix_id(bank), "reason": "not recognised"}
+    token = executor.execute(call("dispute_transaction", **arguments)).result["token"]
+
+    out = executor.execute(call("dispute_transaction", **arguments, confirmation_token=token))
+
+    assert out.result["status"] == "filed"
+    assert out.result["reference"]
+    assert out.result["outcome"] == "open"
+    assert len(bank.disputes()) == 1
+
+
+def test_filing_a_dispute_moves_no_money(bank: SqliteBank, executor: ToolExecutor) -> None:
+    arguments = {"transaction_id": _netflix_id(bank), "reason": "charged twice"}
+    token = executor.execute(call("dispute_transaction", **arguments)).result["token"]
+    before = bank.balance("checking")
+
+    executor.execute(call("dispute_transaction", **arguments, confirmation_token=token))
+
+    assert bank.balance("checking") == before
+    assert executor.writes == 0
+
+
+def test_the_disputed_amount_is_sourced(bank: SqliteBank, executor: ToolExecutor) -> None:
+    arguments = {"transaction_id": _netflix_id(bank), "reason": "not recognised"}
+    token = executor.execute(call("dispute_transaction", **arguments)).result["token"]
+
+    out = executor.execute(call("dispute_transaction", **arguments, confirmation_token=token))
+
+    assert 1_099 in out.sourced_cents
+
+
+def test_a_charge_already_disputed_comes_back_as_a_sentence(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    bank.open_dispute(_netflix_id(bank), "not recognised")
+
+    out = executor.execute(
+        call("dispute_transaction", transaction_id=_netflix_id(bank), reason="charged twice")
+    )
+
+    assert "error" in out.result
+    assert "already" in out.result["error"]
+
+
+def test_an_unknown_charge_never_becomes_pending(executor: ToolExecutor) -> None:
+    """Validated before the read-back, like every other impossible request."""
+    out = executor.execute(
+        call("dispute_transaction", transaction_id=999_999, reason="never arrived")
+    )
+
+    assert "error" in out.result
+    assert executor.pending is None
