@@ -450,9 +450,9 @@
   // --- the screens ----------------------------------------------------------
 
   /**
-   * Show one screen. The dock and any pending confirmation live outside the
-   * screens, so switching never interrupts a turn or loses a yes that is
-   * still waiting to be given.
+   * Show one screen. Switching never interrupts a turn: the conversation
+   * card keeps its state while hidden, so a pending confirmation is still
+   * there, and still armed, when the Assistant comes back.
    */
   function showView(name) {
     state.view = name;
@@ -469,10 +469,6 @@
         view.hidden = !chosen;
       }
     });
-    // The microphone belongs to the conversation. On a screen that is being
-    // read rather than talked to it is clutter, and the status line under it
-    // would be describing a turn that is not on screen.
-    el.dock.hidden = name !== "assistant";
     el.views.scrollTop = 0;
     if (name === "transactions") {
       loadStatement();
@@ -1624,7 +1620,7 @@
       "screens", "statement", "statementTotal", "statementMonth",
       "statementIn", "statementOut", "cardPicker", "cardPane",
       "monthlyPlans", "monthlyCommitted", "monthlyMonth", "monthlyPaid",
-      "monthlyLeft", "monthlyBar", "dock",
+      "monthlyLeft", "monthlyBar",
       "cardAsk", "askTitle", "askWhy", "askReason", "askSure", "askSummary",
       "askError", "askCancel", "askGo",
       "cardDetails", "detailsList", "detailsClock", "detailsClose",

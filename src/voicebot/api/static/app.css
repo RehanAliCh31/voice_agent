@@ -302,7 +302,7 @@ body {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-  min-height: 420px;
+  min-height: 560px;
 }
 
 .conversation {
@@ -505,14 +505,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  background: var(--card);
   flex-shrink: 0;
 }
-
-/* The display above outranks the browser's own [hidden] rule, so the dock
-   has to be hidden explicitly -- the same trap the confirmation bar fell
-   into. */
-.dock[hidden] { display: none; }
 
 .dock__row { display: flex; align-items: center; gap: 16px; }
 

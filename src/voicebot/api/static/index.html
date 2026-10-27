@@ -69,6 +69,59 @@
           <p class="empty__text">Press the microphone and ask about a balance, a transfer, or a bill.</p>
         </div>
       </div>
+
+    <!-- Part of the conversation card, under the messages: the confirmation
+         and the microphone belong to the exchange above them, and sit in the
+         same column rather than across the window. -->
+    <div class="confirm" id="confirm" hidden>
+      <p class="confirm__text">This moves money. Say yes, or choose below.</p>
+      <div class="confirm__buttons">
+        <button class="button button--go" id="confirmYes" type="button">Yes, confirm</button>
+        <button class="button button--stop" id="confirmNo" type="button">Cancel</button>
+      </div>
+    </div>
+
+    <div class="dock">
+      <div class="dock__row">
+        <button class="mic" id="micButton" type="button" data-state="idle" aria-label="Start recording">
+          <span class="mic__ring" aria-hidden="true"></span>
+          <span class="mic__face" aria-hidden="true">
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>
+            </svg>
+          </span>
+        </button>
+
+        <div class="status">
+          <p class="status__label" id="statusLabel">Ready</p>
+          <p class="status__hint" id="statusHint">Tap the microphone to start a turn</p>
+          <div class="level" aria-hidden="true"><span class="level__fill" id="levelFill"></span></div>
+        </div>
+      </div>
+
+      <form class="say" id="sayForm" autocomplete="off">
+        <label class="say__label" for="sayInput">Type instead</label>
+        <input class="say__input" id="sayInput" type="text" placeholder="what is my checking balance">
+        <button class="button button--quiet" type="submit">Send</button>
+      </form>
+
+      <div class="bargein" data-enabled="true">
+        <label class="switch" for="vadToggle">
+          <input type="checkbox" id="vadToggle" checked>
+          <span class="switch__track" aria-hidden="true"></span>
+          <span class="switch__label">Interrupt by speaking</span>
+        </label>
+
+        <div class="slider">
+          <label class="slider__label" for="vadSensitivity">Sensitivity</label>
+          <input type="range" id="vadSensitivity" min="1" max="10" value="5">
+          <output class="slider__value" id="vadValue">5</output>
+        </div>
+
+        <p class="bargein__note" id="vadNote">Speak while the bot is talking and it will stop and listen.</p>
+      </div>
+    </div>
+
     </section>
   </section>
 
@@ -203,59 +256,6 @@
     <button class="button button--go" type="button" id="askGo">Done</button>
   </div>
 </dialog>
-
-<!-- Outside the screens, but not shown on all of them. A pending action
-     stays visible wherever the customer is reading, because a yes waiting
-     to be given should not be hidden behind a tab. The microphone goes with
-     the conversation it belongs to. -->
-<div class="confirm" id="confirm" hidden>
-  <p class="confirm__text">This moves money. Say yes, or choose below.</p>
-  <div class="confirm__buttons">
-    <button class="button button--go" id="confirmYes" type="button">Yes, confirm</button>
-    <button class="button button--stop" id="confirmNo" type="button">Cancel</button>
-  </div>
-</div>
-
-<div class="dock" id="dock">
-  <div class="dock__row">
-    <button class="mic" id="micButton" type="button" data-state="idle" aria-label="Start recording">
-      <span class="mic__ring" aria-hidden="true"></span>
-      <span class="mic__face" aria-hidden="true">
-        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round">
-          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>
-        </svg>
-      </span>
-    </button>
-
-    <div class="status">
-      <p class="status__label" id="statusLabel">Ready</p>
-      <p class="status__hint" id="statusHint">Tap the microphone to start a turn</p>
-      <div class="level" aria-hidden="true"><span class="level__fill" id="levelFill"></span></div>
-    </div>
-  </div>
-
-  <form class="say" id="sayForm" autocomplete="off">
-    <label class="say__label" for="sayInput">Type instead</label>
-    <input class="say__input" id="sayInput" type="text" placeholder="what is my checking balance">
-    <button class="button button--quiet" type="submit">Send</button>
-  </form>
-
-  <div class="bargein" data-enabled="true">
-    <label class="switch" for="vadToggle">
-      <input type="checkbox" id="vadToggle" checked>
-      <span class="switch__track" aria-hidden="true"></span>
-      <span class="switch__label">Interrupt by speaking</span>
-    </label>
-
-    <div class="slider">
-      <label class="slider__label" for="vadSensitivity">Sensitivity</label>
-      <input type="range" id="vadSensitivity" min="1" max="10" value="5">
-      <output class="slider__value" id="vadValue">5</output>
-    </div>
-
-    <p class="bargein__note" id="vadNote">Speak while the bot is talking and it will stop and listen.</p>
-  </div>
-</div>
 
 <script src="vad.js"></script>
 <script src="app.js"></script>
