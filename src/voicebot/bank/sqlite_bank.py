@@ -41,7 +41,7 @@ from voicebot.bank.base import (
     unknown_period_message,
     unknown_reason_message,
 )
-from voicebot.bank.seed import clear, seed, seed_payees
+from voicebot.bank.seed import clear, seed, seed_payees, seed_plans
 from voicebot.utils.logging import get_logger
 
 log = get_logger("bank.sqlite")
@@ -72,6 +72,11 @@ class SqliteBank(Bank):
             # empty payees table. Left empty, every transfer would be refused
             # for want of a payee that was never inserted.
             seed_payees(self._db)
+            # Likewise the commitments: the columns were added above and took
+            # their defaults, which filed every bill under Bills on the 1st,
+            # and the ones that never existed in the old file are still
+            # missing. Columns alone were never the whole migration.
+            seed_plans(self._db)
 
     # --- reads ---------------------------------------------------------------
 

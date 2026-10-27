@@ -693,3 +693,59 @@ def test_a_bank_file_made_before_categories_gains_them(tmp_path) -> None:
     bill = next(b for b in SqliteBank(str(path)).bills() if b.name == "electricity")
     assert bill.category == "bills"
     assert bill.due_day >= 1
+
+
+def test_an_older_bank_file_gains_the_commitments_it_never_had(tmp_path) -> None:
+    """Adding the columns was not enough; the rows had to be put right too.
+
+    A file written before categories existed holds the five original bills
+    and none of rent, groceries or the subscriptions. The new columns took
+    their defaults, so everything landed under Bills and fell due on the
+    1st -- which is what the monthly screen showed.
+    """
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE accounts (name TEXT PRIMARY KEY, balance_cents INTEGER NOT NULL);"
+        "CREATE TABLE bills (name TEXT PRIMARY KEY, amount_cents INTEGER NOT NULL, "
+        "paid INTEGER NOT NULL DEFAULT 0);"
+        "INSERT INTO accounts VALUES ('checking', 100);"
+        "INSERT INTO bills VALUES ('electricity', 7250, 0), ('water', 3100, 0), "
+        "('phone', 2499, 0), ('internet', 4000, 0), ('credit card', 21500, 1);"
+    )
+    old.commit()
+    old.close()
+
+    bills = {bill.name: bill for bill in SqliteBank(str(path)).bills()}
+
+    assert {"rent", "groceries", "spotify", "netflix"} <= set(bills)
+    assert bills["internet"].category == "wifi"
+    assert bills["electricity"].due_day == 5
+    assert len({bill.due_day for bill in bills.values()}) > 1
+
+
+def test_putting_an_older_file_right_leaves_the_customers_own_state_alone(tmp_path) -> None:
+    """Category and due day are the bank's. The amount and whether it is
+    paid are the customer's, and reconciling must not touch them."""
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE accounts (name TEXT PRIMARY KEY, balance_cents INTEGER NOT NULL);"
+        "CREATE TABLE bills (name TEXT PRIMARY KEY, amount_cents INTEGER NOT NULL, "
+        "paid INTEGER NOT NULL DEFAULT 0);"
+        "INSERT INTO accounts VALUES ('checking', 100);"
+        "INSERT INTO bills VALUES ('electricity', 9999, 1);"
+    )
+    old.commit()
+    old.close()
+
+    electricity = next(b for b in SqliteBank(str(path)).bills() if b.name == "electricity")
+
+    assert electricity.amount_cents == 9999, "their bill, not the seed's"
+    assert electricity.paid is True, "already paid, and it stays paid"
+    assert electricity.category == "bills"
+    assert electricity.due_day == 5

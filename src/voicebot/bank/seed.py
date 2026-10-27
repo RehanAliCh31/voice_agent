@@ -109,6 +109,35 @@ def seed_payees(connection: sqlite3.Connection) -> None:
         connection.executemany("INSERT INTO payees VALUES (?)", [(name,) for name in PAYEES])
 
 
+def seed_plans(connection: sqlite3.Connection) -> None:
+    """Make sure every monthly commitment exists and is filed correctly.
+
+    Safe on a database that already holds bills, which is the case this is
+    for. A file written before categories existed has the five original rows
+    and none of rent, groceries or the subscriptions, and the columns added
+    for them took their defaults -- so everything landed under Bills and fell
+    due on the 1st.
+
+    Adding the columns was never enough on its own. The amount and whether it
+    is paid belong to the customer and are left exactly as they are; the
+    category and the due day are the bank's own filing, so only those are put
+    right.
+    """
+    with connection:
+        for name, cents, category, due_day in BILLS:
+            if connection.execute("SELECT 1 FROM bills WHERE name = ?", (name,)).fetchone():
+                connection.execute(
+                    "UPDATE bills SET category = ?, due_day = ? WHERE name = ?",
+                    (category, due_day, name),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO bills (name, amount_cents, paid, category, due_day) "
+                    "VALUES (?, ?, 0, ?, ?)",
+                    (name, cents, category, due_day),
+                )
+
+
 def clear(connection: sqlite3.Connection) -> None:
     """Empty the account tables, leaving `turns` untouched."""
     with connection:
