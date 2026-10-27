@@ -131,6 +131,32 @@
 
 </main>
 
+<!-- Asking before acting, in two steps: why, then are you sure. A native
+     dialog, so Escape closes it and focus stays inside without any of that
+     being written here. -->
+<dialog class="ask" id="cardAsk" aria-labelledby="askTitle">
+  <h2 class="ask__title" id="askTitle">Freeze this card</h2>
+
+  <div class="ask__step" id="askWhy">
+    <label class="ask__label" for="askReason">Why are you doing this?</label>
+    <textarea class="ask__input" id="askReason" rows="3"
+              placeholder="I left it in a taxi"></textarea>
+    <p class="ask__note">This is written down with the action.</p>
+  </div>
+
+  <div class="ask__step" id="askSure" hidden>
+    <p class="ask__summary" id="askSummary"></p>
+    <p class="ask__note">This cannot be undone from here.</p>
+  </div>
+
+  <p class="ask__error" id="askError" hidden></p>
+
+  <div class="ask__buttons">
+    <button class="button button--quiet" type="button" id="askCancel">Cancel</button>
+    <button class="button button--go" type="button" id="askGo">Done</button>
+  </div>
+</dialog>
+
 <!-- Outside the screens, but not shown on all of them. A pending action
      stays visible wherever the customer is reading, because a yes waiting
      to be given should not be hidden behind a tab. The microphone goes with

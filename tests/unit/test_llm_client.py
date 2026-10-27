@@ -190,3 +190,32 @@ def test_the_fake_raises_when_its_script_runs_out() -> None:
     fake.complete([], [])
     with pytest.raises(IndexError):
         fake.complete([], [])
+
+
+# --- the fake refuses what the real server refuses ----------------------------
+
+
+def test_the_fake_refuses_a_history_with_nobody_in_it() -> None:
+    """A tool call and its result, and nothing a customer ever said.
+
+    The real server answers that with 400 "no user query found", and the fake
+    used to answer it happily -- so a bug that broke every screen action in
+    the browser passed the whole suite. It raises now, for the same reason it
+    raises when its script runs out.
+    """
+    fake = FakeLLMClient([Reply(text="sure")])
+
+    with pytest.raises(ValueError, match="user"):
+        fake.complete(
+            [
+                {"role": "system", "content": "..."},
+                {"role": "assistant", "tool_calls": [{"id": "c1"}]},
+                {"role": "tool", "tool_call_id": "c1", "content": "{}"},
+            ],
+            [],
+        )
+
+
+def test_the_fake_still_allows_an_empty_history() -> None:
+    """Client tests call it with nothing at all, which is not the same bug."""
+    assert FakeLLMClient([Reply(text="hello")]).complete([], []).text == "hello"

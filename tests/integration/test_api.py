@@ -727,3 +727,123 @@ def test_a_plan_says_when_it_falls_due(client: TestClient) -> None:
 
     assert {"name", "amount", "amount_cents", "due_day", "due_label", "paid"} <= set(plan)
     assert plan["due_label"]
+
+
+# --- acting from a screen ----------------------------------------------------
+#
+# The card buttons are not a second way to change an account. They arm the
+# same pending action the spoken path arms, and the same /v1/confirm settles
+# it -- so a click and a sentence go through one gate, and the model is told
+# either way.
+
+
+def test_arming_from_a_screen_changes_nothing_yet(client: TestClient) -> None:
+    body = client.post(
+        "/v1/action",
+        json={"tool": "freeze_card", "arguments": {"last4": "4417"}, "reason": "left it in a taxi"},
+    ).json()
+
+    assert body["armed"] is True
+    assert "4417" in body["summary"]
+    assert not any(c["frozen"] for c in client.get("/v1/cards").json()["cards"])
+
+
+def test_confirming_a_screen_action_settles_it(client: TestClient) -> None:
+    scripted(client, [Reply(text="That card is frozen now.")])
+    armed = client.post(
+        "/v1/action",
+        json={"tool": "freeze_card", "arguments": {"last4": "4417"}, "reason": "lost"},
+    ).json()
+
+    client.post("/v1/confirm", json={"session_id": armed["session_id"]})
+
+    frozen = {c["last4"] for c in client.get("/v1/cards").json()["cards"] if c["frozen"]}
+    assert frozen == {"4417"}
+
+
+def test_replacing_from_a_screen_sends_another_card(client: TestClient) -> None:
+    scripted(client, [Reply(text="Done.")])
+    before = len(client.get("/v1/cards").json()["cards"])
+    armed = client.post(
+        "/v1/action",
+        json={
+            "tool": "freeze_card",
+            "arguments": {"last4": "4417", "order_replacement": True},
+            "reason": "the chip stopped working",
+        },
+    ).json()
+    assert "replacement" in armed["summary"]
+
+    client.post("/v1/confirm", json={"session_id": armed["session_id"]})
+
+    assert len(client.get("/v1/cards").json()["cards"]) == before + 1
+
+
+def test_a_screen_can_only_run_what_a_screen_offers(client: TestClient) -> None:
+    """The endpoint is not a way to run any tool with any arguments."""
+    response = client.post(
+        "/v1/action",
+        json={
+            "tool": "transfer_money",
+            "arguments": {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"},
+            "reason": "trying it on",
+        },
+    )
+
+    assert response.status_code == 400
+    assert client.app.state.services.bank.balance("checking") == 248_350
+
+
+def test_a_screen_action_has_to_say_why(client: TestClient) -> None:
+    response = client.post(
+        "/v1/action",
+        json={"tool": "freeze_card", "arguments": {"last4": "4417"}, "reason": "   "},
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_refusal_comes_back_as_a_sentence_not_a_crash(client: TestClient) -> None:
+    body = client.post(
+        "/v1/action",
+        json={"tool": "freeze_card", "arguments": {"last4": "0000"}, "reason": "lost"},
+    ).json()
+
+    assert body["armed"] is False
+    assert body["error"]
+
+
+def test_the_reason_reaches_the_audit_log(client: TestClient) -> None:
+    """Typing why is not theatre: it is written down with the action."""
+    client.post(
+        "/v1/action",
+        json={"tool": "freeze_card", "arguments": {"last4": "4417"}, "reason": "left it in a taxi"},
+    )
+
+    bank = client.app.state.services.bank
+    rows = bank._db.execute("SELECT user_text, bot_text FROM turns").fetchall()
+    assert any("taxi" in (row["user_text"] or "") for row in rows)
+
+
+def test_a_screen_action_puts_what_was_asked_into_the_conversation(client: TestClient) -> None:
+    """Found live, not here: confirming raised 400, "no user query found".
+
+    Arming from a screen left the conversation empty, so settling it sent the
+    model a history holding a tool call and its result and nothing a customer
+    had ever said. The typed reason is what belongs there -- it is the only
+    record of why, and the model needs it to say what happened.
+    """
+    client.post(
+        "/v1/action",
+        json={
+            "tool": "freeze_card",
+            "arguments": {"last4": "4417"},
+            "reason": "left it on the bus",
+        },
+    )
+
+    session = next(iter(client.app.state.services.sessions._entries.values())).session
+    spoken = [m for m in session.conversation.messages if m.get("role") == "user"]
+    assert spoken, "the conversation has to hold what the customer asked for"
+    assert "bus" in spoken[-1]["content"]
+    assert "4417" in spoken[-1]["content"]

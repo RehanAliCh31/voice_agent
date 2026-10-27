@@ -37,6 +37,20 @@ def agent_with(replies: list[Reply], executor: ToolExecutor, **kwargs: Any) -> A
     return Agent(FakeLLMClient(replies), executor, **kwargs)
 
 
+def asked_for(text: str) -> Conversation:
+    """A conversation in which the customer has said something.
+
+    Settling a pending action against an empty one is a state production
+    cannot reach -- whatever armed it, a voice turn or a card button, put the
+    request in the history first. A real server answers a history with no
+    user turn in it with 400, and the fake now does the same.
+    """
+    conversation = Conversation("s1")
+    conversation.turn_index += 1
+    conversation.append_user(text)
+    return conversation
+
+
 # --- the simple path ---------------------------------------------------------
 
 
@@ -203,7 +217,7 @@ def test_resolve_pending_executes_and_tells_the_model_it_happened(
     bank: SqliteBank, executor: ToolExecutor
 ) -> None:
     executor.execute(ToolCall("c1", "transfer_money", TRANSFER))
-    conversation = Conversation("s1")
+    conversation = asked_for("send sarah fifty")
     client = FakeLLMClient([Reply(text="Done. $50.00 sent to sarah.")])
 
     out = Agent(client, executor).resolve_pending(True, conversation)
@@ -221,7 +235,7 @@ def test_resolve_pending_cancel_leaves_the_money_alone(
     executor.execute(ToolCall("c1", "transfer_money", TRANSFER))
     client = FakeLLMClient([Reply(text="No problem, I've cancelled that.")])
 
-    Agent(client, executor).resolve_pending(False, Conversation("s1"))
+    Agent(client, executor).resolve_pending(False, asked_for("send sarah fifty"))
 
     assert bank.balance("checking") == 248_350
     assert executor.pending is None
@@ -229,7 +243,7 @@ def test_resolve_pending_cancel_leaves_the_money_alone(
 
 def test_resolve_pending_with_nothing_pending_still_answers(executor: ToolExecutor) -> None:
     client = FakeLLMClient([Reply(text="There wasn't anything waiting.")])
-    out = Agent(client, executor).resolve_pending(True, Conversation("s1"))
+    out = Agent(client, executor).resolve_pending(True, asked_for("yes"))
     assert out.text.strip()
 
 
@@ -380,7 +394,7 @@ def test_the_bot_may_repeat_an_amount_the_customer_just_said(
 
 def test_a_figure_the_customer_said_earlier_still_counts(executor: ToolExecutor) -> None:
     # The customer names the amount, the bot asks, the customer says "yes".
-    conversation = Conversation("s1")
+    conversation = asked_for("something that armed it")
     client = FakeLLMClient(
         [
             Reply(tool_calls=(ToolCall("c1", "transfer_money", TO_ALI),)),
@@ -429,7 +443,7 @@ def test_a_figure_from_an_earlier_lookup_can_be_restated(executor: ToolExecutor)
     The model answered the repeat from memory without calling the tool again.
     The figures were right and had come from the bank -- on the previous turn.
     """
-    conversation = Conversation("s1")
+    conversation = asked_for("something that armed it")
     client = FakeLLMClient(
         [
             Reply(tool_calls=(ToolCall("c1", "list_accounts", {}),)),
@@ -450,7 +464,7 @@ def test_a_figure_from_an_earlier_lookup_can_be_restated(executor: ToolExecutor)
 def test_memory_does_not_admit_a_figure_the_bank_never_gave(
     executor: ToolExecutor,
 ) -> None:
-    conversation = Conversation("s1")
+    conversation = asked_for("something that armed it")
     client = FakeLLMClient(
         [
             Reply(tool_calls=(ToolCall("c1", "list_accounts", {}),)),
@@ -470,7 +484,7 @@ def test_memory_does_not_admit_a_figure_the_bank_never_gave(
 def test_a_suppressed_figure_does_not_become_quotable(executor: ToolExecutor) -> None:
     # The model's own text is never a source, or an invented figure would
     # launder itself simply by being repeated.
-    conversation = Conversation("s1")
+    conversation = asked_for("something that armed it")
     client = FakeLLMClient(
         [
             Reply(text="Your balance is $31,415.00."),
@@ -496,7 +510,7 @@ def test_moving_money_forgets_the_balances_it_made_stale(bank: SqliteBank) -> No
     by a different road.
     """
     executor = ToolExecutor(bank)
-    conversation = Conversation("s1")
+    conversation = asked_for("something that armed it")
     client = FakeLLMClient(
         [
             Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "checking"}),)),
@@ -546,7 +560,7 @@ def test_paying_a_bill_invalidates_the_earlier_list(bank: SqliteBank) -> None:
     guarantee for a bank. The stale result is now removed from what it sees.
     """
     executor = ToolExecutor(bank)
-    conversation = Conversation("s1")
+    conversation = asked_for("something that armed it")
     client = FakeLLMClient(
         [
             Reply(tool_calls=(ToolCall("c1", "list_bills", {}),)),
@@ -569,7 +583,7 @@ def test_paying_a_bill_invalidates_the_earlier_list(bank: SqliteBank) -> None:
 
 def test_the_result_of_the_change_itself_is_not_invalidated(bank: SqliteBank) -> None:
     executor = ToolExecutor(bank)
-    conversation = Conversation("s1")
+    conversation = asked_for("something that armed it")
     client = FakeLLMClient([Reply(text="Done.")])
     executor.execute(ToolCall("c1", "pay_bill", {"bill": "electricity"}))
 
@@ -582,7 +596,7 @@ def test_the_result_of_the_change_itself_is_not_invalidated(bank: SqliteBank) ->
 
 def test_a_read_only_lookup_does_not_invalidate_anything(bank: SqliteBank) -> None:
     executor = ToolExecutor(bank)
-    conversation = Conversation("s1")
+    conversation = asked_for("something that armed it")
     client = FakeLLMClient(
         [
             Reply(tool_calls=(ToolCall("c1", "list_bills", {}),)),
@@ -630,7 +644,7 @@ def test_a_suppressed_read_back_cancels_the_action_it_was_asking_about(
 
 def test_a_yes_after_a_suppressed_read_back_does_nothing(bank: SqliteBank) -> None:
     executor = ToolExecutor(bank)
-    conversation = Conversation("s1")
+    conversation = asked_for("something that armed it")
     client = FakeLLMClient(
         [
             Reply(tool_calls=(ToolCall("c1", "pay_bill", {"bill": "credit card"}),)),

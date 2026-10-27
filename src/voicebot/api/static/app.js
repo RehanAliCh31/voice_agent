@@ -36,6 +36,7 @@
     view: "assistant",
     cards: [],
     card: null, // the card being looked at, by last four
+    ask: null, // the card action being asked about, if any
   };
 
   var el = {};
@@ -99,6 +100,19 @@
 
     monthly: function () {
       return request("/v1/monthly", { method: "GET" });
+    },
+
+    arm: function (tool, args, reason) {
+      return request("/v1/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tool: tool,
+          arguments: args,
+          reason: reason,
+          session_id: state.sessionId,
+        }),
+      });
     },
 
     reset: function () {
@@ -615,9 +629,147 @@
     })[0];
     if (showing) {
       el.cardPane.appendChild(cardFace(showing));
+      el.cardPane.appendChild(cardActions(showing));
       el.cardPane.appendChild(cardControls(showing));
     }
   }
+
+  /**
+   * The two things that can be done to a card from here. Both go through the
+   * same gate the spoken path uses: the button arms the action and the bank
+   * says what it is, and only then is there anything to agree to.
+   */
+  function cardActions(card) {
+    var row = node("div", "cardacts");
+
+    var freeze = node("button", "cardact cardact--stop", card.frozen ? "Already frozen" : "Freeze card");
+    freeze.type = "button";
+    freeze.disabled = card.frozen;
+    freeze.addEventListener("click", function () {
+      openAsk(card, "freeze");
+    });
+    row.appendChild(freeze);
+
+    var replace = node("button", "cardact", "Replace card");
+    replace.type = "button";
+    replace.addEventListener("click", function () {
+      openAsk(card, "replace");
+    });
+    row.appendChild(replace);
+
+    return row;
+  }
+
+  // --- asking before acting -----------------------------------------------
+
+  var ASKS = {
+    freeze: {
+      title: "Freeze this card",
+      tool: "freeze_card",
+      args: function (card) {
+        return { last4: card.last4 };
+      },
+    },
+    replace: {
+      // Replacing stops the old card as well as sending a new one, which is
+      // what replacing a card means: two cards on one account is not it.
+      title: "Replace this card",
+      tool: "freeze_card",
+      args: function (card) {
+        return { last4: card.last4, order_replacement: true };
+      },
+    },
+  };
+
+  function openAsk(card, kind) {
+    state.ask = { card: card, kind: kind };
+    el.askTitle.textContent = ASKS[kind].title;
+    el.askReason.value = "";
+    el.askSummary.textContent = "";
+    el.askError.hidden = true;
+    el.askWhy.hidden = false;
+    el.askSure.hidden = true;
+    el.askGo.textContent = "Done";
+    el.askGo.disabled = false;
+    el.cardAsk.showModal();
+    el.askReason.focus();
+  }
+
+  function closeAsk() {
+    state.ask = null;
+    if (el.cardAsk.open) {
+      el.cardAsk.close();
+    }
+  }
+
+  function askFailed(message) {
+    el.askError.textContent = message;
+    el.askError.hidden = false;
+    el.askGo.disabled = false;
+  }
+
+  /** Step one asks why; step two shows what the bank says will happen. */
+  function onAskGo() {
+    if (!state.ask) {
+      return;
+    }
+    el.askError.hidden = true;
+
+    if (!el.askSure.hidden) {
+      settleAsk();
+      return;
+    }
+
+    var reason = el.askReason.value.trim();
+    if (!reason) {
+      askFailed("Say why, so it can be written down.");
+      el.askReason.focus();
+      return;
+    }
+
+    var ask = ASKS[state.ask.kind];
+    el.askGo.disabled = true;
+    api
+      .arm(ask.tool, ask.args(state.ask.card), reason)
+      .then(function (armed) {
+        state.sessionId = armed.session_id;
+        if (!armed.armed) {
+          askFailed(armed.error || "That could not be done.");
+          return;
+        }
+        // The bank's own sentence, not one written here, so what is agreed
+        // to is exactly what will happen.
+        el.askSummary.textContent = armed.summary + "?";
+        el.askWhy.hidden = true;
+        el.askSure.hidden = false;
+        el.askGo.textContent = "Yes, confirm";
+        el.askGo.disabled = false;
+        el.askGo.focus();
+      })
+      .catch(function (error) {
+        askFailed(error.message);
+      });
+  }
+
+  function settleAsk() {
+    el.askGo.disabled = true;
+    el.askGo.textContent = "Working…";
+    // The same endpoint the spoken Yes button uses, so the model is told
+    // what happened and its next answer knows the card is frozen.
+    api
+      .confirm()
+      .then(function (turn) {
+        closeAsk();
+        handleTurn(turn);
+        loadCards();
+      })
+      .catch(function (error) {
+        el.askGo.textContent = "Yes, confirm";
+        askFailed(error.message);
+      });
+  }
+
+  // --- the monthly screen
 
   function cardFace(card) {
     var face = node("div", "cardface" + (card.frozen ? " cardface--frozen" : ""));
@@ -1182,6 +1334,8 @@
       "statementIn", "statementOut", "cardPicker", "cardPane",
       "monthlyPlans", "monthlyCommitted", "monthlyMonth", "monthlyPaid",
       "monthlyLeft", "monthlyBar", "dock",
+      "cardAsk", "askTitle", "askWhy", "askReason", "askSure", "askSummary",
+      "askError", "askCancel", "askGo",
     ].forEach(function (id) {
       el[id] = document.getElementById(id);
     });
@@ -1206,6 +1360,14 @@
           el.levelFill.setAttribute("data-over", share >= 1 ? "true" : "false");
         }
       },
+    });
+
+    el.askGo.addEventListener("click", onAskGo);
+    el.askCancel.addEventListener("click", closeAsk);
+    // Escape and the backdrop close it natively; this keeps our own state
+    // in step with the dialogue however it was shut.
+    el.cardAsk.addEventListener("close", function () {
+      state.ask = null;
     });
 
     el.screens.addEventListener("click", function (event) {

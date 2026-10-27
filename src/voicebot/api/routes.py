@@ -9,6 +9,8 @@ reports about its own work comes back with the turn itself.
 from __future__ import annotations
 
 import base64
+import json
+import secrets
 from datetime import date
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -17,6 +19,8 @@ from fastapi.responses import PlainTextResponse
 from voicebot import __version__
 from voicebot.api.deps import Services, get_services
 from voicebot.api.payloads import (
+    ActionPayload,
+    ActionRequest,
     AudioPayload,
     CardsPayload,
     HealthPayload,
@@ -37,6 +41,7 @@ from voicebot.api.payloads import (
 )
 from voicebot.api.sessions import SessionStore
 from voicebot.bank.base import BankError
+from voicebot.llm.base import ToolCall
 from voicebot.pipeline.audio_io import decode_wav, encode_wav
 from voicebot.pipeline.orchestrator import TurnResult
 from voicebot.schemas import AudioBuffer
@@ -179,6 +184,74 @@ def accounts(services: Services = Depends(get_services)) -> LedgerPayload:
     it, so this never competes with a reply for which number is current.
     """
     return ledger_payload(services.bank)
+
+
+# What a screen is allowed to run. A screen is not a way to call any tool
+# with any arguments: the card buttons need exactly one, and anything else
+# belongs to the conversation, where the model chose it.
+SCREEN_ACTIONS: frozenset[str] = frozenset({"freeze_card"})
+
+
+@router.post("/v1/action", response_model=ActionPayload, tags=["screens"])
+def action(request: ActionRequest, services: Services = Depends(get_services)) -> ActionPayload:
+    """Arm a card action from the cards screen.
+
+    Runs the tool's first phase, which changes nothing and returns the
+    bank's own read-back. The screen shows that sentence and settles it
+    through /v1/confirm, the same endpoint the spoken Yes button uses --
+    one gate, whether the customer clicked or spoke.
+    """
+    if request.tool not in SCREEN_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{request.tool!r} cannot be run from a screen.",
+        )
+    if not request.reason.strip():
+        raise HTTPException(status_code=422, detail="Say why, so it can be written down.")
+
+    sid = _session_id(services.sessions, request.session_id)
+    session = services.sessions.get(sid)
+    session.executor.session_id = sid
+    session.executor.turn_index = session.conversation.turn_index
+
+    outcome = session.executor.execute(
+        ToolCall(
+            id=f"screen-{secrets.token_urlsafe(6)}",
+            name=request.tool,
+            arguments=dict(request.arguments),
+        )
+    )
+    armed = outcome.result.get("status") == "needs_confirmation"
+    summary = str(outcome.result.get("summary") or "")
+
+    if armed:
+        # What the customer asked for, in the conversation, before it can be
+        # agreed to. Without it the history holds a tool call and its result
+        # and nothing anybody said, which a real server answers with 400 --
+        # and the typed reason is the only record of why anyway.
+        session.conversation.turn_index += 1
+        session.conversation.append_user(f"{summary} — {request.reason.strip()}")
+        session.conversation.trim()
+
+    services.sessions.put(sid, session)
+    error = None if armed else str(outcome.result.get("error") or "That could not be done.")
+
+    # Written down whether it was armed or refused, because what the customer
+    # asked for is as much a part of the record as what happened.
+    services.bank.log_turn(
+        session_id=sid,
+        turn_index=session.conversation.turn_index,
+        user_text=request.reason.strip(),
+        bot_text=summary or (error or ""),
+        tool_calls=json.dumps([{"name": request.tool, "arguments": request.arguments}]),
+        guard_hit=False,
+        suppressed=None,
+        latency_ms=0.0,
+    )
+    if not armed:
+        log.info("screen action refused: %s", error)
+
+    return ActionPayload(session_id=sid, armed=armed, summary=summary, error=error)
 
 
 @router.get("/v1/cards", response_model=CardsPayload, tags=["screens"])

@@ -1229,3 +1229,125 @@ body {
 .controls--frozen .control__detail { color: var(--ink-faint); }
 .controls--frozen .control__state { opacity: 0.4; }
 .controls--frozen .controls__hint { color: var(--bad); }
+
+/* --- acting on a card ------------------------------------------------------ */
+/*
+ * Two buttons under the card, and a dialogue that asks why before it asks
+ * whether. The second step shows the bank's own sentence rather than one
+ * written here, so what is agreed to is what will happen.
+ */
+
+.cardacts {
+  display: flex;
+  gap: 9px;
+  max-width: 420px;
+  margin: 0 auto 16px;
+  flex-wrap: wrap;
+}
+
+.cardact {
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  flex: 1 1 0;
+  min-width: 140px;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+}
+
+.cardact:hover { border-color: var(--brand); color: var(--brand-deep); }
+.cardact:focus-visible { outline: 2px solid var(--brand-bright); outline-offset: 2px; }
+
+.cardact--stop:hover { border-color: var(--bad); color: var(--bad); }
+
+.cardact[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.cardact[disabled]:hover { border-color: var(--line); color: var(--ink); }
+
+.ask {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+  background: var(--card);
+  color: var(--ink);
+  padding: 22px;
+  width: min(420px, calc(100vw - 32px));
+}
+
+.ask::backdrop { background: rgba(26, 25, 23, 0.42); }
+
+.ask__title {
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.ask__step[hidden] { display: none; }
+
+.ask__label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 7px;
+}
+
+.ask__input {
+  width: 100%;
+  font: inherit;
+  font-size: 14.5px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+  resize: vertical;
+}
+
+.ask__input:focus-visible {
+  outline: 2px solid var(--brand-bright);
+  outline-offset: 1px;
+  border-color: var(--brand);
+}
+
+.ask__summary {
+  margin: 0;
+  padding: 13px 15px;
+  border: 1px solid var(--brand-bright);
+  border-radius: var(--radius-sm);
+  background: var(--brand-wash);
+  color: var(--brand-deep);
+  font-weight: 500;
+}
+
+.ask__note { margin: 9px 0 0; font-size: 12.5px; color: var(--ink-faint); }
+
+.ask__error {
+  margin: 12px 0 0;
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  background: var(--bad-wash);
+  color: var(--bad);
+  font-size: 13.5px;
+}
+
+.ask__error[hidden] { display: none; }
+
+.ask__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 18px;
+}

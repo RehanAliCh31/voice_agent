@@ -61,6 +61,23 @@ class LLMClient(ABC):
         """
 
 
+def _require_a_customer(messages: Sequence[dict[str, Any]]) -> None:
+    """Refuse a history nobody is in, the way the real server does.
+
+    An OpenAI-compatible server answers a conversation holding a tool call
+    and its result but no user turn with 400, "no user query found". The fake
+    used to answer it happily, so a bug that broke every card action in the
+    browser passed the entire suite. Raising here turns that into a test
+    failure, for the same reason running out of scripted replies does.
+    """
+    said = [m for m in messages if m.get("role") != "system"]
+    if said and not any(m.get("role") == "user" for m in said):
+        raise ValueError(
+            "this history holds no user turn; a real server answers that "
+            "with 400 rather than a reply"
+        )
+
+
 class FakeLLMClient(LLMClient):
     """Replays a scripted sequence of replies. Used by tests and CI."""
 
@@ -78,6 +95,7 @@ class FakeLLMClient(LLMClient):
         tools: list[dict[str, Any]],
         tool_choice: str = "auto",
     ) -> Reply:
+        _require_a_customer(messages)
         self.calls.append((messages, tools))
         self.choices.append(tool_choice)
         if self._index >= len(self._scripted):

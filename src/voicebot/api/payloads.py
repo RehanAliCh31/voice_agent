@@ -84,6 +84,32 @@ class TurnPayload(BaseModel):
     audio_sample_rate: int = 16_000
 
 
+class ActionRequest(BaseModel):
+    """One tool run from a screen rather than from the conversation.
+
+    `reason` is required and written to the audit log. A button that asks why
+    and then throws the answer away is theatre.
+    """
+
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    reason: str = Field(min_length=1)
+    session_id: str | None = None
+
+
+class ActionPayload(BaseModel):
+    """What the screen needs to show next: the read-back, or the refusal.
+
+    No token. The gate is settled through /v1/confirm, which acts on the
+    pending action directly, so nothing the screen holds could be replayed.
+    """
+
+    session_id: str
+    armed: bool
+    summary: str = ""
+    error: str | None = None
+
+
 class TextRequest(BaseModel):
     """Type instead of speaking. Used by the front end's fallback input."""
 

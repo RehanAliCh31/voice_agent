@@ -291,6 +291,7 @@ class Agent:
         """
         self._ensure_system(conversation)
         self.executor.turn_index = conversation.turn_index
+        spoken_to = any(m.get("role") == "user" for m in conversation.messages)
         pending = self.executor.pending
         before = self.executor.writes
         outcome = self.executor.confirm() if confirmed else self.executor.cancel()
@@ -306,10 +307,21 @@ class Agent:
             name=pending.tool if pending else "pay_bill",
             arguments=dict(pending.arguments) if pending else {},
         )
+        calls = [injected]
         conversation.append_assistant(Reply(tool_calls=(injected,)))
         conversation.remember(outcome.sourced_cents, self.executor.writes)
         conversation.append_tool_result(call_id, outcome.result)
         conversation.trim(self.max_turns)
+        if not spoken_to:
+            # Nobody has said anything in this conversation, so there is
+            # nothing for the model to answer and no history worth sending:
+            # a real server refuses one holding a tool call and its result
+            # and no customer. Happens when Yes is clicked twice, or when a
+            # second tab confirms a transfer armed in the first.
+            said = outcome.result.get("detail") or outcome.result.get("error")
+            log.info("settling without the model: nothing was ever said here")
+            return self._result(str(said or NOTHING_SAID), calls, [outcome], rounds=0, hit=False)
+
         # The injected call travels with its outcome, so the confirmed
         # action appears in the inspector. Without it the one turn that
         # moved money rendered as 'no tools called'.
