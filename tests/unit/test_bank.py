@@ -929,3 +929,49 @@ def test_a_replacement_card_carries_the_pin_over(bank: SqliteBank) -> None:
 def test_changing_one_cards_pin_leaves_the_other_alone(bank: SqliteBank) -> None:
     bank.set_pin("4417", "1234", "8765")
     assert bank.check_pin("9021", "1234") is True
+
+
+def test_an_older_bank_file_gains_the_name_on_the_card(tmp_path) -> None:
+    """The column was added with an empty default and nothing filled it, so
+    the details screen showed a card with no name on it.
+
+    Third time a migration has added a column and left the rows alone. The
+    number, the dates and the PIN were all filled here already; the holder
+    was simply missed.
+    """
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE accounts (name TEXT PRIMARY KEY, balance_cents INTEGER NOT NULL);"
+        "CREATE TABLE cards (last4 TEXT PRIMARY KEY, account TEXT NOT NULL, "
+        "frozen INTEGER NOT NULL DEFAULT 0);"
+        "INSERT INTO accounts VALUES ('checking', 100);"
+        "INSERT INTO cards VALUES ('1234', 'checking', 0);"
+    )
+    old.commit()
+    old.close()
+
+    card = next(c for c in SqliteBank(str(path)).cards() if c.last4 == "1234")
+    assert card.holder == "Rehan Ali Ch"
+
+
+def test_a_name_already_on_a_card_is_left_alone(tmp_path) -> None:
+    """Only an empty one is filled: a name somebody set is theirs."""
+    import sqlite3
+
+    path = tmp_path / "named.db"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE accounts (name TEXT PRIMARY KEY, balance_cents INTEGER NOT NULL);"
+        "CREATE TABLE cards (last4 TEXT PRIMARY KEY, account TEXT NOT NULL, "
+        "frozen INTEGER NOT NULL DEFAULT 0, holder TEXT NOT NULL DEFAULT '');"
+        "INSERT INTO accounts VALUES ('checking', 100);"
+        "INSERT INTO cards VALUES ('1234', 'checking', 0, 'SOMEBODY ELSE');"
+    )
+    old.commit()
+    old.close()
+
+    card = next(c for c in SqliteBank(str(path)).cards() if c.last4 == "1234")
+    assert card.holder == "SOMEBODY ELSE"

@@ -47,7 +47,7 @@ from voicebot.bank.base import (
     unknown_period_message,
     unknown_reason_message,
 )
-from voicebot.bank.seed import clear, seed, seed_payees, seed_plans
+from voicebot.bank.seed import HOLDER, clear, seed, seed_payees, seed_plans
 from voicebot.utils.logging import get_logger
 
 log = get_logger("bank.sqlite")
@@ -652,7 +652,7 @@ _ADDED: dict[str, dict[str, str]] = {
 
 
 def _print_cards(db: sqlite3.Connection) -> None:
-    """Give a number, dates and a PIN to any card that lacks them.
+    """Give a name, a number, dates and a PIN to any card that lacks them.
 
     The columns default to empty, which is not a card number and not a PIN.
     Filling them is the same job as filling the categories on the bills: a
@@ -661,10 +661,14 @@ def _print_cards(db: sqlite3.Connection) -> None:
     Every card gets its own salt even though the demo PIN is the same, so
     two hashes never match and one says nothing about the other.
     """
-    rows = db.execute("SELECT last4, number, pin_hash FROM cards").fetchall()
+    rows = db.execute("SELECT last4, holder, number, pin_hash FROM cards").fetchall()
     valid_from, valid_to = _validity(datetime.now())
     with db:
         for row in rows:
+            if not row["holder"]:
+                # Only an empty one. A name already on a card is somebody's,
+                # and a migration has no business overwriting it.
+                db.execute("UPDATE cards SET holder = ? WHERE last4 = ?", (HOLDER, row["last4"]))
             if not row["number"]:
                 db.execute(
                     "UPDATE cards SET number = ?, valid_from = ?, valid_to = ? WHERE last4 = ?",
