@@ -218,7 +218,7 @@ def test_a_deposit_to_an_unknown_account_is_refused(bank: SqliteBank) -> None:
 
 
 def test_a_deposit_restores_an_emptied_account(bank: SqliteBank) -> None:
-    bank.transfer(248_350, "someone", "checking")
+    bank.transfer(248_350, "sarah", "checking")
     assert bank.balance("checking") == 0
     bank.deposit(100_000, "checking", source="manual top-up")
     assert bank.balance("checking") == 100_000
@@ -269,3 +269,101 @@ def test_a_deposit_shows_in_the_ledger_as_money_in(bank: SqliteBank) -> None:
     assert newest.merchant == "cheque"
     assert newest.cents == 25_000
     assert newest.spent is False
+
+
+# --- moving money between the customer's own accounts ------------------------
+#
+# `transfer` only ever debits: money goes to a payee and leaves the bank. Asked
+# to "send 500 to savings from checking" the model called it with payee
+# "savings", so $500 left checking and arrived nowhere. Both the confirmation
+# gate and the numeric guard passed it, because neither is wrong about what it
+# checks -- there was simply no code that credited a destination.
+
+
+def test_moving_money_debits_one_account_and_credits_the_other(bank: SqliteBank) -> None:
+    before = (bank.balance("checking"), bank.balance("savings"))
+
+    out, into = bank.move(50_000, "checking", "savings")
+
+    assert (out, into) == (before[0] - 50_000, before[1] + 50_000)
+    assert (bank.balance("checking"), bank.balance("savings")) == (out, into)
+
+
+def test_moving_money_conserves_it(bank: SqliteBank) -> None:
+    """The property the old code broke: nothing is created, nothing is lost."""
+    before = bank.balance("checking") + bank.balance("savings")
+
+    bank.move(50_000, "checking", "savings")
+
+    assert bank.balance("checking") + bank.balance("savings") == before
+
+
+def test_a_move_writes_both_sides_to_the_ledger(bank: SqliteBank) -> None:
+    bank.move(50_000, "checking", "savings")
+
+    rows = bank.transactions(limit=2)
+    assert {(r.account, r.cents) for r in rows} == {
+        ("checking", -50_000),
+        ("savings", 50_000),
+    }
+
+
+def test_a_move_to_the_same_account_is_refused(bank: SqliteBank) -> None:
+    with pytest.raises(BankError):
+        bank.move(50_000, "checking", "checking")
+
+
+def test_a_move_of_more_than_there_is_changes_nothing(bank: SqliteBank) -> None:
+    before = (bank.balance("checking"), bank.balance("savings"))
+
+    with pytest.raises(BankError):
+        bank.move(999_999_999, "checking", "savings")
+
+    assert (bank.balance("checking"), bank.balance("savings")) == before
+
+
+def test_a_move_to_an_unknown_account_is_refused(bank: SqliteBank) -> None:
+    with pytest.raises(BankError):
+        bank.move(50_000, "checking", "offshore")
+
+
+def test_a_move_of_nothing_is_refused(bank: SqliteBank) -> None:
+    with pytest.raises(BankError):
+        bank.move(0, "checking", "savings")
+
+
+# --- who money may be sent to ------------------------------------------------
+
+
+def test_the_bank_knows_its_payees(bank: SqliteBank) -> None:
+    assert {p.name for p in bank.payees()} >= {"sarah", "ali"}
+
+
+def test_a_transfer_to_an_account_name_is_refused(bank: SqliteBank) -> None:
+    """The bug itself. An account is not a payee, and saying so is the fix."""
+    before = (bank.balance("checking"), bank.balance("savings"))
+
+    with pytest.raises(BankError):
+        bank.transfer(50_000, "savings", "checking")
+
+    assert (bank.balance("checking"), bank.balance("savings")) == before
+
+
+def test_a_transfer_to_an_unknown_payee_changes_nothing(bank: SqliteBank) -> None:
+    before = bank.balance("checking")
+
+    with pytest.raises(BankError):
+        bank.transfer(50_000, "a stranger", "checking")
+
+    assert bank.balance("checking") == before
+
+
+def test_the_refusal_says_who_can_be_paid(bank: SqliteBank) -> None:
+    with pytest.raises(BankError, match="sarah"):
+        bank.transfer(50_000, "a stranger", "checking")
+
+
+def test_a_transfer_to_a_known_payee_still_works(bank: SqliteBank) -> None:
+    """The existing behaviour, which must survive the fix."""
+    remaining = bank.transfer(5_000, "sarah", "checking")
+    assert remaining == 243_350

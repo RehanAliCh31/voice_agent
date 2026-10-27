@@ -23,7 +23,9 @@ from voicebot.bank.base import (
     DEPOSIT_SOURCES,
     Bank,
     BankError,
+    account_not_payee_message,
     format_money,
+    unknown_payee_message,
     unknown_source_message,
 )
 from voicebot.llm.base import ToolCall
@@ -275,7 +277,7 @@ class ToolExecutor:
                 "amount_cents": _require_positive_int(
                     arguments.get("amount_cents"), "amount_cents"
                 ),
-                "payee": _require_text(arguments.get("payee"), "payee"),
+                "payee": self._known_payee(_require_text(arguments.get("payee"), "payee")),
                 "from_account": _require_text(arguments.get("from_account"), "from_account"),
             }
         if name == "pay_bill":
@@ -287,6 +289,22 @@ class ToolExecutor:
             }
         if name == "order_card":
             return {"account": _require_text(arguments.get("account"), "account")}
+        if name == "move_money":
+            source = _require_text(arguments.get("from_account"), "from_account")
+            target = _require_text(arguments.get("to_account"), "to_account")
+            if source.lower() == target.lower():
+                # Checked here, not only in the bank: validation is what keeps
+                # a nonsense request from becoming a pending action. Without
+                # it the customer is read back "move $500 from checking to
+                # checking" and asked to agree to it.
+                raise ValueError(f"{source} and {target} are the same account.")
+            return {
+                "amount_cents": _require_positive_int(
+                    arguments.get("amount_cents"), "amount_cents"
+                ),
+                "from_account": source,
+                "to_account": target,
+            }
         if name == "deposit_money":
             source = _require_text(arguments.get("source"), "source").lower()
             if source not in DEPOSIT_SOURCES:
@@ -302,6 +320,20 @@ class ToolExecutor:
                 "source": source,
             }
         raise KeyError(f"{name} is not a confirming tool")
+
+    def _known_payee(self, name: str) -> str:
+        """Check who is being paid, before anything is read back.
+
+        The bank refuses an unknown payee too, and must: it is reachable from
+        the command line. But refusing there happens after the customer has
+        already agreed to pay someone who does not exist.
+        """
+        key = name.strip().lower()
+        if key in {payee.name for payee in self.bank.payees()}:
+            return key
+        if key in {account.name for account in self.bank.accounts()}:
+            raise ValueError(account_not_payee_message(key))
+        raise ValueError(unknown_payee_message(name, tuple(p.name for p in self.bank.payees())))
 
     def _summarise(self, name: str, arguments: dict[str, Any]) -> str:
         """The sentence the customer agrees to. Built from values, never generated."""
@@ -326,6 +358,11 @@ class ToolExecutor:
         if name == "deposit_money":
             amount = format_money(arguments["amount_cents"])
             return f"Pay {amount} into {arguments['account']} by {arguments['source']}"
+        if name == "move_money":
+            amount = format_money(arguments["amount_cents"])
+            return (
+                f"Move {amount} from {arguments['from_account']} " f"to {arguments['to_account']}"
+            )
         return "Go ahead"
 
     # --- the tools themselves ------------------------------------------------
@@ -343,6 +380,7 @@ class ToolExecutor:
             "freeze_card": self._freeze_card,
             "order_card": self._order_card,
             "deposit_money": self._deposit_money,
+            "move_money": self._move_money,
         }
 
     def _list_accounts(self, _: dict[str, Any]) -> ToolOutcome:
@@ -477,6 +515,26 @@ class ToolExecutor:
                 "paid_cents": paid,
             },
             sourced_cents=(paid,),
+        )
+
+    def _move_money(self, arguments: dict[str, Any]) -> ToolOutcome:
+        moved = arguments["amount_cents"]
+        source, target = arguments["from_account"], arguments["to_account"]
+        from_balance, to_balance = self.bank.move(moved, source, target)
+        self.writes += 1
+        return ToolOutcome(
+            {
+                "status": "done",
+                "moved": format_money(moved),
+                "moved_cents": moved,
+                "from_account": source,
+                "from_balance": format_money(from_balance),
+                "from_balance_cents": from_balance,
+                "to_account": target,
+                "to_balance": format_money(to_balance),
+                "to_balance_cents": to_balance,
+            },
+            sourced_cents=(moved, from_balance, to_balance),
         )
 
     def _deposit_money(self, arguments: dict[str, Any]) -> ToolOutcome:

@@ -18,12 +18,14 @@ from voicebot.llm.tools import CONFIRMING, TOOL_SCHEMAS
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
 DEPOSIT = {"amount_cents": 25_000, "account": "checking", "source": "cheque"}
+MOVE = {"amount_cents": 50_000, "from_account": "checking", "to_account": "savings"}
 CONFIRMING_CALLS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("transfer_money", TRANSFER),
     ("pay_bill", {"bill": "electricity"}),
     ("freeze_card", {"last4": "4417", "report_fraud": False}),
     ("order_card", {"account": "checking"}),
     ("deposit_money", DEPOSIT),
+    ("move_money", MOVE),
 )
 
 
@@ -44,15 +46,15 @@ def call(name: str, **arguments: Any) -> ToolCall:
 # --- the schemas -------------------------------------------------------------
 
 
-def test_there_are_eleven_well_formed_schemas() -> None:
+def test_there_are_twelve_well_formed_schemas() -> None:
     """The count is asserted on purpose: a new tool is a deliberate act.
 
     Every schema added is another choice the model has to get right, and the
     surface between it and a customer's money widening by one.
     """
     names = {schema["function"]["name"] for schema in TOOL_SCHEMAS}
-    assert len(TOOL_SCHEMAS) == 11
-    assert len(names) == 11
+    assert len(TOOL_SCHEMAS) == 12
+    assert len(names) == 12
     assert CONFIRMING <= names
 
     for schema in TOOL_SCHEMAS:
@@ -219,7 +221,7 @@ def test_insufficient_funds_is_explained_not_raised(
     bank: SqliteBank, executor: ToolExecutor
 ) -> None:
     token = executor.execute(
-        call("transfer_money", amount_cents=99_999_999, payee="s", from_account="checking")
+        call("transfer_money", amount_cents=99_999_999, payee="sarah", from_account="checking")
     ).result["token"]
     out = executor.execute(
         call(
@@ -420,3 +422,97 @@ def test_an_absurd_limit_is_clamped(executor: ToolExecutor) -> None:
 def test_an_unknown_account_comes_back_as_a_sentence(executor: ToolExecutor) -> None:
     out = executor.execute(call("list_transactions", account="offshore"))
     assert "error" in out.result
+
+
+# --- moving money between the customer's own accounts ------------------------
+
+
+def test_a_move_is_read_back_with_both_accounts(bank: SqliteBank, executor: ToolExecutor) -> None:
+    out = executor.execute(call("move_money", **MOVE))
+
+    assert out.result["status"] == "needs_confirmation"
+    assert "$500.00" in out.result["summary"]
+    assert "checking" in out.result["summary"] and "savings" in out.result["summary"]
+    assert bank.balance("checking") == 248_350
+
+
+def test_a_confirmed_move_changes_both_balances(bank: SqliteBank, executor: ToolExecutor) -> None:
+    token = executor.execute(call("move_money", **MOVE)).result["token"]
+
+    out = executor.execute(call("move_money", **MOVE, confirmation_token=token))
+
+    assert out.result["status"] == "done"
+    assert bank.balance("checking") == 198_350
+    assert bank.balance("savings") == 1_952_000
+
+
+def test_a_move_sources_every_figure_it_reports(executor: ToolExecutor) -> None:
+    token = executor.execute(call("move_money", **MOVE)).result["token"]
+
+    out = executor.execute(call("move_money", **MOVE, confirmation_token=token))
+
+    assert set(out.sourced_cents) == {50_000, 198_350, 1_952_000}
+
+
+def test_a_move_counts_as_a_write(executor: ToolExecutor) -> None:
+    before = executor.writes
+    token = executor.execute(call("move_money", **MOVE)).result["token"]
+    executor.execute(call("move_money", **MOVE, confirmation_token=token))
+
+    assert executor.writes == before + 1
+
+
+def test_moving_to_the_same_account_is_refused(executor: ToolExecutor) -> None:
+    out = executor.execute(
+        call("move_money", amount_cents=50_000, from_account="checking", to_account="checking")
+    )
+    assert "error" in out.result
+
+
+def test_sending_to_an_account_name_comes_back_as_a_sentence(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    """The original bug, now a refusal the model can act on."""
+    token = executor.execute(
+        call("transfer_money", amount_cents=50_000, payee="savings", from_account="checking")
+    ).result.get("token")
+    out = executor.execute(
+        call(
+            "transfer_money",
+            amount_cents=50_000,
+            payee="savings",
+            from_account="checking",
+            confirmation_token=token,
+        )
+    )
+
+    assert "error" in out.result
+    assert "account" in out.result["error"]
+    assert bank.balance("checking") == 248_350
+    assert bank.balance("savings") == 1_902_000
+
+
+def test_an_unknown_payee_never_becomes_pending(executor: ToolExecutor) -> None:
+    """Refused before the read-back, not after the yes.
+
+    Validation exists so a request that cannot succeed is never read back as
+    though it will. Otherwise the customer agrees to paying Bob and only then
+    learns there is no Bob.
+    """
+    out = executor.execute(
+        call("transfer_money", amount_cents=10_000, payee="bob", from_account="checking")
+    )
+
+    assert "error" in out.result
+    assert "sarah" in out.result["error"], "the refusal should say who can be paid"
+    assert executor.pending is None
+
+
+def test_an_account_named_as_a_payee_never_becomes_pending(executor: ToolExecutor) -> None:
+    out = executor.execute(
+        call("transfer_money", amount_cents=10_000, payee="savings", from_account="checking")
+    )
+
+    assert "error" in out.result
+    assert "own account" in out.result["error"]
+    assert executor.pending is None

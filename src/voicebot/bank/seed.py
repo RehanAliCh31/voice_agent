@@ -37,6 +37,10 @@ BILLS: tuple[tuple[str, int], ...] = (
     ("credit card", 21_500),
 )
 
+# Who the customer can send money to. Names only: this bank's payees are
+# people, and an account name is deliberately not among them.
+PAYEES: tuple[str, ...] = ("sarah", "ali")
+
 # (merchant, cents, the period it should fall in). Cents are negative because
 # this is money leaving the account.
 SPENDING: tuple[tuple[str, int, str], ...] = (
@@ -57,6 +61,7 @@ def _occurred_at(period: str, now: datetime) -> str:
 def seed(connection: sqlite3.Connection, now: datetime | None = None) -> None:
     """Fill an empty database. Assumes the schema already exists."""
     now = now or datetime.now()
+    seed_payees(connection)
     with connection:
         connection.executemany("INSERT INTO accounts VALUES (?, ?)", ACCOUNTS)
         connection.executemany("INSERT INTO cards VALUES (?, ?, 0)", CARDS)
@@ -68,10 +73,24 @@ def seed(connection: sqlite3.Connection, now: datetime | None = None) -> None:
         )
 
 
+def seed_payees(connection: sqlite3.Connection) -> None:
+    """Fill the payee list if it is empty.
+
+    Separate from `seed` and safe to call on a database that already holds
+    accounts. A bank file created before payees existed gets the table (the
+    schema runs on every open) but no rows, and every transfer would then be
+    refused for want of a payee that was never inserted.
+    """
+    with connection:
+        if connection.execute("SELECT 1 FROM payees").fetchone():
+            return
+        connection.executemany("INSERT INTO payees VALUES (?)", [(name,) for name in PAYEES])
+
+
 def clear(connection: sqlite3.Connection) -> None:
     """Empty the account tables, leaving `turns` untouched."""
     with connection:
-        for table in ("transactions", "cards", "bills", "accounts"):
+        for table in ("transactions", "cards", "bills", "accounts", "payees"):
             connection.execute(f"DELETE FROM {table}")
         connection.execute("DELETE FROM sqlite_sequence WHERE name = 'transactions'")
 

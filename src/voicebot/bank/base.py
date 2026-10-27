@@ -1,6 +1,6 @@
 """What a bank can do, and the vocabulary its callers share.
 
-The interface is deliberately narrow: eleven operations, each one a thing a
+The interface is deliberately narrow: thirteen operations, each one a thing a
 customer can ask for. Anything the dialogue needs that is not on this list is
 a sign the dialogue is inventing capability.
 """
@@ -53,6 +53,13 @@ class Transaction:
 
 
 @dataclass(frozen=True)
+class Payee:
+    """Someone money may be sent to. Never one of the customer's accounts."""
+
+    name: str
+
+
+@dataclass(frozen=True)
 class Bill:
     name: str
     amount_cents: int
@@ -81,6 +88,24 @@ DEPOSIT_SOURCES: tuple[str, ...] = (
     "cash",
     "transfer in",
 )
+
+
+def account_not_payee_message(name: str) -> str:
+    """Said aloud when a payment names one of the customer's own accounts.
+
+    Its own message rather than the generic one: this is the mistake that
+    actually happened, and the sentence is what tells the model to move the
+    money between accounts instead of sending it out of the bank.
+    """
+    return (
+        f"{name} is one of your own accounts, not a payee. "
+        "To put money into it, move it between your accounts instead."
+    )
+
+
+def unknown_payee_message(name: str, known: tuple[str, ...]) -> str:
+    """Said aloud when a payment names someone the bank has never heard of."""
+    return f"I don't have a payee called {name!r}. I can pay: {', '.join(known)}."
 
 
 def unknown_source_message(source: str) -> str:
@@ -166,6 +191,10 @@ class Bank(ABC):
         """Every bill on file."""
 
     @abstractmethod
+    def payees(self) -> tuple[Payee, ...]:
+        """Everyone money may be sent to."""
+
+    @abstractmethod
     def transactions(
         self,
         limit: int = 5,
@@ -191,7 +220,26 @@ class Bank(ABC):
 
     @abstractmethod
     def transfer(self, cents: int, payee: str, from_account: str) -> int:
-        """Move money out and return the new balance."""
+        """Send money to a payee and return the new balance.
+
+        Money leaves the bank. `payee` must be one of `payees()`; an account
+        name is refused, because sending to an account is not what this does
+        and doing it anyway loses the money.
+
+        Raises BankError for an unknown payee, an unknown account, or
+        insufficient funds.
+        """
+
+    @abstractmethod
+    def move(self, cents: int, from_account: str, to_account: str) -> tuple[int, int]:
+        """Move money between the customer's own accounts.
+
+        Returns the two new balances, source first. Debit and credit happen
+        together or not at all, so the bank's total never changes.
+
+        Raises BankError if the accounts are the same, either is unknown, the
+        amount is not positive, or there is not enough to move.
+        """
 
     @abstractmethod
     def pay_bill(self, bill: str) -> int:

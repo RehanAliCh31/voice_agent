@@ -24,6 +24,14 @@ CREATE TABLE IF NOT EXISTS bills (
     paid         INTEGER NOT NULL DEFAULT 0
 );
 
+-- Who money may be sent to. A closed list, and deliberately separate from
+-- accounts: "send 500 to savings" used to debit checking and credit nothing,
+-- because a payee was any string at all. An account cannot be a payee now,
+-- so that sentence is refused instead of half-performed.
+CREATE TABLE IF NOT EXISTS payees (
+    name TEXT PRIMARY KEY
+);
+
 CREATE TABLE IF NOT EXISTS transactions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     account     TEXT NOT NULL REFERENCES accounts(name),

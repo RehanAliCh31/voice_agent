@@ -1,4 +1,4 @@
-"""The eleven things the model is allowed to do.
+"""The twelve things the model is allowed to do.
 
 This file is the whole surface between a fluent model and a customer's money.
 Anything not described here, the bot cannot do — which is the point. Adding a
@@ -25,7 +25,14 @@ MAX_TRANSACTIONS = 20
 # call returns a summary and a token and changes nothing, the second carries
 # the token back and executes. Enforced in the executor, not in the prompt.
 CONFIRMING: frozenset[str] = frozenset(
-    {"transfer_money", "pay_bill", "freeze_card", "order_card", "deposit_money"}
+    {
+        "transfer_money",
+        "pay_bill",
+        "freeze_card",
+        "order_card",
+        "deposit_money",
+        "move_money",
+    }
 )
 
 _TOKEN = {
@@ -132,8 +139,10 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
     # --- writes: each needs confirmation ---
     _function(
         "transfer_money",
-        "Send money to a payee. Returns needs_confirmation on the first call: "
-        "read the summary back to the customer and wait for them to agree.",
+        "Send money OUT of the bank to a payee -- a person, not an account. "
+        "Returns needs_confirmation on the first call: read the summary back "
+        "to the customer and wait for them to agree. To put money into the "
+        "customer's own savings or checking, use move_money instead.",
         {
             "amount_cents": {
                 "type": "integer",
@@ -146,6 +155,25 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             "from_account": _ACCOUNT,
         },
         ["amount_cents", "payee", "from_account"],
+    ),
+    _function(
+        "move_money",
+        "Move money between two of the customer's OWN accounts, such as "
+        "checking to savings. Returns needs_confirmation on the first call. "
+        "Use this, never transfer_money, when the destination is an account "
+        "rather than a person -- transfer_money sends money out of the bank.",
+        {
+            "amount_cents": {
+                "type": "integer",
+                "description": (
+                    "The amount in whole cents, US dollars. 5000 means $50.00. "
+                    "Must be a positive whole number — never a decimal."
+                ),
+            },
+            "from_account": _ACCOUNT,
+            "to_account": _ACCOUNT,
+        },
+        ["amount_cents", "from_account", "to_account"],
     ),
     _function(
         "deposit_money",

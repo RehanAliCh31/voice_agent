@@ -22,12 +22,15 @@ from voicebot.bank.base import (
     BankError,
     Bill,
     Card,
+    Payee,
     Transaction,
+    account_not_payee_message,
     format_money,
     period_range,
+    unknown_payee_message,
     unknown_period_message,
 )
-from voicebot.bank.seed import clear, seed
+from voicebot.bank.seed import clear, seed, seed_payees
 from voicebot.utils.logging import get_logger
 
 log = get_logger("bank.sqlite")
@@ -52,6 +55,11 @@ class SqliteBank(Bank):
         if seed_if_empty and not self._db.execute("SELECT 1 FROM accounts").fetchone():
             seed(self._db)
             log.info("seeded a new bank at %s", path)
+        elif seed_if_empty:
+            # The schema runs on every open, so an older bank file now has an
+            # empty payees table. Left empty, every transfer would be refused
+            # for want of a payee that was never inserted.
+            seed_payees(self._db)
 
     # --- reads ---------------------------------------------------------------
 
@@ -77,6 +85,10 @@ class SqliteBank(Bank):
         return tuple(
             Bill(name=r["name"], amount_cents=r["amount_cents"], paid=bool(r["paid"])) for r in rows
         )
+
+    def payees(self) -> tuple[Payee, ...]:
+        rows = self._db.execute("SELECT name FROM payees ORDER BY name")
+        return tuple(Payee(name=r["name"]) for r in rows)
 
     def transactions(
         self,
@@ -135,6 +147,7 @@ class SqliteBank(Bank):
         if cents <= 0:
             raise BankError("The amount has to be more than zero.")
         account = self._account(from_account)
+        payee = self._payee(payee)
 
         # The sufficiency test is the UPDATE's own WHERE clause rather than a
         # separate read. Checking first and writing second lets two concurrent
@@ -154,6 +167,39 @@ class SqliteBank(Bank):
                 )
             self._ledger(account, payee.lower(), -cents)
         return self.balance(account)
+
+    def move(self, cents: int, from_account: str, to_account: str) -> tuple[int, int]:
+        if cents <= 0:
+            raise BankError("The amount has to be more than zero.")
+        source = self._account(from_account)
+        target = self._account(to_account)
+        if source == target:
+            raise BankError(f"{source} and {target} are the same account.")
+
+        # Both sides inside one transaction. The raise below rolls the debit
+        # back, so there is no state where the money has left and not arrived
+        # -- which is the whole failure this replaces.
+        with self._db:
+            changed = self._db.execute(
+                "UPDATE accounts SET balance_cents = balance_cents - ? "
+                "WHERE name = ? AND balance_cents >= ?",
+                (cents, source, cents),
+            ).rowcount
+            if not changed:
+                available = self.balance(source)
+                raise BankError(
+                    f"There isn't enough in {source}. " f"The balance is {format_money(available)}."
+                )
+            self._db.execute(
+                "UPDATE accounts SET balance_cents = balance_cents + ? WHERE name = ?",
+                (cents, target),
+            )
+            # Each side records the other, so the history reads from either
+            # account and says where the money went or came from.
+            self._ledger(source, target, -cents)
+            self._ledger(target, source, cents)
+
+        return self.balance(source), self.balance(target)
 
     def pay_bill(self, bill: str) -> int:
         row = self._db.execute(
@@ -275,6 +321,20 @@ class SqliteBank(Bank):
             return key
         known = ", ".join(a.name for a in self.accounts())
         raise BankError(f"I don't recognise the account {name!r}. I have: {known}.")
+
+    def _payee(self, name: str) -> str:
+        """Validate a payee, or say plainly why this one will not do.
+
+        An account name gets its own message rather than the generic one. It
+        is the mistake that actually happened, and the sentence is what tells
+        the model to move the money instead of sending it.
+        """
+        key = name.strip().lower()
+        if self._db.execute("SELECT 1 FROM payees WHERE name = ?", (key,)).fetchone():
+            return key
+        if self._db.execute("SELECT 1 FROM accounts WHERE name = ?", (key,)).fetchone():
+            raise BankError(account_not_payee_message(key))
+        raise BankError(unknown_payee_message(name, tuple(p.name for p in self.payees())))
 
     def _ledger(self, account: str, merchant: str, cents: int) -> None:
         """Record a movement. Called inside an open transaction."""
