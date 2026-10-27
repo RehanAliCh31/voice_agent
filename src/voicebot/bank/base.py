@@ -43,6 +43,12 @@ class Card:
     frozen: bool
     kind: str = "debit"
     holder: str = ""
+    # The whole number and the dates printed on it. Shown only on the details
+    # screen, never in a reply and never in the audit log: everywhere else
+    # four digits is how a card is named.
+    number: str = ""
+    valid_from: str = ""
+    valid_to: str = ""
     ecommerce: bool = True
     retail: bool = True
     atm: bool = True

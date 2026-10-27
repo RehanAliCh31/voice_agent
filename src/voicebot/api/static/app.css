@@ -1281,7 +1281,27 @@ body {
   color: var(--ink);
   padding: 22px;
   width: min(420px, calc(100vw - 32px));
+  /* A column that never grows past the window: on a short screen the fields
+     scroll and the heading, the countdown and the way out stay where they
+     are. A dialogue whose Close button is below the fold is a trap. */
+  max-height: calc(100dvh - 32px);
+  flex-direction: column;
+  overflow: hidden;
 }
+
+/* The display goes on [open] and nowhere else. A dialog is hidden by the
+   browser's own `dialog:not([open]) { display: none }`, and any author
+   display on the element itself beats that and leaves every closed dialogue
+   on the page. The same trap as styling [hidden]. */
+.ask[open] { display: flex; }
+
+.ask > .details,
+.ask > .ask__step { overflow-y: auto; min-height: 0; }
+
+.ask > .details__top,
+.ask > .ask__title,
+.ask > .details__warn,
+.ask > .ask__buttons { flex-shrink: 0; }
 
 .ask::backdrop { background: rgba(26, 25, 23, 0.42); }
 
@@ -1350,4 +1370,117 @@ body {
   justify-content: flex-end;
   gap: 9px;
   margin-top: 18px;
+}
+
+/* --- the four tiles -------------------------------------------------------- */
+
+.cardacts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.cardact {
+  flex: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 13px 6px;
+  text-align: center;
+  line-height: 1.25;
+  font-size: 12px;
+}
+
+.cardact__icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--brand-wash);
+  color: var(--brand-deep);
+  flex-shrink: 0;
+}
+
+.cardact--stop .cardact__icon { background: var(--bad-wash); color: var(--bad); }
+.cardact[disabled] .cardact__icon { background: var(--line-soft); color: var(--ink-faint); }
+
+/* --- what is printed on the card ------------------------------------------- */
+
+.details__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.details__top .ask__title { margin-bottom: 0; }
+
+/* The code on screen is good for one viewing, and this says how much of it
+   is left. A number that stays up is a number read over a shoulder. */
+.details__clock {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 2px solid var(--brand-bright);
+  color: var(--brand-deep);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.details__clock[data-low="true"] { border-color: var(--bad); color: var(--bad); }
+
+.details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0 0;
+}
+
+.details__pair { min-width: 0; }
+.details__pair--wide { grid-column: 1 / -1; }
+
+.details__key {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 5px;
+}
+
+.details__value {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  font-size: 14.5px;
+  overflow-wrap: anywhere;
+}
+
+.details__value--mono {
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
+}
+
+.details__warn {
+  margin: 16px 0 0;
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-wash);
+  color: var(--warn);
+  font-size: 12.5px;
+}
+
+@media (max-width: 420px) {
+  .cardact { font-size: 11px; padding: 11px 4px; }
+  .details { grid-template-columns: minmax(0, 1fr); }
 }

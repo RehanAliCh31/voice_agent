@@ -37,6 +37,7 @@
     cards: [],
     card: null, // the card being looked at, by last four
     ask: null, // the card action being asked about, if any
+    detailsTimer: null, // counts the card details off the screen
   };
 
   var el = {};
@@ -100,6 +101,10 @@
 
     monthly: function () {
       return request("/v1/monthly", { method: "GET" });
+    },
+
+    details: function (last4) {
+      return request("/v1/cards/" + encodeURIComponent(last4) + "/details", { method: "GET" });
     },
 
     arm: function (tool, args, reason) {
@@ -639,25 +644,142 @@
    * same gate the spoken path uses: the button arms the action and the bank
    * says what it is, and only then is there anything to agree to.
    */
+  // Four tiles under the card. The icons are drawn here as fixed literals,
+  // which is why innerHTML is safe on this one line and nowhere else: no
+  // value from the server or the customer reaches it.
+  var TILE_ICONS = {
+    details:
+      '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+      ' stroke-width="1.8" stroke-linecap="round"><rect x="2" y="5" width="20" height="14"' +
+      ' rx="2.5"/><path d="M2 10h20"/><circle cx="16" cy="15" r="2.4"/><path d="M18 17l2 2"/></svg>',
+    freeze:
+      '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+      ' stroke-width="1.8" stroke-linecap="round"><path d="M12 2v20M4 7l16 10M20 7L4 17"/></svg>',
+    replace:
+      '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+      ' stroke-width="1.8" stroke-linecap="round"><path d="M3 11a8 8 0 0 1 13.6-5.7L20 8"/>' +
+      '<path d="M20 4v4h-4"/><path d="M21 13a8 8 0 0 1-13.6 5.7L4 16"/><path d="M4 20v-4h4"/></svg>',
+    pin:
+      '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+      ' stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="16"' +
+      ' rx="2.5"/><circle cx="8" cy="10" r="1"/><circle cx="12" cy="10" r="1"/>' +
+      '<circle cx="16" cy="10" r="1"/><path d="M8 15h8"/></svg>',
+  };
+
+  function tile(card, icon, label, extraClass, onClick, disabledWhy) {
+    var button = node("button", "cardact" + (extraClass ? " " + extraClass : ""));
+    button.type = "button";
+
+    var mark = node("span", "cardact__icon");
+    mark.setAttribute("aria-hidden", "true");
+    mark.innerHTML = TILE_ICONS[icon];
+    button.appendChild(mark);
+    button.appendChild(node("span", null, label));
+
+    if (disabledWhy) {
+      button.disabled = true;
+      button.title = disabledWhy;
+      button.setAttribute("aria-label", label + " — " + disabledWhy);
+    } else {
+      button.addEventListener("click", onClick);
+    }
+    return button;
+  }
+
   function cardActions(card) {
     var row = node("div", "cardacts");
 
-    var freeze = node("button", "cardact cardact--stop", card.frozen ? "Already frozen" : "Freeze card");
-    freeze.type = "button";
-    freeze.disabled = card.frozen;
-    freeze.addEventListener("click", function () {
-      openAsk(card, "freeze");
-    });
-    row.appendChild(freeze);
-
-    var replace = node("button", "cardact", "Replace card");
-    replace.type = "button";
-    replace.addEventListener("click", function () {
-      openAsk(card, "replace");
-    });
-    row.appendChild(replace);
+    row.appendChild(
+      tile(card, "details", "View details", null, function () {
+        openDetails(card);
+      })
+    );
+    row.appendChild(
+      tile(
+        card,
+        "freeze",
+        card.frozen ? "Frozen" : "Freeze card",
+        "cardact--stop",
+        function () {
+          openAsk(card, "freeze");
+        },
+        card.frozen ? "this card is already frozen" : null
+      )
+    );
+    row.appendChild(
+      tile(card, "replace", "Replace card", null, function () {
+        openAsk(card, "replace");
+      })
+    );
+    // Deliberately dead rather than quietly doing nothing: a tile that looks
+    // live and is not is worse than one that says it is not ready.
+    row.appendChild(
+      tile(card, "pin", "Reset PIN", null, null, "not available yet")
+    );
 
     return row;
+  }
+
+  // --- what is printed on the card ----------------------------------------
+
+  function detailPair(key, value, wide, mono) {
+    var pair = node("div", "details__pair" + (wide ? " details__pair--wide" : ""));
+    pair.appendChild(node("dt", "details__key", key));
+    pair.appendChild(node("dd", "details__value" + (mono ? " details__value--mono" : ""), value));
+    return pair;
+  }
+
+  function openDetails(card) {
+    api
+      .details(card.last4)
+      .then(function (details) {
+        el.detailsList.replaceChildren(
+          detailPair("Name", details.holder, true),
+          detailPair("Card type", details.card_type),
+          detailPair("Status", details.status),
+          detailPair("Card number", details.number, true, true),
+          detailPair("Valid from", details.valid_from, false, true),
+          detailPair("Valid to", details.valid_to, false, true),
+          detailPair("Security code", details.security_code, false, true)
+        );
+        el.cardDetails.showModal();
+        el.detailsClose.focus();
+        countDown(details.expires_in_seconds);
+      })
+      .catch(function (error) {
+        // Nowhere to put a message in a dialogue that never opened, so it
+        // goes where the customer is already looking.
+        addTurn("bot", "Couldn't read that card's details: " + error.message, { error: true });
+      });
+  }
+
+  /** Close the details when the code they show has run out. */
+  function countDown(seconds) {
+    clearInterval(state.detailsTimer);
+    var left = seconds;
+
+    function show() {
+      el.detailsClock.textContent = left;
+      el.detailsClock.setAttribute("data-low", String(left <= 15));
+    }
+
+    show();
+    state.detailsTimer = setInterval(function () {
+      left -= 1;
+      if (left <= 0) {
+        closeDetails();
+        return;
+      }
+      show();
+    }, 1000);
+  }
+
+  function closeDetails() {
+    clearInterval(state.detailsTimer);
+    state.detailsTimer = null;
+    if (el.cardDetails.open) {
+      el.cardDetails.close();
+    }
   }
 
   // --- asking before acting -----------------------------------------------
@@ -1336,6 +1458,7 @@
       "monthlyLeft", "monthlyBar", "dock",
       "cardAsk", "askTitle", "askWhy", "askReason", "askSure", "askSummary",
       "askError", "askCancel", "askGo",
+      "cardDetails", "detailsList", "detailsClock", "detailsClose",
     ].forEach(function (id) {
       el[id] = document.getElementById(id);
     });
@@ -1360,6 +1483,13 @@
           el.levelFill.setAttribute("data-over", share >= 1 ? "true" : "false");
         }
       },
+    });
+
+    el.detailsClose.addEventListener("click", closeDetails);
+    // Escape closes it natively; the timer has to stop either way.
+    el.cardDetails.addEventListener("close", function () {
+      clearInterval(state.detailsTimer);
+      state.detailsTimer = null;
     });
 
     el.askGo.addEventListener("click", onAskGo);

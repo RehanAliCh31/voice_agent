@@ -66,12 +66,14 @@ class SqliteBank(Bank):
         _widen(self._db)
         if seed_if_empty and not self._db.execute("SELECT 1 FROM accounts").fetchone():
             seed(self._db)
+            _print_cards(self._db)
             log.info("seeded a new bank at %s", path)
         elif seed_if_empty:
             # The schema runs on every open, so an older bank file now has an
             # empty payees table. Left empty, every transfer would be refused
             # for want of a payee that was never inserted.
             seed_payees(self._db)
+            _print_cards(self._db)
             # Likewise the commitments: the columns were added above and took
             # their defaults, which filed every bill under Bills on the 1st,
             # and the ones that never existed in the old file are still
@@ -293,11 +295,12 @@ class SqliteBank(Bank):
         # grew, and nothing noticed, because the gate tests stop at the
         # read-back and never let a card order through.
         holder = next((card.holder for card in self.cards() if card.holder), "")
+        valid_from, valid_to = _validity(datetime.now())
         with self._db:
             self._db.execute(
-                "INSERT INTO cards (last4, account, frozen, kind, holder) "
-                "VALUES (?, ?, 0, 'debit', ?)",
-                (last4, name, holder),
+                "INSERT INTO cards (last4, account, frozen, kind, holder, "
+                "number, valid_from, valid_to) VALUES (?, ?, 0, 'debit', ?, ?, ?, ?)",
+                (last4, name, holder, _number_for(last4), valid_from, valid_to),
             )
         return _card(self._card_row(last4))
 
@@ -556,6 +559,9 @@ _ADDED: dict[str, dict[str, str]] = {
         "due_day": "INTEGER NOT NULL DEFAULT 1",
     },
     "cards": {
+        "number": "TEXT NOT NULL DEFAULT ''",
+        "valid_from": "TEXT NOT NULL DEFAULT ''",
+        "valid_to": "TEXT NOT NULL DEFAULT ''",
         "kind": "TEXT NOT NULL DEFAULT 'debit'",
         "holder": "TEXT NOT NULL DEFAULT ''",
         "ecommerce": "INTEGER NOT NULL DEFAULT 1",
@@ -563,6 +569,25 @@ _ADDED: dict[str, dict[str, str]] = {
         "atm": "INTEGER NOT NULL DEFAULT 1",
     },
 }
+
+
+def _print_cards(db: sqlite3.Connection) -> None:
+    """Give a number and dates to any card that predates them.
+
+    The columns above default to empty, which is not a card number. Filling
+    them is the same job as filling the categories on the bills: a migration
+    is the rows as well as the columns.
+    """
+    rows = db.execute("SELECT last4 FROM cards WHERE number = ''").fetchall()
+    if not rows:
+        return
+    valid_from, valid_to = _validity(datetime.now())
+    with db:
+        for row in rows:
+            db.execute(
+                "UPDATE cards SET number = ?, valid_from = ?, valid_to = ? WHERE last4 = ?",
+                (_number_for(row["last4"]), valid_from, valid_to, row["last4"]),
+            )
 
 
 def _widen(db: sqlite3.Connection) -> None:
@@ -580,6 +605,21 @@ def _widen(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+# A demo card number: a fixed issuer range, a random middle, and the four
+# digits the card is already known by, so the two agree with each other.
+_ISSUER = "220543"
+
+
+def _number_for(last4: str) -> str:
+    middle = f"{secrets.randbelow(1_000_000):06d}"
+    return f"{_ISSUER}{middle}{last4}"
+
+
+def _validity(now: datetime) -> tuple[str, str]:
+    """Issued this month, good for five years, as MM/YY."""
+    return now.strftime("%m/%y"), now.replace(year=now.year + 5).strftime("%m/%y")
+
+
 def _card(row: sqlite3.Row) -> Card:
     return Card(
         last4=row["last4"],
@@ -587,6 +627,9 @@ def _card(row: sqlite3.Row) -> Card:
         frozen=bool(row["frozen"]),
         kind=row["kind"],
         holder=row["holder"],
+        number=row["number"],
+        valid_from=row["valid_from"],
+        valid_to=row["valid_to"],
         ecommerce=bool(row["ecommerce"]),
         retail=bool(row["retail"]),
         atm=bool(row["atm"]),

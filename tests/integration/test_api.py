@@ -847,3 +847,58 @@ def test_a_screen_action_puts_what_was_asked_into_the_conversation(client: TestC
     assert spoken, "the conversation has to hold what the customer asked for"
     assert "bus" in spoken[-1]["content"]
     assert "4417" in spoken[-1]["content"]
+
+
+# --- the details screen ------------------------------------------------------
+#
+# What a bank shows you about your own card once you are past the lock
+# screen. The security code is minted for the viewing and is different every
+# time, because nothing anywhere keeps one.
+
+
+def test_the_details_of_a_card_can_be_read(client: TestClient) -> None:
+    body = client.get("/v1/cards/4417/details").json()
+
+    assert body["holder"]
+    groups = body["number"].split()
+    assert len(groups) == 4 and all(len(g) == 4 and g.isdigit() for g in groups)
+    assert groups[-1] == "4417", "the number and the four digits agree"
+    assert body["status"] == "Active"
+    assert body["valid_from"] and body["valid_to"]
+    assert len(body["security_code"]) == 3 and body["security_code"].isdigit()
+    assert body["expires_in_seconds"] > 0
+
+
+def test_the_security_code_is_different_every_time(client: TestClient) -> None:
+    """Minted for one viewing. Two the same would mean one was kept."""
+    seen = {client.get("/v1/cards/4417/details").json()["security_code"] for _ in range(12)}
+    assert len(seen) > 1
+
+
+def test_a_frozen_card_says_so_on_its_details(client: TestClient) -> None:
+    scripted(client, [Reply(text="Frozen.")])
+    armed = client.post(
+        "/v1/action",
+        json={"tool": "freeze_card", "arguments": {"last4": "4417"}, "reason": "lost"},
+    ).json()
+    client.post("/v1/confirm", json={"session_id": armed["session_id"]})
+
+    assert client.get("/v1/cards/4417/details").json()["status"] == "Frozen"
+
+
+def test_a_card_that_is_not_there_has_no_details(client: TestClient) -> None:
+    assert client.get("/v1/cards/0000/details").status_code == 404
+
+
+def test_the_card_list_still_shows_only_four_digits(client: TestClient) -> None:
+    """Details are a separate, deliberate request. The list is not."""
+    for card in client.get("/v1/cards").json()["cards"]:
+        assert "number" not in card
+        assert card["masked"].count("•") >= 12
+
+
+def test_reading_details_is_not_a_turn(client: TestClient) -> None:
+    before = client.get("/metrics").text
+    client.get("/v1/cards/4417/details")
+
+    assert client.get("/metrics").text == before

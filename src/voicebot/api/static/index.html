@@ -131,6 +131,24 @@
 
 </main>
 
+<!-- What is printed on the card. Opened on request, counted down, and
+     closed again: a number left on screen is a number over somebody's
+     shoulder. -->
+<dialog class="ask ask--details" id="cardDetails" aria-labelledby="detailsTitle">
+  <div class="details__top">
+    <h2 class="ask__title" id="detailsTitle">Card details</h2>
+    <span class="details__clock" id="detailsClock" aria-live="off">120</span>
+  </div>
+
+  <dl class="details" id="detailsList"></dl>
+
+  <p class="details__warn">Please do not share the above with anyone.</p>
+
+  <div class="ask__buttons">
+    <button class="button button--go" type="button" id="detailsClose">Close</button>
+  </div>
+</dialog>
+
 <!-- Asking before acting, in two steps: why, then are you sure. A native
      dialog, so Escape closes it and focus stays inside without any of that
      being written here. -->

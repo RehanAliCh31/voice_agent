@@ -772,3 +772,68 @@ def test_a_new_card_arrives_looking_like_a_card(bank: SqliteBank) -> None:
     assert issued.kind
     assert issued.frozen is False
     assert issued.controls == {"ecommerce": True, "retail": True, "atm": True}
+
+
+# --- what is printed on a card -----------------------------------------------
+#
+# The number and the dates are held because the details screen shows them, the
+# way a bank's own app does once you are past the lock screen. They are demo
+# cards and the numbers are invented.
+#
+# The security code is not here and is not anywhere: it is minted for one
+# viewing and forgotten. A stored code is the one thing that stays wrong even
+# with made-up data.
+
+
+def test_a_card_has_a_number_ending_in_its_last_four(bank: SqliteBank) -> None:
+    for card in bank.cards():
+        assert len(card.number) == 16
+        assert card.number.isdigit()
+        assert card.number.endswith(card.last4)
+
+
+def test_every_card_has_its_own_number(bank: SqliteBank) -> None:
+    numbers = {card.number for card in bank.cards()}
+    assert len(numbers) == len(bank.cards())
+
+
+def test_a_card_is_valid_between_two_dates(bank: SqliteBank) -> None:
+    for card in bank.cards():
+        assert len(card.valid_from) == 5 and card.valid_from[2] == "/"
+        assert len(card.valid_to) == 5 and card.valid_to[2] == "/"
+        assert card.valid_to > card.valid_from
+
+
+def test_the_bank_holds_no_security_code(bank: SqliteBank) -> None:
+    """Asserted rather than assumed: it must not creep back in."""
+    columns = {row["name"] for row in bank._db.execute("PRAGMA table_info(cards)")}
+    assert not columns & {"cvv", "cvc", "security_code", "pin"}
+
+
+def test_a_replacement_gets_a_number_of_its_own(bank: SqliteBank) -> None:
+    existing = {card.number for card in bank.cards()}
+
+    issued = bank.order_card("checking")
+
+    assert issued.number not in existing
+    assert issued.number.endswith(issued.last4)
+
+
+def test_a_bank_file_made_before_numbers_gains_them(tmp_path) -> None:
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE accounts (name TEXT PRIMARY KEY, balance_cents INTEGER NOT NULL);"
+        "CREATE TABLE cards (last4 TEXT PRIMARY KEY, account TEXT NOT NULL, "
+        "frozen INTEGER NOT NULL DEFAULT 0);"
+        "INSERT INTO accounts VALUES ('checking', 100);"
+        "INSERT INTO cards VALUES ('1234', 'checking', 0);"
+    )
+    old.commit()
+    old.close()
+
+    card = next(c for c in SqliteBank(str(path)).cards() if c.last4 == "1234")
+    assert card.number.endswith("1234")
+    assert card.valid_to

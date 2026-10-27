@@ -22,6 +22,7 @@ from voicebot.api.payloads import (
     ActionPayload,
     ActionRequest,
     AudioPayload,
+    CardDetailsPayload,
     CardsPayload,
     HealthPayload,
     LedgerPayload,
@@ -33,6 +34,7 @@ from voicebot.api.payloads import (
     TextRequest,
     TranscriptPayload,
     TurnPayload,
+    card_details_payload,
     cards_payload,
     ledger_payload,
     monthly_payload,
@@ -264,6 +266,19 @@ def cards(services: Services = Depends(get_services)) -> CardsPayload:
 def monthly(services: Services = Depends(get_services)) -> MonthlyPayload:
     """Every monthly commitment, grouped, for the monthly screen."""
     return monthly_payload(services.bank)
+
+
+@router.get("/v1/cards/{last4}/details", response_model=CardDetailsPayload, tags=["screens"])
+def card_details(last4: str, services: Services = Depends(get_services)) -> CardDetailsPayload:
+    """One card's printed details, for the details dialogue.
+
+    Its own request rather than part of the card list: a number nobody asked
+    to see should not travel with every refresh of the screen.
+    """
+    card = next((c for c in services.bank.cards() if c.last4 == last4), None)
+    if card is None:
+        raise HTTPException(status_code=404, detail=f"No card ending {last4}.")
+    return card_details_payload(card)
 
 
 @router.get("/v1/statement", response_model=StatementPayload, tags=["screens"])

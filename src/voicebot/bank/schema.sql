@@ -12,17 +12,25 @@ CREATE TABLE IF NOT EXISTS accounts (
     balance_cents INTEGER NOT NULL CHECK (balance_cents >= 0)
 );
 
--- Only the last four digits are ever stored. The rest is not needed to say
--- which card somebody means, and a number the bank never holds is a number
--- that cannot leak from it.
+-- The number and the dates are held because the details screen shows them,
+-- the way a bank's own app does once you are past the lock screen. These are
+-- demo cards and the numbers are invented; with real ones this column is
+-- where encryption at rest and an access log would belong.
+--
+-- There is no security code column and there is not meant to be one. The
+-- code shown on that screen is minted for a single viewing and forgotten,
+-- so there is nothing here to leak, log, or back up by accident.
 --
 -- The three controls default to on, which is how a card arrives. They are
 -- columns rather than a screen's idea, because a switch nothing can change
 -- is a lie told in CSS.
 CREATE TABLE IF NOT EXISTS cards (
-    last4     TEXT PRIMARY KEY,
-    account   TEXT NOT NULL REFERENCES accounts(name),
-    frozen    INTEGER NOT NULL DEFAULT 0,
+    last4      TEXT PRIMARY KEY,
+    account    TEXT NOT NULL REFERENCES accounts(name),
+    frozen     INTEGER NOT NULL DEFAULT 0,
+    number     TEXT NOT NULL DEFAULT '',
+    valid_from TEXT NOT NULL DEFAULT '',
+    valid_to   TEXT NOT NULL DEFAULT '',
     kind      TEXT NOT NULL DEFAULT 'debit',
     holder    TEXT NOT NULL DEFAULT '',
     ecommerce INTEGER NOT NULL DEFAULT 1,

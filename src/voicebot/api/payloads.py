@@ -9,12 +9,13 @@ front end would have to follow every rename.
 from __future__ import annotations
 
 import base64
+import secrets
 from datetime import date
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-from voicebot.bank.base import PLAN_CATEGORIES, Bank, format_money
+from voicebot.bank.base import PLAN_CATEGORIES, Bank, Card, format_money
 from voicebot.pipeline.audio_io import encode_wav
 from voicebot.pipeline.orchestrator import TurnResult
 
@@ -244,6 +245,25 @@ class CardPayload(BaseModel):
     controls: list[CardControlPayload] = Field(default_factory=list)
 
 
+class CardDetailsPayload(BaseModel):
+    """What a card screen shows about one card, on a deliberate request.
+
+    `security_code` is minted here and kept nowhere. It is different on every
+    reading, which is the honest shape for a value the bank does not hold --
+    and why the screen counts down rather than leaving it up.
+    """
+
+    last4: str
+    holder: str
+    card_type: str
+    number: str
+    status: str
+    valid_from: str
+    valid_to: str
+    security_code: str
+    expires_in_seconds: int
+
+
 class CardsPayload(BaseModel):
     cards: list[CardPayload] = Field(default_factory=list)
 
@@ -371,6 +391,27 @@ def monthly_payload(bank: Bank) -> MonthlyPayload:
         remaining=format_money(committed - paid),
         remaining_cents=committed - paid,
         groups=groups,
+    )
+
+
+# How long the details stay on screen. Long enough to copy a number off,
+# short enough that a phone left on a desk is not showing one.
+DETAILS_SECONDS = 120
+
+
+def card_details_payload(card: Card) -> CardDetailsPayload:
+    """One card's details, with a code made for this viewing only."""
+    return CardDetailsPayload(
+        last4=card.last4,
+        holder=card.holder,
+        card_type=card.kind.title(),
+        # Grouped in fours, the way it is printed and the way it is read out.
+        number=" ".join(card.number[i : i + 4] for i in range(0, len(card.number), 4)),
+        status="Frozen" if card.frozen else "Active",
+        valid_from=card.valid_from,
+        valid_to=card.valid_to,
+        security_code=f"{secrets.randbelow(1000):03d}",
+        expires_in_seconds=DETAILS_SECONDS,
     )
 
 
