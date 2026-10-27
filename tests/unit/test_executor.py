@@ -682,3 +682,14 @@ def test_list_cards_reports_what_the_screen_draws(executor: ToolExecutor) -> Non
     card = executor.execute(call("list_cards")).result["cards"][0]
 
     assert {"last4", "account", "frozen", "kind", "holder", "controls"} <= set(card)
+
+
+def test_a_confirmed_card_order_issues_one(bank: SqliteBank, executor: ToolExecutor) -> None:
+    """The gate tests stop at the read-back; this one goes through with it."""
+    before = len(bank.cards())
+    token = executor.execute(call("order_card", account="checking")).result["token"]
+
+    out = executor.execute(call("order_card", account="checking", confirmation_token=token))
+
+    assert out.result["status"] == "done"
+    assert len(bank.cards()) == before + 1

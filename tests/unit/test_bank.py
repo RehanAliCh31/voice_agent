@@ -749,3 +749,26 @@ def test_putting_an_older_file_right_leaves_the_customers_own_state_alone(tmp_pa
     assert electricity.paid is True, "already paid, and it stays paid"
     assert electricity.category == "bills"
     assert electricity.due_day == 5
+
+
+def test_a_new_card_can_actually_be_issued(bank: SqliteBank) -> None:
+    """Broken silently by adding columns: the insert named none of them.
+
+    Nothing caught it, because the gate tests only ever made the first call
+    of a confirming tool and never let one through.
+    """
+    before = {card.last4 for card in bank.cards()}
+
+    issued = bank.order_card("checking")
+
+    assert issued.last4 not in before
+    assert {card.last4 for card in bank.cards()} == before | {issued.last4}
+
+
+def test_a_new_card_arrives_looking_like_a_card(bank: SqliteBank) -> None:
+    issued = bank.order_card("checking")
+
+    assert issued.holder, "it has the customer's name on it like the others"
+    assert issued.kind
+    assert issued.frozen is False
+    assert issued.controls == {"ecommerce": True, "retail": True, "atm": True}

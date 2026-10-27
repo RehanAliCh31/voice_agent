@@ -78,7 +78,7 @@ def seed(connection: sqlite3.Connection, now: datetime | None = None) -> None:
     now = now or datetime.now()
     seed_payees(connection)
     with connection:
-        connection.executemany("INSERT INTO accounts VALUES (?, ?)", ACCOUNTS)
+        connection.executemany("INSERT INTO accounts (name, balance_cents) VALUES (?, ?)", ACCOUNTS)
         connection.executemany(
             "INSERT INTO cards (last4, account, frozen, kind, holder) " "VALUES (?, ?, 0, ?, ?)",
             [(last4, account, kind, HOLDER) for last4, account, kind in CARDS],
@@ -106,7 +106,7 @@ def seed_payees(connection: sqlite3.Connection) -> None:
     with connection:
         if connection.execute("SELECT 1 FROM payees").fetchone():
             return
-        connection.executemany("INSERT INTO payees VALUES (?)", [(name,) for name in PAYEES])
+        connection.executemany("INSERT INTO payees (name) VALUES (?)", [(name,) for name in PAYEES])
 
 
 def seed_plans(connection: sqlite3.Connection) -> None:

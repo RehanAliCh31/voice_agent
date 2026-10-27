@@ -289,9 +289,17 @@ class SqliteBank(Bank):
         last4 = f"{secrets.randbelow(10_000):04d}"
         while last4 in existing:
             last4 = f"{secrets.randbelow(10_000):04d}"
+        # Columns are named. The unqualified form broke the moment the table
+        # grew, and nothing noticed, because the gate tests stop at the
+        # read-back and never let a card order through.
+        holder = next((card.holder for card in self.cards() if card.holder), "")
         with self._db:
-            self._db.execute("INSERT INTO cards VALUES (?, ?, 0)", (last4, name))
-        return Card(last4=last4, account=name, frozen=False)
+            self._db.execute(
+                "INSERT INTO cards (last4, account, frozen, kind, holder) "
+                "VALUES (?, ?, 0, 'debit', ?)",
+                (last4, name, holder),
+            )
+        return _card(self._card_row(last4))
 
     def deposit(self, cents: int, account: str, source: str = "deposit") -> int:
         """Pay money in. Writes a positive ledger row, so the history stays true."""
