@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from voicebot.bank.base import Bank, format_money
+from voicebot.bank.base import PLAN_CATEGORIES, Bank, format_money
 from voicebot.pipeline.audio_io import encode_wav
 from voicebot.pipeline.orchestrator import TurnResult
 
@@ -157,6 +157,41 @@ class StatementPayload(BaseModel):
     rows: list[StatementRowPayload] = Field(default_factory=list)
 
 
+class PlanPayload(BaseModel):
+    """One monthly commitment as the monthly screen draws it."""
+
+    name: str
+    category: str
+    amount: str
+    amount_cents: int
+    due_day: int
+    due_label: str
+    paid: bool
+
+
+class PlanGroupPayload(BaseModel):
+    """One heading on the monthly screen, and what falls under it."""
+
+    category: str
+    label: str
+    total: str
+    total_cents: int
+    plans: list[PlanPayload] = Field(default_factory=list)
+
+
+class MonthlyPayload(BaseModel):
+    """Everything that leaves this month, and how much of it has gone."""
+
+    month_label: str
+    committed: str
+    committed_cents: int
+    paid: str
+    paid_cents: int
+    remaining: str
+    remaining_cents: int
+    groups: list[PlanGroupPayload] = Field(default_factory=list)
+
+
 class CardControlPayload(BaseModel):
     """One switch on a card, named for the page as well as for the model."""
 
@@ -241,6 +276,76 @@ _CONTROL_WORDS: dict[str, tuple[str, str]] = {
     "retail": ("Shop purchases", "Allow this card to be used in person"),
     "atm": ("Cash machines", "Allow this card to withdraw cash"),
 }
+
+
+# The heading each category gets. Beside the payload rather than in the
+# page, for the same reason the card controls are: the words a customer
+# reads come from one place.
+_CATEGORY_WORDS: dict[str, str] = {
+    "rent": "Rent",
+    "bills": "Bills",
+    "wifi": "Internet",
+    "groceries": "Groceries",
+    "subscriptions": "Subscriptions",
+}
+
+
+def _ordinal(day: int) -> str:
+    """ "the 1st", "the 22nd" -- said the way a date is said aloud."""
+    if 11 <= day % 100 <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return f"{day}{suffix}"
+
+
+def monthly_payload(bank: Bank) -> MonthlyPayload:
+    """Every monthly commitment, grouped, with what is left to pay.
+
+    Grouped here rather than in the page so the subtotals under each heading
+    and the figure at the top are one arithmetic, and so the order of the
+    headings is the bank's rather than whatever order rows arrived in.
+    """
+    bills = bank.bills()
+    committed = sum(bill.amount_cents for bill in bills)
+    paid = sum(bill.amount_cents for bill in bills if bill.paid)
+
+    groups = []
+    for category in PLAN_CATEGORIES:
+        under = [bill for bill in bills if bill.category == category]
+        if not under:
+            continue
+        groups.append(
+            PlanGroupPayload(
+                category=category,
+                label=_CATEGORY_WORDS.get(category, category.title()),
+                total=format_money(sum(bill.amount_cents for bill in under)),
+                total_cents=sum(bill.amount_cents for bill in under),
+                plans=[
+                    PlanPayload(
+                        name=bill.name,
+                        category=bill.category,
+                        amount=format_money(bill.amount_cents),
+                        amount_cents=bill.amount_cents,
+                        due_day=bill.due_day,
+                        due_label=f"Due the {_ordinal(bill.due_day)}",
+                        paid=bill.paid,
+                    )
+                    for bill in under
+                ],
+            )
+        )
+
+    return MonthlyPayload(
+        month_label=date.today().strftime("%B %Y"),
+        committed=format_money(committed),
+        committed_cents=committed,
+        paid=format_money(paid),
+        paid_cents=paid,
+        remaining=format_money(committed - paid),
+        remaining_cents=committed - paid,
+        groups=groups,
+    )
 
 
 def cards_payload(bank: Bank) -> CardsPayload:

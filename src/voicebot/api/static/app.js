@@ -97,6 +97,10 @@
       return request("/v1/cards", { method: "GET" });
     },
 
+    monthly: function () {
+      return request("/v1/monthly", { method: "GET" });
+    },
+
     reset: function () {
       return fetch("/v1/reset", {
         method: "POST",
@@ -369,7 +373,15 @@
       return;
     }
 
-    bills.forEach(function (bill) {
+    // Only what is still owed, and only the next few: the whole list is the
+    // monthly screen's job, and nine rows here would crowd out the accounts.
+    var owing = bills.filter(function (bill) {
+      return !bill.paid;
+    });
+    var showing = owing.length ? owing : bills;
+    var hidden = showing.length - 5;
+
+    showing.slice(0, 5).forEach(function (bill) {
       var row = node("div", "bill");
       if (bill.paid) {
         row.classList.add("bill--paid");
@@ -382,6 +394,15 @@
       );
       el.bills.appendChild(row);
     });
+
+    if (hidden > 0) {
+      var more = node("button", "bills__more", hidden + " more this month");
+      more.type = "button";
+      more.addEventListener("click", function () {
+        showView("monthly");
+      });
+      el.bills.appendChild(more);
+    }
   }
 
   // --- the screens ----------------------------------------------------------
@@ -412,6 +433,9 @@
     }
     if (name === "cards") {
       loadCards();
+    }
+    if (name === "monthly") {
+      loadMonthly();
     }
   }
 
@@ -647,6 +671,67 @@
     return controls;
   }
 
+  // --- the monthly screen -----------------------------------------------------
+
+  function loadMonthly() {
+    api
+      .monthly()
+      .then(renderMonthly)
+      .catch(function () {
+        el.monthlyPlans.replaceChildren(
+          node("p", "block__empty", "Couldn't load your monthly plan just now.")
+        );
+      });
+  }
+
+  function renderMonthly(data) {
+    el.monthlyCommitted.textContent = data.committed;
+    el.monthlyMonth.textContent = data.month_label;
+    el.monthlyPaid.textContent = data.paid;
+    el.monthlyLeft.textContent = data.remaining;
+
+    var share = data.committed_cents
+      ? Math.round((data.paid_cents / data.committed_cents) * 100)
+      : 0;
+    el.monthlyBar.style.width = share + "%";
+
+    el.monthlyPlans.replaceChildren();
+    if (!data.groups.length) {
+      el.monthlyPlans.appendChild(node("p", "block__empty", "Nothing is owed this month."));
+      return;
+    }
+    data.groups.forEach(function (group) {
+      el.monthlyPlans.appendChild(planGroup(group));
+    });
+  }
+
+  function planGroup(group) {
+    var block = node("div", "plangroup");
+
+    var head = node("div", "plangroup__head");
+    head.appendChild(node("span", "plangroup__name", group.label));
+    head.appendChild(node("span", "plangroup__total", group.total));
+    block.appendChild(head);
+
+    group.plans.forEach(function (plan) {
+      var row = node("div", "plan" + (plan.paid ? " plan--paid" : ""));
+
+      var what = node("div");
+      what.appendChild(node("span", "plan__name", plan.name));
+      what.appendChild(node("span", "plan__due", plan.due_label));
+      row.appendChild(what);
+
+      var side = node("div", "plan__side");
+      side.appendChild(node("span", "plan__amount", plan.amount));
+      side.appendChild(node("span", "plan__state", plan.paid ? "Paid" : "Due"));
+      row.appendChild(side);
+
+      block.appendChild(row);
+    });
+
+    return block;
+  }
+
   // --- the conversation ---------------------------------------------------
 
   function clearEmptyState() {
@@ -829,6 +914,10 @@
     // just spoke come from the same answer and describe the same moment.
     renderAccounts(turn.accounts);
     renderBills(turn.bills);
+    if (state.view === "monthly") {
+      // A turn can pay one of them.
+      loadMonthly();
+    }
     if (state.view === "cards") {
       // A turn can freeze a card or change what it allows.
       loadCards();
@@ -1079,6 +1168,8 @@
       "vadToggle", "vadSensitivity", "vadValue", "vadNote",
       "screens", "statement", "statementTotal", "statementMonth",
       "statementIn", "statementOut", "cardPicker", "cardPane",
+      "monthlyPlans", "monthlyCommitted", "monthlyMonth", "monthlyPaid",
+      "monthlyLeft", "monthlyBar",
     ].forEach(function (id) {
       el[id] = document.getElementById(id);
     });

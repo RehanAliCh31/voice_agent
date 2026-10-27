@@ -632,3 +632,64 @@ def test_a_bank_file_made_before_cards_had_controls_gains_them(tmp_path) -> None
 
     card = next(c for c in bank.cards() if c.last4 == "1234")
     assert card.controls == {"ecommerce": True, "retail": True, "atm": True}
+
+
+# --- what is owed every month ------------------------------------------------
+#
+# Rent, groceries, the wifi and the subscriptions are the same kind of thing
+# as the electricity bill: money that leaves every month whether or not
+# anybody thinks about it. They live in one table so there is one answer to
+# "what do I owe", and so that everything on the screen is payable by voice.
+
+
+def test_every_commitment_has_a_category(bank: SqliteBank) -> None:
+    from voicebot.bank.base import PLAN_CATEGORIES
+
+    assert all(bill.category in PLAN_CATEGORIES for bill in bank.bills())
+
+
+def test_the_categories_the_customer_asked_for_are_all_there(bank: SqliteBank) -> None:
+    assert {bill.category for bill in bank.bills()} == {
+        "bills",
+        "rent",
+        "groceries",
+        "wifi",
+        "subscriptions",
+    }
+
+
+def test_every_commitment_falls_due_on_a_day_of_the_month(bank: SqliteBank) -> None:
+    assert all(1 <= bill.due_day <= 28 for bill in bank.bills())
+
+
+def test_rent_is_the_largest_commitment(bank: SqliteBank) -> None:
+    """Seed data that reads like a life rather than a list of test values."""
+    largest = max(bank.bills(), key=lambda bill: bill.amount_cents)
+    assert largest.category == "rent"
+
+
+def test_paying_one_leaves_the_others_alone(bank: SqliteBank) -> None:
+    bank.pay_bill("electricity")
+
+    paid = {bill.name for bill in bank.bills() if bill.paid}
+    assert paid == {"electricity"}
+
+
+def test_a_bank_file_made_before_categories_gains_them(tmp_path) -> None:
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE accounts (name TEXT PRIMARY KEY, balance_cents INTEGER NOT NULL);"
+        "CREATE TABLE bills (name TEXT PRIMARY KEY, amount_cents INTEGER NOT NULL, "
+        "paid INTEGER NOT NULL DEFAULT 0);"
+        "INSERT INTO accounts VALUES ('checking', 100);"
+        "INSERT INTO bills VALUES ('electricity', 7250, 0);"
+    )
+    old.commit()
+    old.close()
+
+    bill = next(b for b in SqliteBank(str(path)).bills() if b.name == "electricity")
+    assert bill.category == "bills"
+    assert bill.due_day >= 1

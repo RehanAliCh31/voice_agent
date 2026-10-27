@@ -670,3 +670,60 @@ def test_reading_the_cards_is_not_a_turn(client: TestClient) -> None:
     client.get("/v1/cards")
 
     assert client.get("/metrics").text == before
+
+
+# --- the monthly screen ------------------------------------------------------
+
+
+def test_the_monthly_endpoint_groups_by_category(client: TestClient) -> None:
+    body = client.get("/v1/monthly").json()
+
+    assert [group["category"] for group in body["groups"]] == [
+        "rent",
+        "bills",
+        "wifi",
+        "groceries",
+        "subscriptions",
+    ]
+    assert all(group["label"] for group in body["groups"])
+
+
+def test_the_monthly_totals_add_up(client: TestClient) -> None:
+    body = client.get("/v1/monthly").json()
+
+    from_groups = sum(group["total_cents"] for group in body["groups"])
+    assert body["committed_cents"] == from_groups
+    assert body["paid_cents"] + body["remaining_cents"] == body["committed_cents"]
+
+
+def test_nothing_is_paid_to_begin_with(client: TestClient) -> None:
+    body = client.get("/v1/monthly").json()
+
+    assert body["paid_cents"] == 0
+    assert body["remaining_cents"] == body["committed_cents"]
+
+
+def test_paying_one_moves_it_from_remaining_to_paid(client: TestClient) -> None:
+    before = client.get("/v1/monthly").json()
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "pay_bill", {"bill": "electricity"}),)),
+            Reply(text="Shall I?"),
+            Reply(text="Paid."),
+        ],
+    )
+    sid = client.post("/v1/chat", json={"text": "pay the electricity"}).json()["session_id"]
+    client.post("/v1/confirm", json={"session_id": sid})
+
+    after = client.get("/v1/monthly").json()
+    assert after["paid_cents"] == 7_250
+    assert after["remaining_cents"] == before["remaining_cents"] - 7_250
+    assert after["committed_cents"] == before["committed_cents"]
+
+
+def test_a_plan_says_when_it_falls_due(client: TestClient) -> None:
+    plan = client.get("/v1/monthly").json()["groups"][0]["plans"][0]
+
+    assert {"name", "amount", "amount_cents", "due_day", "due_label", "paid"} <= set(plan)
+    assert plan["due_label"]

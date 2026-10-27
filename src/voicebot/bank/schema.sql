@@ -30,10 +30,16 @@ CREATE TABLE IF NOT EXISTS cards (
     atm       INTEGER NOT NULL DEFAULT 1
 );
 
+-- What leaves every month whether or not anybody thinks about it: the
+-- electricity, the rent, the groceries, the wifi, the subscriptions. One
+-- table rather than two, so there is one answer to "what do I owe" and
+-- everything the monthly screen shows can be paid by voice.
 CREATE TABLE IF NOT EXISTS bills (
     name         TEXT PRIMARY KEY,
     amount_cents INTEGER NOT NULL,
-    paid         INTEGER NOT NULL DEFAULT 0
+    paid         INTEGER NOT NULL DEFAULT 0,
+    category     TEXT NOT NULL DEFAULT 'bills',
+    due_day      INTEGER NOT NULL DEFAULT 1
 );
 
 -- Who money may be sent to. A closed list, and deliberately separate from

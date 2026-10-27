@@ -132,11 +132,27 @@ class Payee:
     name: str
 
 
+# How a monthly commitment is grouped on screen. Closed, because each one
+# is a heading somebody reads: a sixth would be a design decision, not a
+# string the model happened to produce.
+PLAN_CATEGORIES: tuple[str, ...] = (
+    "rent",
+    "bills",
+    "wifi",
+    "groceries",
+    "subscriptions",
+)
+
+
 @dataclass(frozen=True)
 class Bill:
     name: str
     amount_cents: int
     paid: bool
+    category: str = "bills"
+    # The day of the month it falls due. Capped at 28 by the seed so that
+    # every month has one; a bill due on the 31st has no February.
+    due_day: int = 1
 
 
 # The only periods the bot understands. A closed vocabulary rather than free

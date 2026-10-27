@@ -21,6 +21,7 @@ from voicebot.api.payloads import (
     CardsPayload,
     HealthPayload,
     LedgerPayload,
+    MonthlyPayload,
     ReadyPayload,
     SessionRequest,
     SpeakRequest,
@@ -30,6 +31,7 @@ from voicebot.api.payloads import (
     TurnPayload,
     cards_payload,
     ledger_payload,
+    monthly_payload,
     statement_payload,
     turn_payload,
 )
@@ -183,6 +185,12 @@ def accounts(services: Services = Depends(get_services)) -> LedgerPayload:
 def cards(services: Services = Depends(get_services)) -> CardsPayload:
     """Every card on file, for the cards screen. Four digits each, no more."""
     return cards_payload(services.bank)
+
+
+@router.get("/v1/monthly", response_model=MonthlyPayload, tags=["screens"])
+def monthly(services: Services = Depends(get_services)) -> MonthlyPayload:
+    """Every monthly commitment, grouped, for the monthly screen."""
+    return monthly_payload(services.bank)
 
 
 @router.get("/v1/statement", response_model=StatementPayload, tags=["screens"])

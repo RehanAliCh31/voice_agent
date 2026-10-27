@@ -91,9 +91,16 @@ class SqliteBank(Bank):
         return tuple(_card(row) for row in rows)
 
     def bills(self) -> tuple[Bill, ...]:
-        rows = self._db.execute("SELECT name, amount_cents, paid FROM bills ORDER BY name")
+        rows = self._db.execute("SELECT * FROM bills ORDER BY due_day, name")
         return tuple(
-            Bill(name=r["name"], amount_cents=r["amount_cents"], paid=bool(r["paid"])) for r in rows
+            Bill(
+                name=row["name"],
+                amount_cents=int(row["amount_cents"]),
+                paid=bool(row["paid"]),
+                category=row["category"],
+                due_day=int(row["due_day"]),
+            )
+            for row in rows
         )
 
     def payees(self) -> tuple[Payee, ...]:
@@ -531,6 +538,10 @@ def _reference() -> str:
 # one would fail. Adding them is idempotent and cheap, and it runs on every
 # open rather than behind a version number nobody would remember to raise.
 _ADDED: dict[str, dict[str, str]] = {
+    "bills": {
+        "category": "TEXT NOT NULL DEFAULT 'bills'",
+        "due_day": "INTEGER NOT NULL DEFAULT 1",
+    },
     "cards": {
         "kind": "TEXT NOT NULL DEFAULT 'debit'",
         "holder": "TEXT NOT NULL DEFAULT ''",

@@ -34,12 +34,22 @@ CARDS: tuple[tuple[str, str, str], ...] = (
     ("9021", "savings", "credit"),
 )
 
-BILLS: tuple[tuple[str, int], ...] = (
-    ("electricity", 7_250),
-    ("water", 3_100),
-    ("phone", 2_499),
-    ("internet", 4_000),
-    ("credit card", 21_500),
+# (name, cents, category, day of the month it falls due). Everything that
+# leaves every month, not only the things called bills -- the monthly screen
+# shows all of it, and pay_bill works on all of it.
+#
+# Due days stop at 28 so that every month has one. A bill due on the 31st
+# has no February.
+BILLS: tuple[tuple[str, int, str, int], ...] = (
+    ("rent", 120_000, "rent", 1),
+    ("groceries", 45_000, "groceries", 1),
+    ("electricity", 7_250, "bills", 5),
+    ("spotify", 999, "subscriptions", 7),
+    ("internet", 4_000, "wifi", 8),
+    ("water", 3_100, "bills", 12),
+    ("phone", 2_499, "bills", 18),
+    ("netflix", 1_099, "subscriptions", 19),
+    ("credit card", 21_500, "bills", 22),
 )
 
 # Who the customer can send money to. Names only: this bank's payees are
@@ -73,7 +83,11 @@ def seed(connection: sqlite3.Connection, now: datetime | None = None) -> None:
             "INSERT INTO cards (last4, account, frozen, kind, holder) " "VALUES (?, ?, 0, ?, ?)",
             [(last4, account, kind, HOLDER) for last4, account, kind in CARDS],
         )
-        connection.executemany("INSERT INTO bills VALUES (?, ?, 0)", BILLS)
+        connection.executemany(
+            "INSERT INTO bills (name, amount_cents, paid, category, due_day) "
+            "VALUES (?, ?, 0, ?, ?)",
+            BILLS,
+        )
         connection.executemany(
             "INSERT INTO transactions (account, merchant, cents, occurred_at) "
             "VALUES ('checking', ?, ?, ?)",

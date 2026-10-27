@@ -29,6 +29,7 @@
     <button class="screens__tab" type="button" data-view="assistant" aria-current="page">Assistant</button>
     <button class="screens__tab" type="button" data-view="transactions">Transactions</button>
     <button class="screens__tab" type="button" data-view="cards">Cards</button>
+    <button class="screens__tab" type="button" data-view="monthly">Monthly</button>
   </nav>
 </header>
 
@@ -103,6 +104,27 @@
   <section class="view view--cards" id="viewCards" hidden>
     <div class="cardpicker" id="cardPicker" role="tablist" aria-label="Your cards"></div>
     <div class="cardpane" id="cardPane">
+      <p class="block__empty">Loading…</p>
+    </div>
+  </section>
+
+  <!-- Monthly: what leaves every month, and how much of it has gone. -->
+  <section class="view view--monthly" id="viewMonthly" hidden>
+    <header class="commit">
+      <p class="commit__label">Committed this month</p>
+      <p class="commit__total" id="monthlyCommitted">····</p>
+      <p class="summary__month" id="monthlyMonth">—</p>
+
+      <div class="commit__bar" aria-hidden="true">
+        <span class="commit__done" id="monthlyBar" style="width: 0%"></span>
+      </div>
+      <p class="commit__split">
+        <span><strong id="monthlyPaid">—</strong> paid</span>
+        <span><strong id="monthlyLeft">—</strong> left</span>
+      </p>
+    </header>
+
+    <div class="plans" id="monthlyPlans">
       <p class="block__empty">Loading…</p>
     </div>
   </section>
