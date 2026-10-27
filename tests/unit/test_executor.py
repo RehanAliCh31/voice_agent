@@ -17,7 +17,6 @@ from voicebot.llm.base import ToolCall
 from voicebot.llm.tools import CONFIRMING, TOOL_SCHEMAS
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
-DEPOSIT = {"amount_cents": 25_000, "account": "checking", "source": "cheque"}
 MOVE = {"amount_cents": 50_000, "from_account": "checking", "to_account": "savings"}
 # The seed writes its spending rows first, so id 1 is a real charge.
 DISPUTE = {"transaction_id": 1, "reason": "not recognised"}
@@ -26,7 +25,6 @@ CONFIRMING_CALLS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("pay_bill", {"bill": "electricity"}),
     ("freeze_card", {"last4": "4417", "report_fraud": False}),
     ("order_card", {"account": "checking"}),
-    ("deposit_money", DEPOSIT),
     ("move_money", MOVE),
     ("dispute_transaction", DISPUTE),
 )
@@ -49,15 +47,15 @@ def call(name: str, **arguments: Any) -> ToolCall:
 # --- the schemas -------------------------------------------------------------
 
 
-def test_there_are_fourteen_well_formed_schemas() -> None:
+def test_there_are_thirteen_well_formed_schemas() -> None:
     """The count is asserted on purpose: a new tool is a deliberate act.
 
     Every schema added is another choice the model has to get right, and the
     surface between it and a customer's money widening by one.
     """
     names = {schema["function"]["name"] for schema in TOOL_SCHEMAS}
-    assert len(TOOL_SCHEMAS) == 14
-    assert len(names) == 14
+    assert len(TOOL_SCHEMAS) == 13
+    assert len(names) == 13
     assert CONFIRMING <= names
 
     for schema in TOOL_SCHEMAS:
@@ -312,73 +310,6 @@ def test_a_card_confirmation_sources_no_amount(executor: ToolExecutor) -> None:
     out = executor.execute(call("freeze_card", last4="4417"))
     assert out.result["status"] == "needs_confirmation"
     assert out.sourced_cents == ()
-
-
-# --- paying money in ---------------------------------------------------------
-#
-# A deposit changes a balance, so it goes through the same gate as a transfer:
-# it is read back, it waits for a yes, and it marks every earlier figure stale.
-#
-# It also has to come from somewhere. The source is a closed vocabulary for
-# the same reason the spending periods are -- free text would let the bot
-# narrate a deposit from a source the bank has no notion of, and an assistant
-# that can conjure money from an unnamed place is not modelling a bank.
-
-
-def test_a_deposit_is_read_back_with_its_source(bank: SqliteBank, executor: ToolExecutor) -> None:
-    out = executor.execute(call("deposit_money", **DEPOSIT))
-
-    assert out.result["status"] == "needs_confirmation"
-    assert "$250.00" in out.result["summary"]
-    assert "checking" in out.result["summary"]
-    assert "cheque" in out.result["summary"]
-    assert bank.balance("checking") == 248_350
-
-
-def test_a_confirmed_deposit_raises_the_balance(bank: SqliteBank, executor: ToolExecutor) -> None:
-    token = executor.execute(call("deposit_money", **DEPOSIT)).result["token"]
-
-    out = executor.execute(call("deposit_money", **DEPOSIT, confirmation_token=token))
-
-    assert out.result["status"] == "done"
-    assert bank.balance("checking") == 273_350
-    assert out.result["new_balance_cents"] == 273_350
-
-
-def test_a_deposit_sources_both_its_figures(executor: ToolExecutor) -> None:
-    """The bot has to be able to say what went in and what the account holds."""
-    token = executor.execute(call("deposit_money", **DEPOSIT)).result["token"]
-
-    out = executor.execute(call("deposit_money", **DEPOSIT, confirmation_token=token))
-
-    assert set(out.sourced_cents) == {25_000, 273_350}
-
-
-def test_a_deposit_counts_as_a_write(executor: ToolExecutor) -> None:
-    """Otherwise a balance quoted before it stays quotable after it."""
-    before = executor.writes
-    token = executor.execute(call("deposit_money", **DEPOSIT)).result["token"]
-    executor.execute(call("deposit_money", **DEPOSIT, confirmation_token=token))
-
-    assert executor.writes == before + 1
-
-
-def test_a_deposit_from_an_unnamed_source_is_refused(
-    bank: SqliteBank, executor: ToolExecutor
-) -> None:
-    out = executor.execute(
-        call("deposit_money", amount_cents=25_000, account="checking", source="thin air")
-    )
-
-    assert "error" in out.result
-    assert bank.balance("checking") == 248_350
-
-
-def test_a_deposit_of_nothing_is_refused(bank: SqliteBank, executor: ToolExecutor) -> None:
-    out = executor.execute(call("deposit_money", amount_cents=0, account="checking", source="cash"))
-
-    assert "error" in out.result
-    assert bank.balance("checking") == 248_350
 
 
 # --- reading the ledger ------------------------------------------------------
@@ -657,3 +588,40 @@ def test_an_unknown_charge_never_becomes_pending(executor: ToolExecutor) -> None
 
     assert "error" in out.result
     assert executor.pending is None
+
+
+# --- the bot cannot pay money in ---------------------------------------------
+#
+# Money arriving has to arrive from somewhere real -- a branch, a cash
+# machine, a transfer from another bank. An assistant that can credit an
+# account on request is not modelling a bank, it is printing money, so there
+# is no tool for it and there is not meant to be one.
+#
+# Moving money between the customer's own accounts is a different thing and
+# stays: nothing is created, it only changes sides.
+
+
+def test_there_is_no_tool_for_paying_money_in() -> None:
+    assert "deposit_money" not in {schema["function"]["name"] for schema in TOOL_SCHEMAS}
+
+
+def test_asking_to_pay_money_in_does_nothing(bank: SqliteBank, executor: ToolExecutor) -> None:
+    before = bank.balance("checking")
+
+    out = executor.execute(
+        call("deposit_money", amount_cents=25_000, account="checking", source="cheque")
+    )
+
+    assert "error" in out.result
+    assert bank.balance("checking") == before
+
+
+def test_moving_money_between_accounts_still_works(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    """The neighbouring feature, which this removal must not touch."""
+    token = executor.execute(call("move_money", **MOVE)).result["token"]
+    executor.execute(call("move_money", **MOVE, confirmation_token=token))
+
+    assert bank.balance("checking") == 198_350
+    assert bank.balance("savings") == 1_952_000

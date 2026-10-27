@@ -167,17 +167,6 @@ def unknown_reason_message(reason: str) -> str:
     return f"{reason!r} is not a reason I can raise. I can raise: {', '.join(HANDOFF_REASONS)}."
 
 
-# Where money paid in is allowed to have come from. Closed for the same
-# reason PERIODS is: free text would let the bot record a deposit from a
-# source the bank has no notion of, and money that arrives from nowhere in
-# particular is the thing a bank ledger exists to rule out.
-DEPOSIT_SOURCES: tuple[str, ...] = (
-    "cheque",
-    "cash",
-    "transfer in",
-)
-
-
 def account_not_payee_message(name: str) -> str:
     """Said aloud when a payment names one of the customer's own accounts.
 
@@ -194,12 +183,6 @@ def account_not_payee_message(name: str) -> str:
 def unknown_payee_message(name: str, known: tuple[str, ...]) -> str:
     """Said aloud when a payment names someone the bank has never heard of."""
     return f"I don't have a payee called {name!r}. I can pay: {', '.join(known)}."
-
-
-def unknown_source_message(source: str) -> str:
-    """Said aloud when a deposit names a source the bank does not take."""
-    allowed = ", ".join(DEPOSIT_SOURCES)
-    return f"I can't take a deposit by {source}. I can record {allowed}."
 
 
 def _midnight(moment: datetime) -> datetime:
@@ -345,10 +328,16 @@ class Bank(ABC):
     def deposit(self, cents: int, account: str, source: str = "deposit") -> int:
         """Pay money in and return the new balance.
 
-        `source` says where the money came from and is written to the ledger,
-        so a deposit is a recorded movement rather than a balance that grew on
-        its own. The conversational path accepts only DEPOSIT_SOURCES; the
-        command line passes its own label when topping up a demo account.
+        Administrative, not conversational. There is deliberately no tool for
+        this and there is not meant to be one: an assistant that can credit an
+        account on request is not modelling a bank. Money arrives at a branch,
+        at a cash machine, or from another bank, and none of those are things
+        a voice assistant does.
+
+        It exists so a demo account that has been spent down can be topped up
+        from the command line without discarding the audit log. `source` is
+        written to the ledger, so even a top-up is a recorded movement rather
+        than a balance that grew on its own.
         """
 
     # --- audit ---------------------------------------------------------------

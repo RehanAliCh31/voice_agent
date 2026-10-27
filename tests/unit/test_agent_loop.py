@@ -20,7 +20,7 @@ from voicebot.llm.tools import TOOL_SCHEMAS
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
 TO_ALI = {"amount_cents": 40_000, "payee": "ali", "from_account": "checking"}
-DEPOSIT = {"amount_cents": 25_000, "account": "checking", "source": "cheque"}
+MOVE = {"amount_cents": 25_000, "from_account": "checking", "to_account": "savings"}
 
 
 @pytest.fixture
@@ -860,17 +860,17 @@ def test_the_unfinished_reply_is_struck_from_the_history(executor: ToolExecutor)
     conversation = Conversation("s1")
     agent = agent_with(
         [
-            Reply(text="Pay $250.00 into checking by cheque -- are you sure?"),
-            Reply(tool_calls=(ToolCall("c1", "deposit_money", DEPOSIT),)),
-            Reply(text="Pay $250.00 into checking by cheque -- are you sure?"),
+            Reply(text="Move $250.00 from checking to savings -- are you sure?"),
+            Reply(tool_calls=(ToolCall("c1", "move_money", MOVE),)),
+            Reply(text="Move $250.00 from checking to savings -- are you sure?"),
         ],
         executor,
     )
 
-    agent.handle("pay in two fifty by cheque", conversation)
+    agent.handle("move two fifty into savings", conversation)
 
     spoken = [m.get("content") for m in conversation.messages if m.get("role") == "assistant"]
-    assert spoken.count("Pay $250.00 into checking by cheque -- are you sure?") == 1
+    assert spoken.count("Move $250.00 from checking to savings -- are you sure?") == 1
 
 
 def test_a_spoken_amount_reaches_the_page_as_a_figure(executor: ToolExecutor) -> None:

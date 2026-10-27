@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from voicebot.bank.base import (
-    DEPOSIT_SOURCES,
     DISPUTE_REASONS,
     Bank,
     BankError,
@@ -29,7 +28,6 @@ from voicebot.bank.base import (
     format_money,
     unknown_dispute_reason_message,
     unknown_payee_message,
-    unknown_source_message,
 )
 from voicebot.llm.base import ToolCall
 from voicebot.llm.tools import CONFIRMING, DEFAULT_TRANSACTIONS, MAX_TRANSACTIONS
@@ -338,20 +336,6 @@ class ToolExecutor:
                 "from_account": source,
                 "to_account": target,
             }
-        if name == "deposit_money":
-            source = _require_text(arguments.get("source"), "source").lower()
-            if source not in DEPOSIT_SOURCES:
-                # Refused before anything becomes pending, so an unnamed
-                # source can never reach a read-back the customer might agree
-                # to. The message is written to be said aloud.
-                raise ValueError(unknown_source_message(source))
-            return {
-                "amount_cents": _require_positive_int(
-                    arguments.get("amount_cents"), "amount_cents"
-                ),
-                "account": _require_text(arguments.get("account"), "account"),
-                "source": source,
-            }
         raise KeyError(f"{name} is not a confirming tool")
 
     def _known_payee(self, name: str) -> str:
@@ -388,9 +372,6 @@ class ToolExecutor:
             return f"Freeze {card}"
         if name == "order_card":
             return f"Order a new card for {arguments['account']}"
-        if name == "deposit_money":
-            amount = format_money(arguments["amount_cents"])
-            return f"Pay {amount} into {arguments['account']} by {arguments['source']}"
         if name == "dispute_transaction":
             charge = self.bank.transaction(arguments["transaction_id"])
             if charge is None:  # pragma: no cover - validated before this runs
@@ -420,7 +401,6 @@ class ToolExecutor:
             "pay_bill": self._pay_bill,
             "freeze_card": self._freeze_card,
             "order_card": self._order_card,
-            "deposit_money": self._deposit_money,
             "move_money": self._move_money,
             "hand_off": self._hand_off,
             "dispute_transaction": self._dispute_transaction,
@@ -635,25 +615,6 @@ class ToolExecutor:
                 "to_balance_cents": to_balance,
             },
             sourced_cents=(moved, from_balance, to_balance),
-        )
-
-    def _deposit_money(self, arguments: dict[str, Any]) -> ToolOutcome:
-        paid_in = arguments["amount_cents"]
-        balance = self.bank.deposit(paid_in, arguments["account"], arguments["source"])
-        # A deposit changes a balance, so it is a write like any other: every
-        # figure quoted before it is out of date the moment it lands.
-        self.writes += 1
-        return ToolOutcome(
-            {
-                "status": "done",
-                "paid_in": format_money(paid_in),
-                "paid_in_cents": paid_in,
-                "account": arguments["account"],
-                "source": arguments["source"],
-                "new_balance": format_money(balance),
-                "new_balance_cents": balance,
-            },
-            sourced_cents=(paid_in, balance),
         )
 
     def _freeze_card(self, arguments: dict[str, Any]) -> ToolOutcome:
