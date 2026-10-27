@@ -1,4 +1,4 @@
-"""The thirteen things the model is allowed to do.
+"""The fourteen things the model is allowed to do.
 
 This file is the whole surface between a fluent model and a customer's money.
 Anything not described here, the bot cannot do — which is the point. Adding a
@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from voicebot.bank.base import (
+    CARD_CONTROLS,
     DISPUTE_REASONS,
     HANDOFF_REASONS,
     PERIODS,
@@ -31,6 +32,7 @@ MAX_TRANSACTIONS = 20
 CONFIRMING: frozenset[str] = frozenset(
     {
         "dispute_transaction",
+        "set_card_control",
         "transfer_money",
         "pay_bill",
         "freeze_card",
@@ -249,6 +251,31 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             },
         },
         ["last4"],
+    ),
+    _function(
+        "set_card_control",
+        "Allow or refuse one kind of spending on a card: online purchases, "
+        "shop purchases, or cash machines. Returns needs_confirmation on the "
+        "first call. Use freeze_card instead to stop the card entirely.",
+        {
+            "last4": {
+                "type": "string",
+                "description": "The card's last four digits, as list_cards reports them.",
+            },
+            "control": {
+                "type": "string",
+                "enum": list(CARD_CONTROLS),
+                "description": (
+                    "Which setting: 'ecommerce' for online, 'retail' for shops, "
+                    "'atm' for cash machines."
+                ),
+            },
+            "enabled": {
+                "type": "boolean",
+                "description": "True to allow it, false to refuse it.",
+            },
+        },
+        ["last4", "control", "enabled"],
     ),
     _function(
         "order_card",

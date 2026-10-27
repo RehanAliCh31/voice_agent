@@ -18,6 +18,7 @@ from voicebot import __version__
 from voicebot.api.deps import Services, get_services
 from voicebot.api.payloads import (
     AudioPayload,
+    CardsPayload,
     HealthPayload,
     LedgerPayload,
     ReadyPayload,
@@ -27,6 +28,7 @@ from voicebot.api.payloads import (
     TextRequest,
     TranscriptPayload,
     TurnPayload,
+    cards_payload,
     ledger_payload,
     statement_payload,
     turn_payload,
@@ -175,6 +177,12 @@ def accounts(services: Services = Depends(get_services)) -> LedgerPayload:
     it, so this never competes with a reply for which number is current.
     """
     return ledger_payload(services.bank)
+
+
+@router.get("/v1/cards", response_model=CardsPayload, tags=["screens"])
+def cards(services: Services = Depends(get_services)) -> CardsPayload:
+    """Every card on file, for the cards screen. Four digits each, no more."""
+    return cards_payload(services.bank)
 
 
 @router.get("/v1/statement", response_model=StatementPayload, tags=["screens"])

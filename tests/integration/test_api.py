@@ -637,3 +637,36 @@ def test_a_statement_row_says_whether_it_was_a_transfer(client: TestClient) -> N
     rows = client.get("/v1/statement").json()["rows"]
     assert [row["kind"] for row in rows[:2]] == ["transfer", "transfer"]
     assert all(row["kind"] == "merchant" for row in rows[2:])
+
+
+# --- the cards screen --------------------------------------------------------
+
+
+def test_the_cards_endpoint_draws_both_cards(client: TestClient) -> None:
+    cards = client.get("/v1/cards").json()["cards"]
+
+    assert {card["last4"] for card in cards} == {"4417", "9021"}
+    assert {card["kind"] for card in cards} == {"debit", "credit"}
+
+
+def test_a_card_never_leaves_with_more_than_four_digits(client: TestClient) -> None:
+    """The bank holds four digits, so four is all that can be published."""
+    for card in client.get("/v1/cards").json()["cards"]:
+        assert len(card["last4"]) == 4
+        assert card["masked"].endswith(card["last4"])
+        assert card["masked"].count("•") >= 12
+
+
+def test_a_card_carries_its_controls(client: TestClient) -> None:
+    card = client.get("/v1/cards").json()["cards"][0]
+
+    assert [control["name"] for control in card["controls"]] == ["ecommerce", "retail", "atm"]
+    assert all(control["label"] for control in card["controls"])
+    assert all(isinstance(control["enabled"], bool) for control in card["controls"])
+
+
+def test_reading_the_cards_is_not_a_turn(client: TestClient) -> None:
+    before = client.get("/metrics").text
+    client.get("/v1/cards")
+
+    assert client.get("/metrics").text == before

@@ -1,6 +1,6 @@
 """What a bank can do, and the vocabulary its callers share.
 
-The interface is deliberately narrow: seventeen operations, each one a thing a
+The interface is deliberately narrow: eighteen operations, each one a thing a
 customer can ask for. Anything the dialogue needs that is not on this list is
 a sign the dialogue is inventing capability.
 """
@@ -26,11 +26,31 @@ class Account:
     balance_cents: int
 
 
+# What a card can be allowed or refused, one switch each. Closed, because
+# each name is a column: a fourth would be a schema change, not a string.
+CARD_CONTROLS: tuple[str, ...] = ("ecommerce", "retail", "atm")
+
+
+def unknown_control_message(control: str) -> str:
+    """Said aloud when a card control is named that the card does not have."""
+    return f"{control!r} is not a card setting. I can change: {', '.join(CARD_CONTROLS)}."
+
+
 @dataclass(frozen=True)
 class Card:
     last4: str
     account: str
     frozen: bool
+    kind: str = "debit"
+    holder: str = ""
+    ecommerce: bool = True
+    retail: bool = True
+    atm: bool = True
+
+    @property
+    def controls(self) -> dict[str, bool]:
+        """The switches, named, so a caller can loop rather than remember."""
+        return {name: bool(getattr(self, name)) for name in CARD_CONTROLS}
 
 
 @dataclass(frozen=True)
@@ -331,6 +351,14 @@ class Bank(ABC):
     @abstractmethod
     def pay_bill(self, bill: str) -> int:
         """Pay a bill in full and return the amount paid."""
+
+    @abstractmethod
+    def set_card_control(self, last4: str, control: str, enabled: bool) -> Card:
+        """Allow or refuse one kind of spending on a card, and return it.
+
+        Raises BankError for an unknown card or a control that is not one of
+        CARD_CONTROLS.
+        """
 
     @abstractmethod
     def freeze_card(self, last4: str) -> Card:

@@ -20,12 +20,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from voicebot.bank.base import (
+    CARD_CONTROLS,
     DISPUTE_REASONS,
     Bank,
     BankError,
     Transaction,
     account_not_payee_message,
     format_money,
+    unknown_control_message,
     unknown_dispute_reason_message,
     unknown_payee_message,
 )
@@ -301,6 +303,21 @@ class ToolExecutor:
             }
         if name == "order_card":
             return {"account": _require_text(arguments.get("account"), "account")}
+        if name == "set_card_control":
+            control = _require_text(arguments.get("control"), "control").lower()
+            if control not in CARD_CONTROLS:
+                raise ValueError(unknown_control_message(control))
+            last4 = _require_text(arguments.get("last4"), "last4")
+            if last4 not in {card.last4 for card in self.bank.cards()}:
+                # Refused before the read-back: agreeing to change a setting
+                # on a card that is not there settles nothing.
+                known = ", ".join(card.last4 for card in self.bank.cards())
+                raise ValueError(f"I don't have a card ending {last4}. I have: {known}.")
+            return {
+                "last4": last4,
+                "control": control,
+                "enabled": bool(arguments.get("enabled")),
+            }
         if name == "dispute_transaction":
             charge = self._charge(arguments.get("transaction_id"))
             reason = _require_text(arguments.get("reason"), "reason").lower()
@@ -372,6 +389,17 @@ class ToolExecutor:
             return f"Freeze {card}"
         if name == "order_card":
             return f"Order a new card for {arguments['account']}"
+        if name == "set_card_control":
+            named = {
+                "ecommerce": "online purchases",
+                "retail": "shop purchases",
+                "atm": "cash machines",
+            }
+            state = "on" if arguments["enabled"] else "off"
+            return (
+                f"Turn {state} {arguments['control']} "
+                f"({named[arguments['control']]}) on the card ending {arguments['last4']}"
+            )
         if name == "dispute_transaction":
             charge = self.bank.transaction(arguments["transaction_id"])
             if charge is None:  # pragma: no cover - validated before this runs
@@ -404,6 +432,7 @@ class ToolExecutor:
             "move_money": self._move_money,
             "hand_off": self._hand_off,
             "dispute_transaction": self._dispute_transaction,
+            "set_card_control": self._set_card_control,
         }
 
     def _list_accounts(self, _: dict[str, Any]) -> ToolOutcome:
@@ -443,7 +472,14 @@ class ToolExecutor:
         return ToolOutcome(
             {
                 "cards": [
-                    {"last4": c.last4, "account": c.account, "frozen": c.frozen}
+                    {
+                        "last4": c.last4,
+                        "account": c.account,
+                        "frozen": c.frozen,
+                        "kind": c.kind,
+                        "holder": c.holder,
+                        "controls": c.controls,
+                    }
                     for c in self.bank.cards()
                 ]
             }
@@ -615,6 +651,22 @@ class ToolExecutor:
                 "to_balance_cents": to_balance,
             },
             sourced_cents=(moved, from_balance, to_balance),
+        )
+
+    def _set_card_control(self, arguments: dict[str, Any]) -> ToolOutcome:
+        card = self.bank.set_card_control(
+            arguments["last4"], arguments["control"], arguments["enabled"]
+        )
+        # No write counted: this changes what a card may do, not what an
+        # account holds, so no figure looked up earlier has gone stale.
+        return ToolOutcome(
+            {
+                "status": "done",
+                "last4": card.last4,
+                "control": arguments["control"],
+                "enabled": arguments["enabled"],
+                "controls": card.controls,
+            }
         )
 
     def _freeze_card(self, arguments: dict[str, Any]) -> ToolOutcome:

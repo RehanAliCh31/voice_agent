@@ -559,3 +559,76 @@ def test_a_month_with_nothing_in_it_is_empty_not_an_error(bank: SqliteBank) -> N
 def test_an_impossible_month_is_refused(bank: SqliteBank) -> None:
     with pytest.raises(BankError):
         bank.statement(2026, 13)
+
+
+# --- what a card is, and what it is allowed to do ----------------------------
+#
+# A card is more than four digits and a frozen flag once there is a screen
+# drawing it. The three controls are real columns rather than decoration: a
+# switch on screen that nothing can change is a lie told in CSS.
+
+
+def test_a_card_knows_what_kind_it_is(bank: SqliteBank) -> None:
+    kinds = {card.last4: card.kind for card in bank.cards()}
+    assert kinds["4417"] == "debit"
+    assert kinds["9021"] == "credit"
+
+
+def test_a_card_carries_the_name_on_it(bank: SqliteBank) -> None:
+    assert all(card.holder for card in bank.cards())
+
+
+def test_a_new_card_allows_everything(bank: SqliteBank) -> None:
+    card = next(c for c in bank.cards() if c.last4 == "4417")
+    assert card.controls == {"ecommerce": True, "retail": True, "atm": True}
+
+
+def test_a_control_can_be_turned_off(bank: SqliteBank) -> None:
+    card = bank.set_card_control("4417", "ecommerce", False)
+
+    assert card.controls["ecommerce"] is False
+    assert card.controls["retail"] is True
+
+
+def test_a_control_survives_being_read_back(bank: SqliteBank) -> None:
+    bank.set_card_control("4417", "atm", False)
+
+    stored = next(c for c in bank.cards() if c.last4 == "4417")
+    assert stored.controls["atm"] is False
+
+
+def test_an_unknown_control_is_refused(bank: SqliteBank) -> None:
+    with pytest.raises(BankError, match="ecommerce"):
+        bank.set_card_control("4417", "teleportation", False)
+
+
+def test_a_control_on_an_unknown_card_is_refused(bank: SqliteBank) -> None:
+    with pytest.raises(BankError):
+        bank.set_card_control("0000", "atm", False)
+
+
+def test_a_bank_file_made_before_cards_had_controls_gains_them(tmp_path) -> None:
+    """The columns are added to a database that predates them.
+
+    `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists,
+    so without this an older bank file would keep the old four columns and
+    every read of a control would fail.
+    """
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE accounts (name TEXT PRIMARY KEY, balance_cents INTEGER NOT NULL);"
+        "CREATE TABLE cards (last4 TEXT PRIMARY KEY, account TEXT NOT NULL, "
+        "frozen INTEGER NOT NULL DEFAULT 0);"
+        "INSERT INTO accounts VALUES ('checking', 100);"
+        "INSERT INTO cards VALUES ('1234', 'checking', 0);"
+    )
+    old.commit()
+    old.close()
+
+    bank = SqliteBank(str(path))
+
+    card = next(c for c in bank.cards() if c.last4 == "1234")
+    assert card.controls == {"ecommerce": True, "retail": True, "atm": True}

@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from voicebot.bank.base import (
+    CARD_CONTROLS,
     DISPUTE_REASONS,
     DISPUTE_WINDOW_DAYS,
     HANDOFF_REASONS,
@@ -34,6 +35,7 @@ from voicebot.bank.base import (
     format_money,
     period_range,
     too_old_to_dispute_message,
+    unknown_control_message,
     unknown_dispute_reason_message,
     unknown_payee_message,
     unknown_period_message,
@@ -61,6 +63,7 @@ class SqliteBank(Bank):
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
         self._db.executescript(SCHEMA.read_text(encoding="utf-8"))
+        _widen(self._db)
         if seed_if_empty and not self._db.execute("SELECT 1 FROM accounts").fetchone():
             seed(self._db)
             log.info("seeded a new bank at %s", path)
@@ -84,10 +87,8 @@ class SqliteBank(Bank):
         return int(row["balance_cents"])
 
     def cards(self) -> tuple[Card, ...]:
-        rows = self._db.execute("SELECT last4, account, frozen FROM cards ORDER BY last4")
-        return tuple(
-            Card(last4=r["last4"], account=r["account"], frozen=bool(r["frozen"])) for r in rows
-        )
+        rows = self._db.execute("SELECT * FROM cards ORDER BY last4")
+        return tuple(_card(row) for row in rows)
 
     def bills(self) -> tuple[Bill, ...]:
         rows = self._db.execute("SELECT name, amount_cents, paid FROM bills ORDER BY name")
@@ -229,6 +230,30 @@ class SqliteBank(Bank):
             self._db.execute("UPDATE bills SET paid = 1 WHERE name = ?", (bill.lower(),))
             self._ledger("checking", bill.lower(), -amount)
         return amount
+
+    def set_card_control(self, last4: str, control: str, enabled: bool) -> Card:
+        name = control.strip().lower()
+        if name not in CARD_CONTROLS:
+            raise BankError(unknown_control_message(control))
+        card = self._card_row(last4)
+
+        with self._db:
+            # The column name comes from CARD_CONTROLS and nowhere else, so
+            # the only strings reaching this statement are the three above.
+            self._db.execute(
+                f"UPDATE cards SET {name} = ? WHERE last4 = ?",
+                (1 if enabled else 0, card["last4"]),
+            )
+        return _card(self._card_row(last4))
+
+    def _card_row(self, last4: str) -> sqlite3.Row:
+        """One card, or a sentence naming the ones that exist."""
+        key = last4.strip()
+        row = self._db.execute("SELECT * FROM cards WHERE last4 = ?", (key,)).fetchone()
+        if row is None:
+            known = ", ".join(card.last4 for card in self.cards())
+            raise BankError(f"I don't have a card ending {last4}. I have: {known}.")
+        return row
 
     def freeze_card(self, last4: str) -> Card:
         with self._db:
@@ -498,6 +523,50 @@ def _reference() -> str:
     """A short case reference a customer can repeat without spelling it out."""
     body = "".join(secrets.choice(_REFERENCE_ALPHABET) for _ in range(6))
     return f"VB-{body}"
+
+
+# Columns added to tables that already existed. `CREATE TABLE IF NOT EXISTS`
+# does nothing to a table that is already there, so a bank file written
+# before a column existed would keep the old shape and every read of the new
+# one would fail. Adding them is idempotent and cheap, and it runs on every
+# open rather than behind a version number nobody would remember to raise.
+_ADDED: dict[str, dict[str, str]] = {
+    "cards": {
+        "kind": "TEXT NOT NULL DEFAULT 'debit'",
+        "holder": "TEXT NOT NULL DEFAULT ''",
+        "ecommerce": "INTEGER NOT NULL DEFAULT 1",
+        "retail": "INTEGER NOT NULL DEFAULT 1",
+        "atm": "INTEGER NOT NULL DEFAULT 1",
+    },
+}
+
+
+def _widen(db: sqlite3.Connection) -> None:
+    """Bring an older database up to the current column set."""
+    for table, columns in _ADDED.items():
+        if not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone():
+            continue
+        present = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+        for column, ddl in columns.items():
+            if column not in present:
+                log.info("adding %s.%s to an older bank file", table, column)
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    db.commit()
+
+
+def _card(row: sqlite3.Row) -> Card:
+    return Card(
+        last4=row["last4"],
+        account=row["account"],
+        frozen=bool(row["frozen"]),
+        kind=row["kind"],
+        holder=row["holder"],
+        ecommerce=bool(row["ecommerce"]),
+        retail=bool(row["retail"]),
+        atm=bool(row["atm"]),
+    )
 
 
 def _transaction(row: sqlite3.Row) -> Transaction:

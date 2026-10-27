@@ -34,6 +34,8 @@
     balances: {}, // account name -> cents, as of the last turn
     lastTotalMs: null,
     view: "assistant",
+    cards: [],
+    card: null, // the card being looked at, by last four
   };
 
   var el = {};
@@ -89,6 +91,10 @@
 
     statement: function () {
       return request("/v1/statement", { method: "GET" });
+    },
+
+    cards: function () {
+      return request("/v1/cards", { method: "GET" });
     },
 
     reset: function () {
@@ -404,6 +410,9 @@
     if (name === "transactions") {
       loadStatement();
     }
+    if (name === "cards") {
+      loadCards();
+    }
   }
 
   function capitalise(word) {
@@ -525,6 +534,117 @@
     movement.appendChild(side);
 
     return movement;
+  }
+
+  // --- the cards screen -------------------------------------------------------
+
+  function loadCards() {
+    api
+      .cards()
+      .then(function (data) {
+        state.cards = data.cards;
+        // Keep the card already being looked at when this is a refresh after
+        // a turn, so freezing a card does not jump the screen to another one.
+        var chosen = state.card;
+        var known = data.cards.some(function (card) {
+          return card.last4 === chosen;
+        });
+        state.card = known ? chosen : (data.cards[0] || {}).last4 || null;
+        renderCards();
+      })
+      .catch(function () {
+        el.cardPane.replaceChildren(
+          node("p", "block__empty", "Couldn't load your cards just now.")
+        );
+      });
+  }
+
+  function renderCards() {
+    el.cardPicker.replaceChildren();
+    el.cardPane.replaceChildren();
+
+    if (!state.cards.length) {
+      el.cardPane.appendChild(node("p", "block__empty", "No cards on file."));
+      return;
+    }
+
+    state.cards.forEach(function (card) {
+      var tab = node("button", "cardpicker__tab");
+      tab.type = "button";
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", String(card.last4 === state.card));
+      tab.appendChild(node("span", null, capitalise(card.kind)));
+      tab.appendChild(node("span", "cardpicker__digits", "••" + card.last4));
+      tab.addEventListener("click", function () {
+        state.card = card.last4;
+        renderCards();
+      });
+      el.cardPicker.appendChild(tab);
+    });
+
+    var showing = state.cards.filter(function (card) {
+      return card.last4 === state.card;
+    })[0];
+    if (showing) {
+      el.cardPane.appendChild(cardFace(showing));
+      el.cardPane.appendChild(cardControls(showing));
+    }
+  }
+
+  function cardFace(card) {
+    var face = node("div", "cardface" + (card.frozen ? " cardface--frozen" : ""));
+
+    var top = node("div", "cardface__top");
+    top.appendChild(node("span", "cardface__bank", "Voice Banking"));
+    top.appendChild(node("span", "cardface__kind", card.kind));
+    face.appendChild(top);
+
+    // Dots and four digits, because dots and four digits is all the bank
+    // has. A full number on screen would be one the database never held.
+    face.appendChild(node("div", "cardface__number", card.masked));
+
+    var foot = node("div", "cardface__foot");
+    var who = node("div");
+    who.appendChild(node("span", "cardface__holder", card.holder));
+    who.appendChild(node("span", "cardface__account", card.account));
+    foot.appendChild(who);
+    foot.appendChild(node("span", "cardface__state", card.frozen ? "Frozen" : "Active"));
+    face.appendChild(foot);
+
+    return face;
+  }
+
+  function cardControls(card) {
+    var controls = node("div", "controls");
+
+    card.controls.forEach(function (control) {
+      var row = node("div", "control");
+      var words = node("div");
+      words.appendChild(node("span", "control__name", control.label));
+      words.appendChild(node("span", "control__detail", control.detail));
+      row.appendChild(words);
+
+      var state_ = node("span", "control__state");
+      state_.setAttribute("data-on", String(control.enabled));
+      state_.setAttribute("role", "img");
+      state_.setAttribute(
+        "aria-label",
+        control.label + (control.enabled ? ": allowed" : ": not allowed")
+      );
+      row.appendChild(state_);
+
+      controls.appendChild(row);
+    });
+
+    controls.appendChild(
+      node(
+        "p",
+        "controls__hint",
+        "Ask to change one — say “turn off online purchases on my card”. " +
+          "Every change goes through the same confirmation as moving money."
+      )
+    );
+    return controls;
   }
 
   // --- the conversation ---------------------------------------------------
@@ -709,6 +829,10 @@
     // just spoke come from the same answer and describe the same moment.
     renderAccounts(turn.accounts);
     renderBills(turn.bills);
+    if (state.view === "cards") {
+      // A turn can freeze a card or change what it allows.
+      loadCards();
+    }
     if (state.view === "transactions") {
       // The turn may have moved money, and a statement left as it was would
       // disagree with the balances drawn a line above it.
@@ -954,7 +1078,7 @@
       "sayForm", "sayInput", "resetButton",
       "vadToggle", "vadSensitivity", "vadValue", "vadNote",
       "screens", "statement", "statementTotal", "statementMonth",
-      "statementIn", "statementOut",
+      "statementIn", "statementOut", "cardPicker", "cardPane",
     ].forEach(function (id) {
       el[id] = document.getElementById(id);
     });

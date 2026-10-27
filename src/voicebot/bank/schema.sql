@@ -12,10 +12,22 @@ CREATE TABLE IF NOT EXISTS accounts (
     balance_cents INTEGER NOT NULL CHECK (balance_cents >= 0)
 );
 
+-- Only the last four digits are ever stored. The rest is not needed to say
+-- which card somebody means, and a number the bank never holds is a number
+-- that cannot leak from it.
+--
+-- The three controls default to on, which is how a card arrives. They are
+-- columns rather than a screen's idea, because a switch nothing can change
+-- is a lie told in CSS.
 CREATE TABLE IF NOT EXISTS cards (
-    last4   TEXT PRIMARY KEY,
-    account TEXT NOT NULL REFERENCES accounts(name),
-    frozen  INTEGER NOT NULL DEFAULT 0
+    last4     TEXT PRIMARY KEY,
+    account   TEXT NOT NULL REFERENCES accounts(name),
+    frozen    INTEGER NOT NULL DEFAULT 0,
+    kind      TEXT NOT NULL DEFAULT 'debit',
+    holder    TEXT NOT NULL DEFAULT '',
+    ecommerce INTEGER NOT NULL DEFAULT 1,
+    retail    INTEGER NOT NULL DEFAULT 1,
+    atm       INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS bills (

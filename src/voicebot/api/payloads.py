@@ -157,6 +157,36 @@ class StatementPayload(BaseModel):
     rows: list[StatementRowPayload] = Field(default_factory=list)
 
 
+class CardControlPayload(BaseModel):
+    """One switch on a card, named for the page as well as for the model."""
+
+    name: str
+    label: str
+    detail: str
+    enabled: bool
+
+
+class CardPayload(BaseModel):
+    """One card as the cards screen draws it.
+
+    `masked` is built from the four digits the bank holds. The rest were
+    never stored, so what is drawn is dots rather than a number pretending
+    to be real.
+    """
+
+    last4: str
+    masked: str
+    account: str
+    holder: str
+    kind: str
+    frozen: bool
+    controls: list[CardControlPayload] = Field(default_factory=list)
+
+
+class CardsPayload(BaseModel):
+    cards: list[CardPayload] = Field(default_factory=list)
+
+
 class LedgerPayload(BaseModel):
     """The accounts and bills on their own, with no turn attached.
 
@@ -200,6 +230,42 @@ def statement_payload(bank: Bank, year: int, month: int) -> StatementPayload:
             )
             for row in statement.rows
         ],
+    )
+
+
+# What each switch is called on screen, and the line under it. Kept beside
+# the payload rather than in the page, so the words a customer reads and the
+# words the model is given for the same switch come from one place.
+_CONTROL_WORDS: dict[str, tuple[str, str]] = {
+    "ecommerce": ("Online purchases", "Allow this card to be used online"),
+    "retail": ("Shop purchases", "Allow this card to be used in person"),
+    "atm": ("Cash machines", "Allow this card to withdraw cash"),
+}
+
+
+def cards_payload(bank: Bank) -> CardsPayload:
+    """Every card on file, for the cards screen."""
+    return CardsPayload(
+        cards=[
+            CardPayload(
+                last4=card.last4,
+                masked=f"•••• •••• •••• {card.last4}",
+                account=card.account,
+                holder=card.holder,
+                kind=card.kind,
+                frozen=card.frozen,
+                controls=[
+                    CardControlPayload(
+                        name=name,
+                        label=_CONTROL_WORDS[name][0],
+                        detail=_CONTROL_WORDS[name][1],
+                        enabled=enabled,
+                    )
+                    for name, enabled in card.controls.items()
+                ],
+            )
+            for card in bank.cards()
+        ]
     )
 
 

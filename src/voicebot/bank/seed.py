@@ -24,9 +24,14 @@ ACCOUNTS: tuple[tuple[str, int], ...] = (
     ("savings", 1_902_000),
 )
 
-CARDS: tuple[tuple[str, str], ...] = (
-    ("4417", "checking"),
-    ("9021", "savings"),
+# The name printed on the card. One customer, so one name.
+HOLDER = "REHAN ALI CH"
+
+# (last four, account it draws on, what kind it is). The credit card is the
+# one the "credit card" bill belongs to, so the two agree with each other.
+CARDS: tuple[tuple[str, str, str], ...] = (
+    ("4417", "checking", "debit"),
+    ("9021", "savings", "credit"),
 )
 
 BILLS: tuple[tuple[str, int], ...] = (
@@ -64,7 +69,10 @@ def seed(connection: sqlite3.Connection, now: datetime | None = None) -> None:
     seed_payees(connection)
     with connection:
         connection.executemany("INSERT INTO accounts VALUES (?, ?)", ACCOUNTS)
-        connection.executemany("INSERT INTO cards VALUES (?, ?, 0)", CARDS)
+        connection.executemany(
+            "INSERT INTO cards (last4, account, frozen, kind, holder) " "VALUES (?, ?, 0, ?, ?)",
+            [(last4, account, kind, HOLDER) for last4, account, kind in CARDS],
+        )
         connection.executemany("INSERT INTO bills VALUES (?, ?, 0)", BILLS)
         connection.executemany(
             "INSERT INTO transactions (account, merchant, cents, occurred_at) "

@@ -28,6 +28,7 @@
   <nav class="screens" id="screens" aria-label="Screens">
     <button class="screens__tab" type="button" data-view="assistant" aria-current="page">Assistant</button>
     <button class="screens__tab" type="button" data-view="transactions">Transactions</button>
+    <button class="screens__tab" type="button" data-view="cards">Cards</button>
   </nav>
 </header>
 
@@ -94,6 +95,14 @@
     </header>
 
     <div class="statement" id="statement">
+      <p class="block__empty">Loading…</p>
+    </div>
+  </section>
+
+  <!-- Cards: one card at a time, with what it is allowed to do. -->
+  <section class="view view--cards" id="viewCards" hidden>
+    <div class="cardpicker" id="cardPicker" role="tablist" aria-label="Your cards"></div>
+    <div class="cardpane" id="cardPane">
       <p class="block__empty">Loading…</p>
     </div>
   </section>

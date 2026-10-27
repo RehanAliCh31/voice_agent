@@ -20,6 +20,7 @@ TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
 MOVE = {"amount_cents": 50_000, "from_account": "checking", "to_account": "savings"}
 # The seed writes its spending rows first, so id 1 is a real charge.
 DISPUTE = {"transaction_id": 1, "reason": "not recognised"}
+CONTROL = {"last4": "4417", "control": "ecommerce", "enabled": False}
 CONFIRMING_CALLS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("transfer_money", TRANSFER),
     ("pay_bill", {"bill": "electricity"}),
@@ -27,6 +28,7 @@ CONFIRMING_CALLS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("order_card", {"account": "checking"}),
     ("move_money", MOVE),
     ("dispute_transaction", DISPUTE),
+    ("set_card_control", CONTROL),
 )
 
 
@@ -47,15 +49,15 @@ def call(name: str, **arguments: Any) -> ToolCall:
 # --- the schemas -------------------------------------------------------------
 
 
-def test_there_are_thirteen_well_formed_schemas() -> None:
+def test_there_are_fourteen_well_formed_schemas() -> None:
     """The count is asserted on purpose: a new tool is a deliberate act.
 
     Every schema added is another choice the model has to get right, and the
     surface between it and a customer's money widening by one.
     """
     names = {schema["function"]["name"] for schema in TOOL_SCHEMAS}
-    assert len(TOOL_SCHEMAS) == 13
-    assert len(names) == 13
+    assert len(TOOL_SCHEMAS) == 14
+    assert len(names) == 14
     assert CONFIRMING <= names
 
     for schema in TOOL_SCHEMAS:
@@ -625,3 +627,58 @@ def test_moving_money_between_accounts_still_works(
 
     assert bank.balance("checking") == 198_350
     assert bank.balance("savings") == 1_952_000
+
+
+# --- what a card is allowed to do --------------------------------------------
+
+
+def test_a_card_control_is_read_back_before_it_changes(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    out = executor.execute(call("set_card_control", **CONTROL))
+
+    summary = out.result["summary"].lower()
+    assert "ecommerce" in summary and "4417" in summary and "off" in summary
+    assert next(c for c in bank.cards() if c.last4 == "4417").controls["ecommerce"] is True
+
+
+def test_a_confirmed_card_control_changes_it(bank: SqliteBank, executor: ToolExecutor) -> None:
+    token = executor.execute(call("set_card_control", **CONTROL)).result["token"]
+
+    out = executor.execute(call("set_card_control", **CONTROL, confirmation_token=token))
+
+    assert out.result["status"] == "done"
+    assert next(c for c in bank.cards() if c.last4 == "4417").controls["ecommerce"] is False
+
+
+def test_changing_a_card_control_moves_no_money(bank: SqliteBank, executor: ToolExecutor) -> None:
+    before = bank.balance("checking")
+    token = executor.execute(call("set_card_control", **CONTROL)).result["token"]
+    executor.execute(call("set_card_control", **CONTROL, confirmation_token=token))
+
+    assert bank.balance("checking") == before
+    assert executor.writes == 0
+
+
+def test_an_unknown_control_never_becomes_pending(executor: ToolExecutor) -> None:
+    out = executor.execute(
+        call("set_card_control", last4="4417", control="teleportation", enabled=False)
+    )
+
+    assert "error" in out.result
+    assert executor.pending is None
+
+
+def test_a_control_on_a_card_that_is_not_there_never_becomes_pending(
+    executor: ToolExecutor,
+) -> None:
+    out = executor.execute(call("set_card_control", last4="0000", control="atm", enabled=False))
+
+    assert "error" in out.result
+    assert executor.pending is None
+
+
+def test_list_cards_reports_what_the_screen_draws(executor: ToolExecutor) -> None:
+    card = executor.execute(call("list_cards")).result["cards"][0]
+
+    assert {"last4", "account", "frozen", "kind", "holder", "controls"} <= set(card)
