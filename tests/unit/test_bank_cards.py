@@ -14,11 +14,6 @@ from voicebot.bank.base import BankError
 from voicebot.bank.sqlite_bank import SqliteBank
 
 
-@pytest.fixture
-def bank() -> SqliteBank:
-    return SqliteBank()
-
-
 def test_freeze_card(bank: SqliteBank) -> None:
     assert bank.freeze_card("4417").frozen is True
     assert next(c for c in bank.cards() if c.last4 == "4417").frozen is True

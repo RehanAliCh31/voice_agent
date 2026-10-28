@@ -10,11 +10,6 @@ from voicebot.bank.base import BankError
 from voicebot.bank.sqlite_bank import SqliteBank
 
 
-@pytest.fixture
-def bank() -> SqliteBank:
-    return SqliteBank()
-
-
 def test_pay_bill_deducts_and_marks_it_paid(bank: SqliteBank) -> None:
     assert bank.pay_bill("electricity") == 7_250
     assert bank.balance("checking") == 248_350 - 7_250

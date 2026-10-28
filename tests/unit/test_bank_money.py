@@ -15,11 +15,6 @@ from voicebot.bank.base import PERIODS, BankError, format_money, period_range
 from voicebot.bank.sqlite_bank import SqliteBank
 
 
-@pytest.fixture
-def bank() -> SqliteBank:
-    return SqliteBank()
-
-
 def test_seeded_balances(bank: SqliteBank) -> None:
     assert bank.balance("checking") == 248_350
     assert bank.balance("savings") == 1_902_000

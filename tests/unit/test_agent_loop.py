@@ -24,11 +24,6 @@ MOVE = {"amount_cents": 25_000, "from_account": "checking", "to_account": "savin
 
 
 @pytest.fixture
-def bank() -> SqliteBank:
-    return SqliteBank()
-
-
-@pytest.fixture
 def executor(bank: SqliteBank) -> ToolExecutor:
     return ToolExecutor(bank)
 

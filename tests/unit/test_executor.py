@@ -33,11 +33,6 @@ CONFIRMING_CALLS: tuple[tuple[str, dict[str, Any]], ...] = (
 
 
 @pytest.fixture
-def bank() -> SqliteBank:
-    return SqliteBank()
-
-
-@pytest.fixture
 def executor(bank: SqliteBank) -> ToolExecutor:
     return ToolExecutor(bank)
 

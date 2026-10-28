@@ -12,11 +12,6 @@ from voicebot.bank.base import BankError
 from voicebot.bank.sqlite_bank import SqliteBank
 
 
-@pytest.fixture
-def bank() -> SqliteBank:
-    return SqliteBank()
-
-
 def test_log_turn_is_recorded(bank: SqliteBank) -> None:
     bank.log_turn("s1", 1, "hi", "hello", None, False, None, 12.0)
     assert bank.turn_count() == 1
