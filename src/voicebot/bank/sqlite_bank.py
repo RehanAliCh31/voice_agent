@@ -587,9 +587,18 @@ class SqliteBank(Bank):
         )
 
     def reset(self) -> None:
-        """Back to the opening state. `turns` survives -- it is the record."""
+        """Back to the opening state. `turns` survives -- it is the record.
+
+        `seed` writes the rows; `_print_cards` is what makes a card a card --
+        its number, the name on it, and a PIN. Opening a bank has always run
+        both, and this ran only the first, so a reset left two cards with a
+        blank number and no PIN that could ever match. The same lesson the
+        payees and the commitments each taught: the rows are not the whole
+        of it.
+        """
         clear(self._db)
         seed(self._db)
+        _print_cards(self._db)
         log.info("bank reset to seeded state")
 
     # --- internals -----------------------------------------------------------

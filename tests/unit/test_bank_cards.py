@@ -10,8 +10,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from voicebot.bank.base import BankError
-from voicebot.bank.sqlite_bank import SqliteBank
+from voicebot.bank.base import PIN_TRIES, BankError
+from voicebot.bank.sqlite_bank import DEMO_PIN, SqliteBank
 
 
 def test_freeze_card(bank: SqliteBank) -> None:
@@ -290,3 +290,48 @@ def test_a_name_already_on_a_card_is_left_alone(tmp_path) -> None:
 
     card = next(c for c in SqliteBank(str(path)).cards() if c.last4 == "1234")
     assert card.holder == "SOMEBODY ELSE"
+
+
+# --- a reset has to put the cards back too ------------------------------------
+#
+# `reset` empties the tables and seeds them again. Seeding writes the rows;
+# it is `_print_cards` that gives a card its number, the name on it and a
+# PIN. Leaving that out left both cards with a blank number and no PIN at
+# all, so the demo PIN was refused and View details showed an empty card --
+# a migration is the rows as well as the columns, and so is a reset.
+
+
+def test_the_demo_pin_still_opens_a_card_after_a_reset(bank: SqliteBank) -> None:
+    assert bank.check_pin("4417", DEMO_PIN) is True
+
+    bank.reset()
+
+    assert bank.check_pin("4417", DEMO_PIN) is True
+
+
+def test_a_card_keeps_its_number_and_name_after_a_reset(bank: SqliteBank) -> None:
+    bank.reset()
+
+    card = next(c for c in bank.cards() if c.last4 == "4417")
+    assert card.number.endswith("4417")
+    assert card.holder
+    assert card.valid_from and card.valid_to
+
+
+def test_every_card_is_usable_after_a_reset(bank: SqliteBank) -> None:
+    bank.reset()
+
+    for card in bank.cards():
+        assert bank.check_pin(card.last4, DEMO_PIN) is True
+
+
+def test_a_reset_lifts_a_lock_earned_before_it(bank: SqliteBank) -> None:
+    """Back to the opening state means the card works, not that it is barred."""
+    for _ in range(PIN_TRIES):
+        bank.check_pin("4417", "9999")
+    assert bank.pin_locked("4417") is True
+
+    bank.reset()
+
+    assert bank.pin_locked("4417") is False
+    assert bank.check_pin("4417", DEMO_PIN) is True
