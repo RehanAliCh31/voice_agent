@@ -185,14 +185,14 @@ means the model is reaching for figures it was not given.
 
 | Path | Contents |
 |---|---|
-| `src/voicebot/llm/` | The client, its offline fake, the nine tool schemas, the system prompt |
+| `src/voicebot/llm/` | The client, its offline fake, the fifteen tool schemas, the system prompt |
 | `src/voicebot/agent/` | The LLM ⇄ tool loop, the executor that owns the confirmation gate, the numeric guard |
 | `src/voicebot/bank/` | SQLite schema, the ledger, the audit log, the seed data |
 | `src/voicebot/asr/` | Whisper engine |
 | `src/voicebot/tts/` | VITS, and the null engine that hands synthesis to the browser |
 | `src/voicebot/pipeline/` | Orchestrator, audio plumbing, per-stage timing |
 | `src/voicebot/api/` | FastAPI app, routes, sessions, published payload shapes |
-| `src/voicebot/api/static/` | The front end: `index.html`, `app.css`, `app.js`, `vad.js` |
+| `src/voicebot/api/static/` | The front end: `index.html`, one module per screen, one stylesheet each |
 | `configs/` | YAML run configuration, validated by pydantic at startup |
 | `tests/` | Unit and integration tests |
 | `docs/design/` | The design documents and implementation plans |
@@ -203,11 +203,22 @@ Every engine sits behind an abstract base class with a registry, so swapping
 Whisper for another ASR, or the endpoint for a hosted provider, is a config
 change.
 
+The front end is ES modules loaded straight by the browser — no bundler, no
+build step, nothing to install. `app.js` is the entry point and holds only
+the wiring; the work is in `core` (state and the API client), `audio`,
+`conversation`, `cards`, `screens` and `mic`, and each has a stylesheet of
+the same name. `vad.js` stays a classic script because it publishes one
+constructor on `window` and is tested under Node.
+
+The dependency runs one way, which is why `conversation.js` does not import
+any screen: a screen asks to hear about a turn with `onTurn`, and `app.js`
+is where they say so. Adding a screen is a line in that list.
+
 ---
 
 ## The database
 
-Five tables, SQLite, from the standard library — no server, no ORM, no
+Eight tables, SQLite, from the standard library — no server, no ORM, no
 dependency. Money is integer cents throughout.
 
 `transactions` is a ledger: money out is stored negative, every balance change
