@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from voicebot.bank.base import (
+    BILL_ACCOUNT,
     CARD_CONTROLS,
     DISPUTE_REASONS,
     DISPUTE_WINDOW_DAYS,
@@ -238,11 +239,11 @@ class SqliteBank(Bank):
         with self._db:
             changed = self._db.execute(
                 "UPDATE accounts SET balance_cents = balance_cents - ? "
-                "WHERE name = 'checking' AND balance_cents >= ?",
-                (amount, amount),
+                "WHERE name = ? AND balance_cents >= ?",
+                (amount, BILL_ACCOUNT, amount),
             ).rowcount
             if not changed:
-                available = self.balance("checking")
+                available = self.balance(BILL_ACCOUNT)
                 raise BankError(
                     f"There isn't enough in checking to cover that. The bill is "
                     f"{format_money(amount)} and the balance is {format_money(available)}."

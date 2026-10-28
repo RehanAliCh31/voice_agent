@@ -24,6 +24,7 @@ from voicebot.api.payloads import (
     AudioPayload,
     CardDetailsPayload,
     CardsPayload,
+    ConfirmRequest,
     HealthPayload,
     LedgerPayload,
     MonthlyPayload,
@@ -392,13 +393,35 @@ def chat(request: TextRequest, services: Services = Depends(get_services)) -> Tu
 
 
 @router.post("/v1/confirm", response_model=TurnPayload, tags=["conversation"])
-def confirm(request: SessionRequest, services: Services = Depends(get_services)) -> TurnPayload:
-    """Agree to the pending action.
+def confirm(request: ConfirmRequest, services: Services = Depends(get_services)) -> TurnPayload:
+    """Agree to the pending action, and approve it if it moves money.
 
     This acts on the executor directly, without asking the model whether it
     agrees -- which is what makes a misheard "yes" harmless. The model is then
     told what happened, so its next turn knows the money moved.
+
+    An action that moves money needs the PIN for the account it leaves. The
+    first press arrives without one and comes back asking for it; the second
+    carries it, and it is checked here against the bank. A wrong PIN is a 403
+    and the action stays pending, so the customer can try again without
+    having to agree to it a second time.
     """
+    if request.pin is not None:
+        executor = services.sessions.get(
+            _session_id(services.sessions, request.session_id)
+        ).executor
+        last4 = executor.pin_card()
+        if last4 is None:
+            # Nothing pending, or pending but not something that moves money.
+            # Either way there is no card to check this against, and a PIN
+            # with nothing to approve is not approval of anything.
+            raise HTTPException(status_code=409, detail="Nothing is waiting on a PIN.")
+
+        # The bank does the checking: it counts a wrong one and locks the card
+        # after too many. Only the fact that it was right travels on.
+        _checked(services, last4, request.pin)
+        executor.pin_accepted()
+
     return _resolve(request, services, confirmed=True)
 
 

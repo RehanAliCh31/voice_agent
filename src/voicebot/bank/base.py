@@ -49,14 +49,25 @@ def bad_pin_message() -> str:
 
 # What a PIN can be asked for. Closed, because each one is a screen the
 # page knows how to open: a reason not on this list has nowhere to go.
-PIN_PURPOSES: tuple[str, ...] = ("details", "reset")
+PIN_PURPOSES: tuple[str, ...] = ("details", "reset", "payment")
+
+# Of those, the ones the model may ask for. "payment" is not among them: the
+# gate in front of money asks for that one itself, once there is an agreed
+# action to approve. A model asking for it out of the blue would put a keypad
+# on screen with nothing behind it to approve.
+MODEL_PIN_PURPOSES: tuple[str, ...] = ("details", "reset")
+
+# Bills are paid from checking. Named once, because two places need to agree
+# on it: the bank, which takes the money, and the gate that asks for the PIN
+# belonging to the account it comes out of.
+BILL_ACCOUNT = "checking"
 
 
 def unknown_purpose_message(purpose: str) -> str:
     """Said aloud when a PIN is asked for something it is not needed for."""
     return (
         f"I don't ask for a PIN to {purpose}. I ask for one to show card "
-        f"details or to change the PIN itself."
+        f"details, to change the PIN itself, or to let money leave an account."
     )
 
 

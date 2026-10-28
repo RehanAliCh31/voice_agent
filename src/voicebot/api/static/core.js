@@ -58,11 +58,18 @@ var api = {
     });
   },
 
-  confirm: function () {
+  // The PIN is left out of the first press. Whether one is needed at all is
+  // the server's answer to that press, and a PIN sent before it is asked for
+  // is a PIN sent somewhere it may not be wanted.
+  confirm: function (pin) {
+    var body = { session_id: state.sessionId };
+    if (pin) {
+      body.pin = pin;
+    }
     return request("/v1/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: state.sessionId }),
+      body: JSON.stringify(body),
     });
   },
 

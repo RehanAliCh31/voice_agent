@@ -119,6 +119,7 @@ def test_every_confirming_tool_needs_confirmation_first(
 
 def test_the_second_call_with_the_token_executes(bank: SqliteBank, executor: ToolExecutor) -> None:
     token = executor.execute(call("transfer_money", **TRANSFER)).result["token"]
+    executor.pin_accepted()
     out = executor.execute(call("transfer_money", **TRANSFER, confirmation_token=token))
     assert out.result["status"] == "done"
     assert bank.balance("checking") == 243_350
@@ -146,6 +147,9 @@ def test_changed_arguments_invalidate_the_token(bank: SqliteBank, executor: Tool
 def test_an_expired_pending_action_is_refused(bank: SqliteBank) -> None:
     executor = ToolExecutor(bank, ttl_s=0.0)
     token = executor.execute(call("transfer_money", **TRANSFER)).result["token"]
+    # Approved, and still refused: expiry is checked before the PIN, so a
+    # PIN given against a stale agreement does not revive it.
+    executor.pin_accepted()
     out = executor.execute(call("transfer_money", **TRANSFER, confirmation_token=token))
     assert "error" in out.result
     assert bank.balance("checking") == 248_350
@@ -162,6 +166,7 @@ def test_the_summary_reads_back_the_real_amount(executor: ToolExecutor) -> None:
 
 def test_confirm_executes_the_pending_action(bank: SqliteBank, executor: ToolExecutor) -> None:
     executor.execute(call("transfer_money", **TRANSFER))
+    executor.pin_accepted()
     out = executor.confirm()
     assert out.result["status"] == "done"
     assert bank.balance("checking") == 243_350
@@ -255,6 +260,7 @@ def test_a_live_pending_action_still_confirms(bank: SqliteBank) -> None:
     # The expiry check must not break the ordinary path.
     executor = ToolExecutor(bank, ttl_s=300.0)
     executor.execute(call("transfer_money", **TRANSFER))
+    executor.pin_accepted()
     assert executor.confirm().result["status"] == "done"
     assert bank.balance("checking") == 243_350
 
@@ -369,6 +375,7 @@ def test_a_move_is_read_back_with_both_accounts(bank: SqliteBank, executor: Tool
 
 def test_a_confirmed_move_changes_both_balances(bank: SqliteBank, executor: ToolExecutor) -> None:
     token = executor.execute(call("move_money", **MOVE)).result["token"]
+    executor.pin_accepted()
 
     out = executor.execute(call("move_money", **MOVE, confirmation_token=token))
 
@@ -379,6 +386,7 @@ def test_a_confirmed_move_changes_both_balances(bank: SqliteBank, executor: Tool
 
 def test_a_move_sources_every_figure_it_reports(executor: ToolExecutor) -> None:
     token = executor.execute(call("move_money", **MOVE)).result["token"]
+    executor.pin_accepted()
 
     out = executor.execute(call("move_money", **MOVE, confirmation_token=token))
 
@@ -388,6 +396,7 @@ def test_a_move_sources_every_figure_it_reports(executor: ToolExecutor) -> None:
 def test_a_move_counts_as_a_write(executor: ToolExecutor) -> None:
     before = executor.writes
     token = executor.execute(call("move_money", **MOVE)).result["token"]
+    executor.pin_accepted()
     executor.execute(call("move_money", **MOVE, confirmation_token=token))
 
     assert executor.writes == before + 1
@@ -618,6 +627,7 @@ def test_moving_money_between_accounts_still_works(
 ) -> None:
     """The neighbouring feature, which this removal must not touch."""
     token = executor.execute(call("move_money", **MOVE)).result["token"]
+    executor.pin_accepted()
     executor.execute(call("move_money", **MOVE, confirmation_token=token))
 
     assert bank.balance("checking") == 198_350
@@ -825,3 +835,151 @@ def test_the_tool_cannot_be_handed_a_pin(executor: ToolExecutor) -> None:
 
     assert "pin" not in properties
     assert not any("pin" == name for name in properties if name != "purpose")
+
+
+# --- the PIN in front of money -----------------------------------------------
+#
+# A yes is agreement; the PIN is authority. These are the tests that the
+# second one cannot be skipped, whichever road the action arrives by.
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("pay_bill", {"bill": "internet"}),
+        ("move_money", MOVE),
+        ("transfer_money", TRANSFER),
+    ],
+)
+def test_yes_alone_moves_no_money(
+    bank: SqliteBank, executor: ToolExecutor, tool: str, arguments: dict[str, Any]
+) -> None:
+    before = bank.balance("checking")
+    executor.execute(call(tool, **arguments))
+
+    out = executor.confirm()
+
+    assert out.result["status"] == "pin_required"
+    assert bank.balance("checking") == before
+
+
+def test_the_agreed_action_survives_being_asked_for_a_pin(executor: ToolExecutor) -> None:
+    """Cancelling the keypad must not cost the customer their agreement."""
+    executor.execute(call("pay_bill", bill="internet"))
+
+    executor.confirm()
+
+    assert executor.pending is not None
+    assert executor.pending.tool == "pay_bill"
+
+
+def test_the_pin_asked_for_is_the_one_on_the_account_the_money_leaves(
+    executor: ToolExecutor,
+) -> None:
+    executor.execute(
+        call("move_money", amount_cents=10_000, from_account="savings", to_account="checking")
+    )
+    assert executor.confirm().result["last4"] == "9021"
+
+    executor.pin_accepted()
+    executor.confirm()
+
+    executor.execute(call("pay_bill", bill="internet"))
+    assert executor.confirm().result["last4"] == "4417"
+
+
+def test_a_bill_is_approved_with_the_card_on_checking(executor: ToolExecutor) -> None:
+    # Bills come out of checking, so it is that card's PIN and not the other.
+    executor.execute(call("pay_bill", bill="electricity"))
+    assert executor.confirm().result["last4"] == "4417"
+
+
+def test_the_model_carrying_its_own_token_back_meets_the_same_gate(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    """Otherwise the gate is a suggestion the model can decline."""
+    before = bank.balance("checking")
+    token = executor.execute(call("pay_bill", bill="internet")).result["token"]
+
+    out = executor.execute(call("pay_bill", bill="internet", confirmation_token=token))
+
+    assert out.result["status"] == "pin_required"
+    assert bank.balance("checking") == before
+
+
+def test_the_pin_lets_it_through_once_given(bank: SqliteBank, executor: ToolExecutor) -> None:
+    before = bank.balance("checking")
+    executor.execute(call("pay_bill", bill="internet"))
+    executor.confirm()
+
+    executor.pin_accepted()
+    out = executor.confirm()
+
+    assert out.result["status"] == "done"
+    assert bank.balance("checking") == before - 4_000
+    assert executor.pending is None
+
+
+def test_a_pin_given_for_one_payment_does_not_pay_the_next(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    """The authority is spent on the action it was asked for, and no other."""
+    executor.execute(call("pay_bill", bill="internet"))
+    executor.pin_accepted()
+    executor.confirm()
+
+    before = bank.balance("checking")
+    executor.execute(call("pay_bill", bill="electricity"))
+    out = executor.confirm()
+
+    assert out.result["status"] == "pin_required"
+    assert bank.balance("checking") == before
+
+
+def test_changing_the_amount_asks_for_the_pin_again(executor: ToolExecutor) -> None:
+    """ "Actually make it eighty" is a new action, not an approved one."""
+    token = executor.execute(call("transfer_money", **TRANSFER)).result["token"]
+    executor.pin_accepted()
+
+    changed = {**TRANSFER, "amount_cents": 8_000}
+    executor.execute(call("transfer_money", **changed, confirmation_token=token))
+
+    assert executor.pending is not None
+    assert executor.pending.pin_verified is False
+    assert executor.confirm().result["status"] == "pin_required"
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("freeze_card", {"last4": "4417"}),
+        ("set_card_control", {"last4": "4417", "control": "ecommerce", "allowed": False}),
+    ],
+)
+def test_what_moves_no_money_needs_no_pin(
+    executor: ToolExecutor, tool: str, arguments: dict[str, Any]
+) -> None:
+    executor.execute(call(tool, **arguments))
+
+    assert executor.confirm().result["status"] == "done"
+
+
+def test_an_account_with_no_card_cannot_be_debited(bank: SqliteBank) -> None:
+    """A PIN that cannot be taken must not become a PIN that is skipped."""
+    bank._db.execute("DELETE FROM cards WHERE account = 'checking'")
+    executor = ToolExecutor(bank)
+    before = bank.balance("checking")
+    executor.execute(call("pay_bill", bill="internet"))
+
+    out = executor.confirm()
+
+    assert "error" in out.result
+    assert bank.balance("checking") == before
+    assert executor.pending is None
+
+
+def test_the_model_cannot_ask_for_a_payment_pin_itself(executor: ToolExecutor) -> None:
+    """The gate asks for that one. A keypad with nothing behind it is a trap."""
+    out = executor.execute(call("ask_for_pin", last4="4417", purpose="payment"))
+
+    assert "error" in out.result

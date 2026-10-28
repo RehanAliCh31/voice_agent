@@ -42,6 +42,22 @@ CONFIRMING: frozenset[str] = frozenset(
     }
 )
 
+# Of those, the ones that actually move money. A yes is not enough for these:
+# the PIN for the account the money leaves is asked for after the read-back
+# and before anything happens. Freezing a card or filing a dispute is not
+# here -- both are reversible, and neither moves a penny.
+#
+# Enforced in the executor, like the gate above, so it holds whether the
+# customer pressed the button or the model called the tool back with its
+# token. A prompt that asks nicely is not a control.
+PIN_GUARDED: frozenset[str] = frozenset(
+    {
+        "transfer_money",
+        "pay_bill",
+        "move_money",
+    }
+)
+
 _TOKEN = {
     "type": "string",
     "description": (

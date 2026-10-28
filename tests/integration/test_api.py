@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from voicebot.api.app import STATIC_DIR, create_app
+from voicebot.bank.sqlite_bank import DEMO_PIN
 from voicebot.config import AppConfig
 from voicebot.llm.base import FakeLLMClient, Reply, ToolCall
 from voicebot.pipeline.audio_io import encode_wav
@@ -209,7 +210,7 @@ def test_confirm_executes_the_pending_action(client: TestClient) -> None:
     session_id = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"]
     assert bank.balance("checking") == 248_350  # nothing yet
 
-    body = client.post("/v1/confirm", json={"session_id": session_id}).json()
+    body = client.post("/v1/confirm", json={"pin": DEMO_PIN, "session_id": session_id}).json()
 
     assert body["reply"]
     assert bank.balance("checking") == 243_350
@@ -358,7 +359,9 @@ def test_the_payload_says_when_a_confirmation_is_waiting(client: TestClient) -> 
     pending = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()
     assert pending["awaiting_confirmation"] is True
 
-    settled = client.post("/v1/confirm", json={"session_id": pending["session_id"]}).json()
+    settled = client.post(
+        "/v1/confirm", json={"pin": DEMO_PIN, "session_id": pending["session_id"]}
+    ).json()
     assert settled["awaiting_confirmation"] is False
 
 
@@ -380,7 +383,7 @@ def test_the_confirmed_action_reaches_the_inspector(client: TestClient) -> None:
     )
     sid = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"]
 
-    body = client.post("/v1/confirm", json={"session_id": sid}).json()
+    body = client.post("/v1/confirm", json={"pin": DEMO_PIN, "session_id": sid}).json()
 
     assert body["tool_calls"], "the confirmed transfer is missing from the inspector"
     assert body["tool_calls"][0]["name"] == "transfer_money"
@@ -486,7 +489,7 @@ def test_the_balances_reflect_the_turn_that_just_happened(client: TestClient) ->
     )
     sid = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"]
 
-    settled = client.post("/v1/confirm", json={"session_id": sid}).json()
+    settled = client.post("/v1/confirm", json={"pin": DEMO_PIN, "session_id": sid}).json()
 
     checking = next(a for a in settled["accounts"] if a["name"] == "checking")
     assert checking["balance_cents"] == 243_350
@@ -504,7 +507,7 @@ def test_paying_a_bill_shows_in_the_same_answer(client: TestClient) -> None:
     )
     sid = client.post("/v1/chat", json={"text": "pay the water bill"}).json()["session_id"]
 
-    settled = client.post("/v1/confirm", json={"session_id": sid}).json()
+    settled = client.post("/v1/confirm", json={"pin": DEMO_PIN, "session_id": sid}).json()
 
     water = next(b for b in settled["bills"] if b["name"] == "water")
     assert water["paid"] is True
@@ -548,7 +551,7 @@ def test_the_ledger_shows_what_the_last_turn_did(client: TestClient) -> None:
         ],
     )
     sid = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"]
-    client.post("/v1/confirm", json={"session_id": sid})
+    client.post("/v1/confirm", json={"pin": DEMO_PIN, "session_id": sid})
 
     ledger = client.get("/v1/accounts").json()
     checking = next(a for a in ledger["accounts"] if a["name"] == "checking")
@@ -664,7 +667,7 @@ def test_a_statement_row_says_whether_it_was_a_transfer(client: TestClient) -> N
         ],
     )
     sid = client.post("/v1/chat", json={"text": "move fifty to savings"}).json()["session_id"]
-    client.post("/v1/confirm", json={"session_id": sid})
+    client.post("/v1/confirm", json={"pin": DEMO_PIN, "session_id": sid})
 
     rows = client.get("/v1/statement").json()["rows"]
     assert [row["kind"] for row in rows[:2]] == ["transfer", "transfer"]
@@ -746,7 +749,7 @@ def test_paying_one_moves_it_from_remaining_to_paid(client: TestClient) -> None:
         ],
     )
     sid = client.post("/v1/chat", json={"text": "pay the electricity"}).json()["session_id"]
-    client.post("/v1/confirm", json={"session_id": sid})
+    client.post("/v1/confirm", json={"pin": DEMO_PIN, "session_id": sid})
 
     after = client.get("/v1/monthly").json()
     assert after["paid_cents"] == 7_250
@@ -989,3 +992,127 @@ def test_a_pin_can_be_checked_without_showing_anything(client: TestClient) -> No
     assert "number" not in good.json()
 
     assert client.post("/v1/cards/4417/pin/check", json={"pin": "9999"}).status_code == 403
+
+
+# --- the PIN in front of money -----------------------------------------------
+#
+# The page walks this in two presses: Yes, which comes back asking for the
+# PIN, and then the PIN, which approves and performs in one call.
+
+
+def _armed_transfer(client: TestClient) -> str:
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),)),
+            Reply(text="Transfer $50.00 to sarah from checking. Shall I go ahead?"),
+            Reply(text="Done. $50.00 sent to sarah."),
+        ],
+    )
+    return str(client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"])
+
+
+def test_yes_comes_back_asking_for_the_pin(client: TestClient) -> None:
+    bank = client.app.state.services.bank
+    sid = _armed_transfer(client)
+
+    body = client.post("/v1/confirm", json={"session_id": sid}).json()
+
+    assert body["pin_request"]["last4"] == "4417"
+    assert body["pin_request"]["purpose"] == "payment"
+    # Still waiting, so the bar stays and the keypad can be cancelled.
+    assert body["awaiting_confirmation"] is True
+    assert bank.balance("checking") == 248_350
+
+
+def test_the_keypad_is_told_what_it_is_approving(client: TestClient) -> None:
+    """The dialogue covers the bar, so it carries the summary itself."""
+    sid = _armed_transfer(client)
+
+    body = client.post("/v1/confirm", json={"session_id": sid}).json()
+
+    assert "$50.00" in body["pin_request"]["summary"]
+    assert "sarah" in body["pin_request"]["summary"].lower()
+
+
+def test_asking_for_the_pin_does_not_reach_the_model(client: TestClient) -> None:
+    """Nothing to add to "enter your PIN", and the wait would be the model's."""
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "pay_bill", {"bill": "internet"}),)),
+            Reply(text="Pay your internet bill, $40.00. Shall I go ahead?"),
+            # Nothing further: a third call would exhaust the script and raise.
+        ],
+    )
+    sid = client.post("/v1/chat", json={"text": "pay my internet bill"}).json()["session_id"]
+
+    body = client.post("/v1/confirm", json={"session_id": sid}).json()
+
+    assert body["pin_request"]["purpose"] == "payment"
+    assert body["reply"]
+
+
+def test_the_right_pin_lets_the_payment_through(client: TestClient) -> None:
+    bank = client.app.state.services.bank
+    sid = _armed_transfer(client)
+    client.post("/v1/confirm", json={"session_id": sid})
+
+    body = client.post("/v1/confirm", json={"session_id": sid, "pin": DEMO_PIN}).json()
+
+    assert body["reply"]
+    assert body["awaiting_confirmation"] is False
+    assert bank.balance("checking") == 243_350
+
+
+def test_a_wrong_pin_moves_nothing_and_keeps_the_agreement(client: TestClient) -> None:
+    bank = client.app.state.services.bank
+    sid = _armed_transfer(client)
+    client.post("/v1/confirm", json={"session_id": sid})
+
+    refused = client.post("/v1/confirm", json={"session_id": sid, "pin": "9999"})
+
+    assert refused.status_code == 403
+    assert bank.balance("checking") == 248_350
+    # The agreement survives a wrong PIN: they try again, they do not re-agree.
+    assert client.app.state.services.sessions.get(sid).executor.pending is not None
+
+
+def test_the_right_pin_still_works_after_a_wrong_one(client: TestClient) -> None:
+    bank = client.app.state.services.bank
+    sid = _armed_transfer(client)
+    client.post("/v1/confirm", json={"session_id": sid})
+    client.post("/v1/confirm", json={"session_id": sid, "pin": "9999"})
+
+    client.post("/v1/confirm", json={"session_id": sid, "pin": DEMO_PIN})
+
+    assert bank.balance("checking") == 243_350
+
+
+def test_a_pin_with_nothing_waiting_is_refused(client: TestClient) -> None:
+    """A PIN approves a named action or it approves nothing."""
+    scripted(client, [Reply(text="Nothing is pending.")])
+    sid = client.post("/v1/chat", json={"text": "hello"}).json()["session_id"]
+
+    refused = client.post("/v1/confirm", json={"session_id": sid, "pin": DEMO_PIN})
+
+    assert refused.status_code == 409
+
+
+def test_freezing_a_card_still_needs_no_pin(client: TestClient) -> None:
+    """Nothing moves, so the yes is the whole of it."""
+    scripted(
+        client,
+        [
+            Reply(tool_calls=(ToolCall("c1", "freeze_card", {"last4": "4417"}),)),
+            Reply(text="Freeze the card ending 4417. Shall I go ahead?"),
+            Reply(text="Done, the card is frozen."),
+        ],
+    )
+    bank = client.app.state.services.bank
+    sid = client.post("/v1/chat", json={"text": "freeze my card"}).json()["session_id"]
+
+    body = client.post("/v1/confirm", json={"session_id": sid}).json()
+
+    assert body["pin_request"] is None
+    assert next(c for c in bank.cards() if c.last4 == "4417").frozen is True

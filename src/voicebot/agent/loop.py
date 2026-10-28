@@ -298,6 +298,25 @@ class Agent:
         pending = self.executor.pending
         before = self.executor.writes
         outcome = self.executor.confirm() if confirmed else self.executor.cancel()
+
+        if outcome.result.get("status") == "pin_required":
+            # Yes was given, the PIN has not been. Nothing ran and the action
+            # is still pending, so the history is left exactly as it was: an
+            # injected tool call here would tell the model the money moved,
+            # and its next answer would say so.
+            #
+            # The model is not asked to phrase this either. It has nothing to
+            # add to "enter your PIN", and a round trip to hear that is time
+            # the customer spends looking at a keypad that has not appeared.
+            log.info("confirmed, now holding for a PIN")
+            return self._result(
+                str(outcome.result.get("detail", "")),
+                calls=[],
+                outcomes=[outcome],
+                rounds=0,
+                hit=False,
+            )
+
         if self.executor.writes != before:
             conversation.invalidate_tool_results()
 
@@ -557,13 +576,24 @@ class Agent:
 
 
 def _pin_request(outcomes: Sequence[ToolOutcome]) -> dict[str, str] | None:
-    """The keypad this turn asked for, if it asked for one."""
+    """The keypad this turn asked for, if it asked for one.
+
+    Two things ask: the model, through `ask_for_pin`, and the gate in front
+    of money leaving an account. The page opens the same keypad for both.
+    """
     for outcome in outcomes:
-        if outcome.result.get("status") == "pin_requested":
-            return {
+        if outcome.result.get("status") in {"pin_requested", "pin_required"}:
+            asked = {
                 "last4": str(outcome.result.get("last4", "")),
                 "purpose": str(outcome.result.get("purpose", "")),
             }
+            # What the PIN approves, so the keypad can say it. The dialogue
+            # covers the confirmation bar, and a customer should not be
+            # typing a PIN against something they can no longer read.
+            summary = outcome.result.get("summary")
+            if summary:
+                asked["summary"] = str(summary)
+            return asked
     return None
 
 

@@ -215,6 +215,10 @@ def test_resolve_pending_executes_and_tells_the_model_it_happened(
     conversation = asked_for("send sarah fifty")
     client = FakeLLMClient([Reply(text="Done. $50.00 sent to sarah.")])
 
+    # The money gate asks for a PIN after the yes. These tests are about
+    # what happens once it is given, so it is given here the way the API
+    # gives it: checked against the bank first, then said to have passed.
+    executor.pin_accepted()
     out = Agent(client, executor).resolve_pending(True, conversation)
 
     assert bank.balance("checking") == 243_350
@@ -334,6 +338,10 @@ def test_an_outage_after_a_tool_ran_still_reports_it(bank: SqliteBank) -> None:
     """
     executor = ToolExecutor(bank)
     token = executor.execute(ToolCall("c0", "transfer_money", TRANSFER)).result["token"]
+    # The money gate asks for a PIN after the yes. These tests are about
+    # what happens once it is given, so it is given here the way the API
+    # gives it: checked against the bank first, then said to have passed.
+    executor.pin_accepted()
 
     class DiesAfterOneRound(LLMClient):
         def __init__(self) -> None:
@@ -520,6 +528,9 @@ def test_moving_money_forgets_the_balances_it_made_stale(bank: SqliteBank) -> No
     agent = Agent(client, executor)
     agent.handle("balance?", conversation)
     agent.handle("send sarah fifty", conversation)
+    # The money gate asks for a PIN after the yes; this test is about what
+    # the transfer does to the balances remembered before it.
+    executor.pin_accepted()
     executor.confirm()
 
     out = agent.handle("what's my balance now?", conversation)
@@ -568,6 +579,10 @@ def test_paying_a_bill_invalidates_the_earlier_list(bank: SqliteBank) -> None:
     agent = Agent(client, executor)
     agent.handle("what bills do I have?", conversation)
     agent.handle("pay electricity", conversation)
+    # The money gate asks for a PIN after the yes. These tests are about
+    # what happens once it is given, so it is given here the way the API
+    # gives it: checked against the bank first, then said to have passed.
+    executor.pin_accepted()
     agent.resolve_pending(True, conversation)
 
     tool_messages = [m for m in conversation.messages if m["role"] == "tool"]
@@ -582,6 +597,10 @@ def test_the_result_of_the_change_itself_is_not_invalidated(bank: SqliteBank) ->
     client = FakeLLMClient([Reply(text="Done.")])
     executor.execute(ToolCall("c1", "pay_bill", {"bill": "electricity"}))
 
+    # The money gate asks for a PIN after the yes. These tests are about
+    # what happens once it is given, so it is given here the way the API
+    # gives it: checked against the bank first, then said to have passed.
+    executor.pin_accepted()
     Agent(client, executor).resolve_pending(True, conversation)
 
     last_tool = [m for m in conversation.messages if m["role"] == "tool"][-1]

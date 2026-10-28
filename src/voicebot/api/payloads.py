@@ -127,6 +127,18 @@ class SessionRequest(BaseModel):
     session_id: str | None = None
 
 
+class ConfirmRequest(SessionRequest):
+    """Agree to the pending action, and approve it if it moves money.
+
+    The PIN is optional because the first press does not carry one: the
+    answer to that press is what tells the page to ask for it. It is checked
+    against the bank here and goes no further -- not into the conversation,
+    not past the executor, and not into the audit log.
+    """
+
+    pin: str | None = None
+
+
 class SpeakRequest(BaseModel):
     text: str
 

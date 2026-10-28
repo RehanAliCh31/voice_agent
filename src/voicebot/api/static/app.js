@@ -57,7 +57,11 @@ onTurn(function (turn) {
     // The bot asked for a PIN, which means it put the keypad here rather
     // than listening for one. No screen change: the dialogue is above
     // whatever is being read, and the conversation stays where it was.
-    openPin(cardNamed(turn.pin_request.last4), turn.pin_request.purpose);
+    openPin(
+      cardNamed(turn.pin_request.last4),
+      turn.pin_request.purpose,
+      turn.pin_request.summary
+    );
   }
 });
 

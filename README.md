@@ -251,6 +251,18 @@ One bank per process, one pending action per session: this is one customer's
 assistant, but two browser tabs mid-confirmation must not be able to confirm
 each other's transfer.
 
+Money leaving an account takes two steps, not one. The yes is agreement; the
+PIN for the account it leaves is authority. Paying a bill, moving between the
+customer's own accounts and sending to a payee all go through it, and the
+agreement survives a wrong PIN or a cancelled keypad — they try again, they
+do not agree again. Freezing a card and filing a dispute do not: both are
+reversible and neither moves a penny.
+
+The check lives in the executor, so it holds whether the customer pressed the
+button or the model carried its own confirmation token back. The PIN itself
+goes from the keypad to the bank and nowhere else: not through the model, not
+into the transcript, and not into `turns`.
+
 ---
 
 ## Quality gates

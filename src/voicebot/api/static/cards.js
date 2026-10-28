@@ -283,6 +283,10 @@ var PIN_ASKS = {
     title: "Change your PIN",
     why: "Start with the PIN you have now.",
   },
+  payment: {
+    title: "Approve this payment",
+    why: "Enter the PIN for the account the money leaves.",
+  },
 };
 
 /** The loaded card if the screen has one, or just its four digits. */
@@ -294,10 +298,12 @@ function cardNamed(last4) {
   );
 }
 
-function openPin(card, purpose) {
+function openPin(card, purpose, note) {
   state.pin = { card: card, purpose: purpose };
   el.pinTitle.textContent = PIN_ASKS[purpose].title;
-  el.pinWhy.textContent = PIN_ASKS[purpose].why;
+  // The bank's own sentence when it sent one, so what is being approved is
+  // on the dialogue that asks for the PIN and not only on the bar behind it.
+  el.pinWhy.textContent = note || PIN_ASKS[purpose].why;
   forgetPins();
   el.pinStepCurrent.hidden = false;
   el.pinStepNew.hidden = true;
@@ -358,6 +364,24 @@ function onPinGo() {
         showDetails(details);
       })
       .catch(function (error) {
+        pinFailed(error.message);
+      });
+    return;
+  }
+
+  if (state.pin.purpose === "payment") {
+    // The PIN travels with the agreement: one call approves and performs, so
+    // there is no moment where the bank has been told yes, been given the
+    // PIN, and is still waiting to be told to go ahead.
+    api
+      .confirm(pin)
+      .then(function (turn) {
+        closePin();
+        handleTurn(turn);
+      })
+      .catch(function (error) {
+        // The action is still pending, so a wrong PIN costs another try and
+        // not the agreement. Cancelling here leaves the bar to press again.
         pinFailed(error.message);
       });
     return;

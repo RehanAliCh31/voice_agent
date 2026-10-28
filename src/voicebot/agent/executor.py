@@ -20,9 +20,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from voicebot.bank.base import (
+    BILL_ACCOUNT,
     CARD_CONTROLS,
     DISPUTE_REASONS,
-    PIN_PURPOSES,
+    MODEL_PIN_PURPOSES,
     Bank,
     BankError,
     Transaction,
@@ -34,7 +35,12 @@ from voicebot.bank.base import (
     unknown_purpose_message,
 )
 from voicebot.llm.base import ToolCall
-from voicebot.llm.tools import CONFIRMING, DEFAULT_TRANSACTIONS, MAX_TRANSACTIONS
+from voicebot.llm.tools import (
+    CONFIRMING,
+    DEFAULT_TRANSACTIONS,
+    MAX_TRANSACTIONS,
+    PIN_GUARDED,
+)
 from voicebot.utils.logging import get_logger
 
 log = get_logger("agent.executor")
@@ -69,6 +75,11 @@ class PendingAction:
     token: str
     summary: str
     created_at: float
+    # Set once the API has checked a PIN against the bank for this exact
+    # action. It lives here, and not on the executor, so that agreeing to a
+    # different amount cannot inherit the PIN given for the old one: changing
+    # the arguments builds a fresh PendingAction, and this starts false again.
+    pin_verified: bool = False
 
     def expired(self, ttl_s: float, now: float) -> bool:
         # >= so that a ttl of zero means "no validity at all" rather than
@@ -181,16 +192,22 @@ class ToolExecutor:
                 "There's nothing waiting to be confirmed.",
                 "No action was pending, so nothing happened.",
             )
-        self.pending = None
         if pending.expired(self.ttl_s, time.monotonic()):
             # Sessions live for 30 minutes and the buttons stay on screen, so
             # without this a customer could return from lunch and confirm a
             # summary they no longer remember.
+            self.pending = None
             log.warning("confirmation expired before the button was pressed: %s", pending.tool)
             return _error(
                 "That confirmation has expired.",
                 f"More than {int(self.ttl_s)}s passed. Nothing has changed; please ask again.",
             )
+        if pending.tool in PIN_GUARDED and not pending.pin_verified:
+            # Yes was not enough. The action stays pending while the keypad is
+            # on screen, so cancelling the PIN leaves the customer exactly
+            # where they were rather than losing what they agreed to.
+            return self._needs_pin(pending)
+        self.pending = None
         try:
             return self._handlers()[pending.tool](pending.arguments)
         except (ValueError, KeyError) as exc:
@@ -203,6 +220,30 @@ class ToolExecutor:
             )
         except BankError as exc:
             return _error(str(exc), str(exc))
+
+    def pin_accepted(self) -> None:
+        """Record that a PIN was given and the bank accepted it.
+
+        Called by the API, which does the checking. There is no parameter for
+        a PIN and nothing here ever holds one: what the customer types goes
+        from the keypad to the bank, never through the model, the transcript
+        or the audit log. All that crosses this line is the fact that it was
+        right, and it is pinned to the one action it was asked for.
+        """
+        if self.pending is not None:
+            self.pending.pin_verified = True
+
+    def pin_card(self) -> str | None:
+        """Which card's PIN authorises the pending action, if one is pending.
+
+        The card on the account the money leaves. The API needs this to know
+        what to check the PIN against, and asking the executor keeps that
+        decision in one place rather than in both.
+        """
+        pending = self.pending
+        if pending is None or pending.tool not in PIN_GUARDED:
+            return None
+        return self._card_on(self._account_charged(pending))
 
     def cancel(self) -> ToolOutcome:
         """Discard the pending action. Called by the Cancel button."""
@@ -255,10 +296,53 @@ class ToolExecutor:
                 # through under the old agreement.
                 log.info("arguments changed under confirmation for %s; re-confirming", name)
                 return self._begin(name, validated)
+            if name in PIN_GUARDED and not pending.pin_verified:
+                # The same gate the button meets. Without it the model could
+                # carry its own token back and move money with no PIN at all,
+                # which would make the whole thing a suggestion.
+                return self._needs_pin(pending)
             self.pending = None
             return handler(validated)
 
         return self._begin(name, validated)
+
+    def _needs_pin(self, pending: PendingAction) -> ToolOutcome:
+        """Hold the agreed action and ask for the PIN. Nothing has moved yet."""
+        last4 = self._card_on(self._account_charged(pending))
+        if last4 is None:
+            # No card on that account means no PIN can be taken for it, and a
+            # PIN that cannot be taken must not become a PIN that is skipped.
+            # The action is dropped rather than quietly let through.
+            self.pending = None
+            log.warning("no card on the account %s would debit; refusing", pending.tool)
+            return _error(
+                "I can't take a PIN for that account, so I can't move the money.",
+                "No card belongs to the account the money would leave. Nothing happened.",
+            )
+        log.info("holding %s for a PIN on card %s", pending.tool, last4)
+        return ToolOutcome(
+            {
+                "status": "pin_required",
+                "last4": last4,
+                "purpose": "payment",
+                "summary": pending.summary,
+                "detail": "Enter your PIN to approve this.",
+            }
+        )
+
+    @staticmethod
+    def _account_charged(pending: PendingAction) -> str:
+        """The account the money comes out of."""
+        if pending.tool == "pay_bill":
+            return BILL_ACCOUNT
+        return str(pending.arguments.get("from_account", "")).strip().lower()
+
+    def _card_on(self, account: str) -> str | None:
+        """The card belonging to an account, by its last four digits."""
+        for card in self.bank.cards():
+            if card.account == account:
+                return card.last4
+        return None
 
     def _begin(self, name: str, arguments: dict[str, Any]) -> ToolOutcome:
         """Record what we are about to do, and say it back. Nothing happens yet."""
@@ -681,7 +765,7 @@ class ToolExecutor:
             raise ValueError(f"I don't have a card ending {last4}. I have: {known}.")
 
         purpose = _require_text(arguments.get("purpose"), "purpose").lower()
-        if purpose not in PIN_PURPOSES:
+        if purpose not in MODEL_PIN_PURPOSES:
             raise ValueError(unknown_purpose_message(purpose))
 
         return ToolOutcome({"status": "pin_requested", "last4": last4, "purpose": purpose})
