@@ -1,0 +1,180 @@
+/* The transactions screen: one calendar month, newest first, grouped by
+   day. */
+
+/*
+ * One month: what is held, what came in against what went out, then every
+ * movement grouped by the day it happened. The totals sit above the list
+ * because they are the answer to "how did this month go"; the rows are the
+ * working behind it.
+ */
+
+.summary {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 26px 22px 20px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.summary__label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.summary__total {
+  margin: 6px 0 0;
+  font-size: 38px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--brand-deep);
+}
+
+.summary__month {
+  display: inline-block;
+  margin: 14px 0 0;
+  padding: 5px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: var(--paper);
+}
+
+.flows {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.flow { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.flow--in { align-items: flex-start; text-align: left; }
+.flow--out { align-items: flex-end; text-align: right; }
+
+.flow__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+
+.flow__arrow {
+  display: inline-grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1;
+  background: var(--line-soft);
+  color: var(--ink-soft);
+}
+
+.flow--in .flow__arrow { background: var(--brand-wash); color: var(--brand); }
+.flow--out .flow__arrow { background: var(--bad-wash); color: var(--bad); }
+
+.flow__amount {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.statement {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 6px 0 4px;
+  overflow: hidden;
+}
+
+.statement__day {
+  margin: 0;
+  padding: 16px 20px 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.movement {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  padding: 12px 20px;
+}
+
+/* A hairline between rows but not under the last one before a day heading,
+   which already separates them. */
+.movement + .movement { border-top: 1px solid var(--line-soft); }
+
+/* Initials rather than a logo: the bank has no brand assets for a merchant,
+   and an invented logo would be a claim about who was paid. */
+.movement__mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--brand-wash);
+  color: var(--brand-deep);
+  text-transform: uppercase;
+}
+
+.movement--in .movement__mark { background: var(--brand); color: #fff; }
+
+.movement__who { min-width: 0; }
+
+.movement__name {
+  display: block;
+  font-weight: 500;
+  text-transform: capitalize;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.movement__where {
+  display: block;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  text-transform: capitalize;
+}
+
+.movement__side { text-align: right; white-space: nowrap; }
+
+.movement__time {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.movement__amount {
+  display: block;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--bad);
+}
+
+.movement--in .movement__amount { color: var(--brand); }
+
+@media (max-width: 560px) {
+  .summary__total { font-size: 32px; }
+  .movement { padding: 12px 14px; gap: 11px; }
+  .statement__day { padding: 14px 14px 8px; }
+}

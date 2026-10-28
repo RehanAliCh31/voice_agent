@@ -1,0 +1,275 @@
+/* The cards screen: the card itself, what it is allowed to do, and the
+   four tiles under it. */
+
+/*
+ * One card at a time, picked from a row of tabs. The face shows what the
+ * bank actually holds -- four digits and a name -- and the switches below it
+ * are the card's own columns, not decoration: each one is a thing the card
+ * may or may not do.
+ */
+
+.cardpicker {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.cardpicker__tab {
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  background: var(--card);
+  border: 1px solid var(--line);
+  padding: 9px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cardpicker__tab[aria-selected="true"] {
+  border-color: var(--brand);
+  color: var(--brand-deep);
+  background: var(--brand-wash);
+}
+
+.cardpicker__digits { font-family: var(--mono); font-size: 12.5px; }
+
+.cardface {
+  position: relative;
+  border-radius: 18px;
+  padding: 22px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-deep), var(--brand-bright));
+  box-shadow: var(--shadow-lift);
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  max-width: 420px;
+  margin: 0 auto 20px;
+  overflow: hidden;
+}
+
+/* A quiet arc, so the face is not a flat rectangle of one colour. */
+.cardface::after {
+  content: "";
+  position: absolute;
+  right: -70px;
+  top: -90px;
+  width: 230px;
+  height: 230px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.cardface--frozen { filter: grayscale(0.75); }
+
+.cardface__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  position: relative;
+}
+
+.cardface__bank { font-weight: 700; letter-spacing: 0.02em; }
+
+.cardface__kind {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.cardface__number {
+  font-family: var(--mono);
+  font-size: 19px;
+  letter-spacing: 0.08em;
+  position: relative;
+}
+
+.cardface__foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  position: relative;
+}
+
+.cardface__holder {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cardface__account {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  opacity: 0.8;
+  text-transform: capitalize;
+}
+
+.cardface__state {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.cardface--frozen .cardface__state { background: var(--bad); }
+
+/* --- what the card may do ------------------------------------------------- */
+
+.controls {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 18px;
+}
+
+.control + .control { border-top: 1px solid var(--line-soft); }
+
+.control__name { font-weight: 500; }
+
+.control__detail {
+  display: block;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+
+/* Shaped like a switch and deliberately not one. Every change to this
+   account goes through the confirmation gate, so it is changed by asking,
+   and the hint below says so rather than leaving a dead control on screen. */
+.control__state {
+  width: 44px;
+  height: 25px;
+  border-radius: 999px;
+  background: #CFCBC2;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.control__state::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.18s;
+}
+
+.control__state[data-on="true"] { background: var(--brand); }
+.control__state[data-on="true"]::after { left: 22px; }
+
+.controls__hint {
+  margin: 0;
+  padding: 13px 18px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--paper);
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+
+@media (max-width: 560px) {
+  .cardface { padding: 18px; gap: 22px; }
+  .cardface__number { font-size: 17px; }
+}
+
+/*
+ * Two buttons under the card, and a dialogue that asks why before it asks
+ * whether. The second step shows the bank's own sentence rather than one
+ * written here, so what is agreed to is what will happen.
+ */
+
+.cardacts {
+  display: flex;
+  gap: 9px;
+  max-width: 420px;
+  margin: 0 auto 16px;
+  flex-wrap: wrap;
+}
+
+.cardact {
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  flex: 1 1 0;
+  min-width: 140px;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+}
+
+.cardact:hover { border-color: var(--brand); color: var(--brand-deep); }
+.cardact:focus-visible { outline: 2px solid var(--brand-bright); outline-offset: 2px; }
+
+.cardact--stop:hover { border-color: var(--bad); color: var(--bad); }
+
+.cardact[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.cardact[disabled]:hover { border-color: var(--line); color: var(--ink); }
+
+.cardacts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.cardact {
+  flex: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 13px 6px;
+  text-align: center;
+  line-height: 1.25;
+  font-size: 12px;
+}
+
+.cardact__icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--brand-wash);
+  color: var(--brand-deep);
+  flex-shrink: 0;
+}
+
+.cardact--stop .cardact__icon { background: var(--bad-wash); color: var(--bad); }
+.cardact[disabled] .cardact__icon { background: var(--line-soft); color: var(--ink-faint); }

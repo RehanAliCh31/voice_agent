@@ -1,0 +1,171 @@
+/* The monthly screen: what leaves every month, and how much of it has
+   gone. */
+
+/*
+ * What leaves every month whether or not anybody thinks about it. The bar is
+ * the point of the screen: not a list of amounts but how much of the month's
+ * obligation has actually gone.
+ */
+
+.commit {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 24px 22px 20px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.commit__label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.commit__total {
+  margin: 6px 0 0;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--brand-deep);
+}
+
+.commit__bar {
+  height: 9px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  overflow: hidden;
+  margin: 18px 0 10px;
+}
+
+.commit__done {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand);
+  transition: width 0.3s;
+}
+
+.commit__split {
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+
+.commit__split strong {
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.plans { display: flex; flex-direction: column; gap: 14px; }
+
+.plangroup {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.plangroup__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--paper);
+}
+
+.plangroup__name {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.plangroup__total {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--brand-deep);
+}
+
+.plan {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 18px;
+}
+
+.plan + .plan { border-top: 1px solid var(--line-soft); }
+
+.plan__name { font-weight: 500; text-transform: capitalize; }
+
+.plan__due {
+  display: block;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+
+.plan__side { text-align: right; white-space: nowrap; }
+
+.plan__amount {
+  display: block;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan__state {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--warn);
+}
+
+/* Paid is quieter, not louder: the ones still to go are what the screen is
+   being looked at for. */
+.plan--paid .plan__name,
+.plan--paid .plan__amount { color: var(--ink-faint); }
+.plan--paid .plan__amount { text-decoration: line-through; }
+.plan--paid .plan__state { color: var(--brand); }
+
+@media (max-width: 560px) {
+  .commit__total { font-size: 29px; }
+  .plan, .plangroup__head { padding-left: 14px; padding-right: 14px; }
+}
+
+/* A way out of the ledger's short list into the whole month. */
+.bills__more {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--brand);
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--line-soft);
+  padding: 9px 0 2px;
+  margin-top: 3px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bills__more:hover { color: var(--brand-deep); text-decoration: underline; }
+
+/* A frozen card allows nothing, so its switches are shown as not in force
+   rather than as permissions the card still grants. */
+.controls--frozen .control__name,
+.controls--frozen .control__detail { color: var(--ink-faint); }
+.controls--frozen .control__state { opacity: 0.4; }
+.controls--frozen .controls__hint { color: var(--bad); }

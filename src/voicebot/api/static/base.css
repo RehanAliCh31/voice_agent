@@ -1,0 +1,188 @@
+/* The ground every screen stands on: the palette, the reset, the header
+   and the tabs that switch between screens.
+
+   Every colour is a token here and nowhere else, so a change is made once
+   and the screens follow. */
+
+/* Voice Banking — the interface.
+ *
+ * A retail banking look: the customer's money is on screen before they say
+ * anything, and it moves as they speak. The conversation sits beside the
+ * accounts rather than replacing them, so what the bot is talking about is
+ * always visible.
+ *
+ * One palette, defined once below. Nothing anywhere else uses a literal
+ * colour, so a change here changes the whole page.
+ */
+
+:root {
+  /* paper and ink */
+  --paper: #F6F4EF;
+  --card: #FFFFFF;
+  --ink: #1A1917;
+  --ink-soft: #5F5A50;
+  --ink-faint: #8E8679;
+  --line: #E7E2D8;
+  --line-soft: #F0ECE4;
+
+  /* the bank's own colour */
+  --brand: #1C6F6A;
+  --brand-bright: #27847E;
+  --brand-wash: #E3EFEE;
+  --brand-deep: #14504C;
+
+  /* states */
+  --warn: #A96F22;
+  --warn-wash: #FBF2E4;
+  --bad: #A3402F;
+  --bad-wash: #FBEDEA;
+
+  --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+
+  --radius: 14px;
+  --radius-sm: 10px;
+  --shadow-card: 0 2px 8px -4px rgba(60, 50, 30, 0.18);
+  --shadow-lift: 0 8px 26px -14px rgba(60, 50, 30, 0.38);
+
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+/* A column, so the dock and any pending confirmation stay put while the
+   screen between them changes. Only `.views` scrolls. */
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--brand);
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 0 0 var(--radius-sm) 0;
+  z-index: 50;
+}
+.skip:focus { left: 0; }
+
+:where(button, input, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* --- header --------------------------------------------------------------- */
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 24px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand { display: flex; align-items: center; gap: 11px; }
+
+.brand__mark {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(145deg, var(--brand-bright), var(--brand-deep));
+  display: grid;
+  place-items: center;
+  box-shadow: 0 4px 12px -5px rgba(20, 80, 76, 0.65);
+}
+
+.brand__name { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; }
+
+/* Which engines are loaded was useful while building and is noise to a
+   customer. Whether the server is reachable at all still matters, and the
+   dock already says so, so nothing was lost by taking the chips out. */
+.screens {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.screens__tab {
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  background: none;
+  border: 0;
+  padding: 7px 15px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.screens__tab:hover { color: var(--ink); }
+
+.screens__tab[aria-current="page"] {
+  background: var(--brand);
+  color: #fff;
+  box-shadow: var(--shadow-card);
+}
+
+.screens__tab:focus-visible {
+  outline: 2px solid var(--brand-bright);
+  outline-offset: 2px;
+}
+
+/* --- the screens ---------------------------------------------------------- */
+
+.views {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 24px 24px;
+}
+
+.view {
+  max-width: 1320px;
+  margin: 0 auto;
+}
+
+.view[hidden] { display: none; }
+
+/* Assistant: the ledger beside the conversation. */
+.view--assistant {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+@media (max-width: 920px) {
+  .view--assistant { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 560px) {
+  .top { padding: 12px 16px; }
+  .views { padding: 14px 16px 20px; }
+  .screens__tab { padding: 7px 12px; font-size: 13px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

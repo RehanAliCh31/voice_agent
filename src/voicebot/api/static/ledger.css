@@ -1,0 +1,117 @@
+/* The accounts and bills beside the conversation.
+
+   It sits next to what is being said so a figure the bot speaks can be
+   read at the same time, and the account whose balance just moved is
+   marked. */
+
+.ledger { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+.block { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+.block__title {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.block__empty { margin: 0; font-size: 14px; color: var(--ink-faint); }
+
+.accounts { display: flex; flex-direction: column; gap: 10px; }
+
+.account {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 15px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: var(--shadow-card);
+  min-width: 0;
+}
+
+.account__name {
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.account__amount {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.account--waiting .account__amount { color: var(--ink-faint); }
+
+/* The account a turn just changed. Marked rather than merely updated, so the
+   customer can see which figure moved without comparing two numbers. */
+.account--moved {
+  border-color: var(--brand-bright);
+  box-shadow: 0 0 0 3px var(--brand-wash), var(--shadow-lift);
+}
+
+.account__delta {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Stacked, the two account cards are the tallest thing on the page and push
+   the microphone off a phone screen. Side by side they keep the glance at the
+   money without burying the control that starts a turn. These must stay below
+   the rules they override: at equal specificity the later rule wins, media
+   query or not. */
+@media (max-width: 920px) {
+  .accounts { flex-direction: row; }
+  .account { flex: 1 1 0; padding: 12px 13px; }
+  .account__amount { font-size: 21px; }
+}
+
+.bills {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  box-shadow: var(--shadow-card);
+  min-width: 0;
+}
+
+.bill { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 14px; }
+.bill__name { text-transform: capitalize; min-width: 0; }
+.bill__amount { font-variant-numeric: tabular-nums; font-weight: 500; flex-shrink: 0; }
+
+.bill--paid .bill__name { color: var(--ink-faint); }
+.bill--paid .bill__amount { color: var(--brand); font-weight: 600; }
+
+.bill__paid {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--brand);
+  flex-shrink: 0;
+}
+
+.reset {
+  appearance: none;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  padding: 9px 14px;
+  cursor: pointer;
+}
+.reset:hover { border-color: var(--ink-faint); color: var(--ink); }

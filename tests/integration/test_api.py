@@ -305,6 +305,20 @@ def test_every_asset_the_page_asks_for_is_served(client: TestClient, asset: str)
     assert client.get(f"/{asset}").status_code == 200
 
 
+def test_the_page_asks_for_nothing_that_is_not_there(client: TestClient) -> None:
+    """Every stylesheet and script the page links must be served.
+
+    The stylesheets are split by screen and loaded in order, which is what
+    keeps the cascade right. A link that 404s does not fail anything: the
+    page still loads, one screen's rules are simply missing.
+    """
+    page = client.get("/").text
+    asked = re.findall(r'(?:href|src)="(?!https?:|data:)([^"]+)"', page)
+    assert asked, "the page links nothing, which cannot be right"
+    for path in asked:
+        assert client.get(f"/{path}").status_code == 200, f"the page asks for {path}"
+
+
 def test_every_module_import_points_at_a_file_that_exists() -> None:
     """A missing module is a blank page, and nothing else says so.
 

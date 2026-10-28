@@ -1,0 +1,208 @@
+/* The transcript, and the confirmation bar underneath it.
+
+   The bar is part of the conversation card rather than the window: what
+   it is asking about is the exchange directly above it. */
+
+.talk {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  min-height: 560px;
+}
+
+.conversation {
+  flex: 1;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.conversation:focus { outline: none; }
+
+.empty {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  color: var(--ink-faint);
+  max-width: 34ch;
+}
+.empty__text { margin: 0; font-size: 14.5px; line-height: 1.55; }
+
+.turn { display: flex; flex-direction: column; max-width: 78%; }
+.turn--you { align-self: flex-end; align-items: flex-end; }
+.turn--bot { align-self: flex-start; }
+
+.turn__text {
+  margin: 0;
+  font-size: 15.5px;
+  line-height: 1.5;
+  padding: 11px 15px;
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+
+.turn--you .turn__text {
+  background: linear-gradient(145deg, var(--brand-bright), var(--brand-deep));
+  color: #fff;
+  border-bottom-right-radius: 5px;
+  box-shadow: 0 3px 10px -5px rgba(20, 80, 76, 0.55);
+}
+
+.turn--bot .turn__text {
+  background: var(--paper);
+  color: var(--ink);
+  border-bottom-left-radius: 5px;
+}
+
+.turn--error .turn__text {
+  background: var(--bad-wash);
+  color: var(--bad);
+  border: 1px solid rgba(163, 64, 47, 0.25);
+}
+
+.turn--notice { align-self: center; max-width: 46ch; }
+.turn--notice .turn__text {
+  background: none;
+  color: var(--ink-faint);
+  font-size: 13.5px;
+  font-style: italic;
+  text-align: center;
+  padding: 4px 0;
+}
+
+/* A reply whose figures the guard replaced with the stored values. Flagged
+   rather than hidden: the customer should know when the bot overrode its own
+   wording. */
+.turn__flag {
+  font-size: 11.5px;
+  color: var(--warn);
+  margin-top: 5px;
+  padding-left: 4px;
+}
+
+/* A conversation that has left the bot. Marked out rather than blended in:
+   the customer is being told the bot has stopped, and the reference is the
+   part they may have to repeat to someone else. */
+.turn__case {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--brand-bright);
+  border-radius: 9px;
+  background: var(--brand-wash);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.turn__case-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--brand-deep);
+}
+
+.turn__case-ref {
+  font-family: var(--mono, "IBM Plex Mono"), ui-monospace, monospace;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--brand-deep);
+}
+
+.turn__audio { margin-top: 6px; padding-left: 4px; }
+
+.replay {
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink-soft);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+.replay:hover { border-color: var(--brand); color: var(--brand); }
+
+.thinking { display: flex; gap: 5px; padding: 14px 15px; }
+.thinking span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  animation: pulse 1.3s ease-in-out infinite;
+}
+.thinking span:nth-child(2) { animation-delay: 0.16s; }
+.thinking span:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-3px); }
+}
+
+/* --- the confirmation ----------------------------------------------------- */
+
+.confirm {
+  flex-shrink: 0;
+  border-top: 1px solid var(--line);
+  background: linear-gradient(160deg, #F4FAF9, var(--brand-wash));
+  padding: 15px 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+/* The display above outranks the browser's own [hidden] rule, so the bar has
+   to be hidden explicitly. Without this it shows a live "Yes, confirm" button
+   with no action behind it, which is the last thing a bank should offer. */
+.confirm[hidden] { display: none; }
+
+.confirm__text { margin: 0; font-size: 14.5px; color: var(--brand-deep); font-weight: 500; }
+.confirm__buttons { display: flex; gap: 9px; }
+
+.button {
+  appearance: none;
+  font-family: var(--sans);
+  font-size: 14.5px;
+  font-weight: 600;
+  padding: 10px 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.button--go {
+  background: var(--brand);
+  color: #fff;
+  box-shadow: 0 3px 10px -5px rgba(20, 80, 76, 0.7);
+}
+.button--go:hover { background: var(--brand-deep); }
+
+.button--stop { background: var(--card); color: var(--ink-soft); border-color: var(--line); }
+.button--stop:hover { border-color: var(--ink-faint); color: var(--ink); }
+
+.button--quiet {
+  background: var(--paper);
+  color: var(--ink-soft);
+  border-color: var(--line);
+  font-size: 14px;
+  padding: 9px 16px;
+}
+.button--quiet:hover { border-color: var(--brand); color: var(--brand); }

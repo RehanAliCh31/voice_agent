@@ -1,0 +1,175 @@
+/* The microphone, the status line, the typed way in, and the barge-in
+   controls -- everything under the conversation that drives a turn. */
+
+.dock {
+  border-top: 1px solid var(--line);
+  padding: 16px 22px calc(16px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.dock__row { display: flex; align-items: center; gap: 16px; }
+
+.mic {
+  appearance: none;
+  position: relative;
+  width: 54px;
+  height: 54px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.mic__face {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, var(--brand-bright), var(--brand-deep));
+  box-shadow: 0 5px 16px -7px rgba(20, 80, 76, 0.8);
+  transition: transform 0.15s;
+}
+.mic:hover .mic__face { transform: scale(1.04); }
+
+.mic__ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--brand-bright);
+  opacity: 0;
+}
+
+.mic[data-state="listening"] .mic__ring { animation: ring 1.6s ease-out infinite; }
+.mic[data-state="listening"] .mic__face { background: linear-gradient(145deg, #C9622F, #9E4319); }
+.mic[data-state="speaking"] .mic__ring { animation: ring 2.4s ease-out infinite; }
+.mic[data-state="thinking"] .mic__face { background: var(--ink-faint); }
+
+@keyframes ring {
+  0% { transform: scale(1); opacity: 0.5; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+
+.status { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.status__label { margin: 0; font-size: 15px; font-weight: 600; }
+.status__label[data-tone="busy"] { color: var(--brand); }
+.status__label[data-tone="done"] { color: var(--ink); }
+.status__label[data-tone="error"] { color: var(--bad); }
+.status__hint { margin: 0; font-size: 13px; color: var(--ink-faint); }
+
+.level {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-soft);
+  overflow: hidden;
+  margin-top: 4px;
+  max-width: 260px;
+}
+
+.level__fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--brand-bright);
+  transition: width 0.06s linear;
+}
+/* Above the line barge-in has to clear, so the slider can be set by
+   watching rather than by guessing. */
+.level__fill[data-over="true"] { background: var(--warn); }
+
+.say { display: flex; align-items: center; gap: 9px; }
+.say__label {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  flex-shrink: 0;
+}
+
+.say__input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--sans);
+  font-size: 14.5px;
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+}
+.say__input::placeholder { color: var(--ink-faint); }
+.say__input:focus { outline: none; border-color: var(--brand); background: var(--card); }
+
+/* --- barge-in ------------------------------------------------------------- */
+
+.bargein {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 20px;
+  align-items: center;
+  background: var(--paper);
+}
+
+@media (max-width: 560px) {
+  .bargein { grid-template-columns: minmax(0, 1fr); }
+}
+
+.bargein[data-enabled="false"] { opacity: 0.72; }
+
+.switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+
+.switch__track {
+  width: 40px;
+  height: 23px;
+  border-radius: 999px;
+  background: #CFCBC2;
+  position: relative;
+  transition: background 0.18s;
+  flex-shrink: 0;
+}
+.switch__track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.18s;
+}
+.switch input:checked + .switch__track { background: var(--brand); }
+.switch input:checked + .switch__track::after { transform: translateX(17px); }
+.switch input:focus-visible + .switch__track { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+.switch__label { font-size: 14px; }
+
+.slider { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.slider__label { font-size: 13px; color: var(--ink-faint); flex-shrink: 0; }
+.slider input { flex: 1; min-width: 80px; accent-color: var(--brand); }
+.slider__value {
+  font-family: var(--mono);
+  font-size: 13px;
+  width: 16px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.bargein__note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  line-height: 1.45;
+}
