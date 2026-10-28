@@ -374,13 +374,17 @@ class Bank(ABC):
         limit: int = 5,
         account: str | None = None,
         merchant: str | None = None,
+        period: str | None = None,
     ) -> tuple[Transaction, ...]:
         """The most recent movements, newest first.
 
         The same table `spending` totals, read row by row: this is what
-        answers "what was that charge", where the total cannot.
+        answers "what was that charge", where the total cannot. Given a
+        `period` it covers the same half-open range `spending` uses, so a
+        list of rows and a total over them describe the same stretch of time.
 
-        Raises BankError when `account` is not one the customer holds.
+        Raises BankError when `account` is not one the customer holds, or
+        when `period` is not one of PERIODS.
         """
 
     @abstractmethod

@@ -126,6 +126,7 @@ class SqliteBank(Bank):
         limit: int = 5,
         account: str | None = None,
         merchant: str | None = None,
+        period: str | None = None,
     ) -> tuple[Transaction, ...]:
         sql = "SELECT id, account, merchant, cents, occurred_at FROM transactions"
         clauses: list[str] = []
@@ -137,6 +138,15 @@ class SqliteBank(Bank):
         if merchant:
             clauses.append("merchant = ?")
             params.append(merchant.lower())
+        if period is not None:
+            # The same half-open range `spending` totals over, so a list of
+            # rows and a total of them can never disagree about where the
+            # period starts and ends.
+            if period not in PERIODS:
+                raise BankError(unknown_period_message(period))
+            start, end = period_range(period, datetime.now())
+            clauses.append("occurred_at >= ? AND occurred_at < ?")
+            params.extend([_stamp(start), _stamp(end)])
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
 

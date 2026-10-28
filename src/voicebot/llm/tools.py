@@ -139,12 +139,22 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
     ),
     _function(
         "list_transactions",
-        "List recent movements on the account -- what was charged, by whom, and "
-        "when. Use this when the customer asks what a charge was or what they "
-        "have paid someone; use get_spending when they want a total rather than "
-        "the individual rows.",
+        "List movements on the account over a named period -- what was charged, "
+        "by whom, and when. Ask the customer which period they mean before "
+        "calling this; there is no default and a call without one is refused. "
+        "Use this when the customer asks what a charge was or what they have "
+        "paid someone; use get_spending when they want a total rather than the "
+        "individual rows.",
         {
             "account": _ACCOUNT,
+            "period": {
+                "type": "string",
+                "enum": list(PERIODS),
+                "description": (
+                    "Which period to list. Required. Ask the customer rather "
+                    "than choosing one for them."
+                ),
+            },
             "merchant": {
                 "type": "string",
                 "description": "Optional. Only movements involving this merchant.",

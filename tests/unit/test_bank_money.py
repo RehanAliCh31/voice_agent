@@ -334,3 +334,45 @@ def test_an_impossible_month_is_refused(bank: SqliteBank) -> None:
 # A card is more than four digits and a frozen flag once there is a screen
 # drawing it. The three controls are real columns rather than decoration: a
 # switch on screen that nothing can change is a lie told in CSS.
+
+
+# --- a period for the rows, not just the totals -------------------------------
+#
+# The Transactions screen shows one calendar month. The bot reading "the
+# newest five" instead listed two charges from last month alongside three
+# from this one and called them all recent, so the screen and the sentence
+# disagreed about the same account.
+
+
+def test_transactions_can_be_limited_to_a_period(bank: SqliteBank) -> None:
+    last_month = {t.merchant for t in bank.transactions(limit=20, period="last month")}
+    this_week = {t.merchant for t in bank.transactions(limit=20, period="this week")}
+
+    assert last_month == {"amazon", "tesco"}
+    # Seeded into this week by name. Yesterday's charge is deliberately not
+    # asserted either way: whether it falls in this week depends on what day
+    # the suite runs, and a test that fails on Mondays is not a test.
+    assert {"netflix", "uber"} <= this_week
+    assert not last_month & this_week
+
+
+def test_a_period_with_nothing_in_it_is_empty_rather_than_wrong(bank: SqliteBank) -> None:
+    # Nothing was charged today in the seed. An empty list is the honest
+    # answer; falling back to "the newest five" would put last month's
+    # charges under today's heading.
+    assert bank.transactions(limit=20, period="today") == ()
+
+
+def test_an_unknown_period_for_rows_names_the_ones_that_work(bank: SqliteBank) -> None:
+    with pytest.raises(BankError, match="this week"):
+        bank.transactions(period="october")
+
+
+def test_every_period_is_accepted_for_rows(bank: SqliteBank) -> None:
+    for period in PERIODS:
+        assert isinstance(bank.transactions(period=period), tuple)
+
+
+def test_without_a_period_the_ledger_behaves_as_it_did(bank: SqliteBank) -> None:
+    """The bank keeps its old answer; it is the tool above that now insists."""
+    assert len(bank.transactions(limit=20)) == 5

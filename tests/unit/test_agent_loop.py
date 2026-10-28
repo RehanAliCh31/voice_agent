@@ -905,7 +905,13 @@ def test_a_spoken_amount_reaches_the_page_as_a_figure(executor: ToolExecutor) ->
     """The ledger shows $7.60; the sentence beside it should not say seven sixty."""
     agent = agent_with(
         [
-            Reply(tool_calls=(ToolCall("c1", "list_transactions", {"merchant": "starbucks"}),)),
+            Reply(
+                tool_calls=(
+                    ToolCall(
+                        "c1", "list_transactions", {"period": "yesterday", "merchant": "starbucks"}
+                    ),
+                )
+            ),
             Reply(text="Starbucks, seven sixty, yesterday."),
         ],
         executor,
@@ -934,7 +940,13 @@ def test_an_invented_figure_sends_the_model_to_look_it_up(executor: ToolExecutor
     agent = agent_with(
         [
             Reply(text="You've paid Netflix $15.49 this month."),
-            Reply(tool_calls=(ToolCall("c1", "list_transactions", {"merchant": "netflix"}),)),
+            Reply(
+                tool_calls=(
+                    ToolCall(
+                        "c1", "list_transactions", {"period": "this week", "merchant": "netflix"}
+                    ),
+                )
+            ),
             Reply(text="You've paid Netflix $10.99."),
         ],
         executor,
@@ -954,7 +966,13 @@ def test_a_figure_invented_twice_is_still_recorded_as_a_guard_hit(
     agent = agent_with(
         [
             Reply(text="You've paid Netflix $15.49 this month."),
-            Reply(tool_calls=(ToolCall("c1", "list_transactions", {"merchant": "netflix"}),)),
+            Reply(
+                tool_calls=(
+                    ToolCall(
+                        "c1", "list_transactions", {"period": "this week", "merchant": "netflix"}
+                    ),
+                )
+            ),
             Reply(text="You've paid Netflix $15.49 this month."),
         ],
         executor,

@@ -24,6 +24,7 @@ from voicebot.bank.base import (
     CARD_CONTROLS,
     DISPUTE_REASONS,
     MODEL_PIN_PURPOSES,
+    PERIODS,
     Bank,
     BankError,
     Transaction,
@@ -614,13 +615,30 @@ class ToolExecutor:
         return ToolOutcome(out, sourced_cents=(cents,))
 
     def _list_transactions(self, arguments: dict[str, Any]) -> ToolOutcome:
+        # No default period on purpose. "The newest five" spans whatever
+        # months happen to be nearest, so it listed last month's charges
+        # beside this month's and called them all recent -- next to a screen
+        # headed with one month. The customer decides the stretch of time.
+        period = _optional_text(arguments.get("period"))
+        if period is None:
+            return _error(
+                "I need to know which period you mean before I can list those.",
+                "No period was given. Ask the customer which one they want -- "
+                f"{', '.join(PERIODS)} -- and call this again with it.",
+            )
+
         rows = self.bank.transactions(
             limit=self._row_count(arguments.get("limit")),
             account=_optional_text(arguments.get("account")),
             merchant=_optional_text(arguments.get("merchant")),
+            period=period,
         )
         return ToolOutcome(
             {
+                # Named back so the reply can say which stretch of time it
+                # covers, and so an empty list reads as "nothing this week"
+                # rather than as "nothing, ever".
+                "period": period,
                 "transactions": [
                     {
                         # The handle a dispute refers to. Two $10.99 charges
@@ -635,7 +653,7 @@ class ToolExecutor:
                         "occurred_at": row.occurred_at,
                     }
                     for row in rows
-                ]
+                ],
             },
             # Absolute, because that is what gets spoken. The ledger keeps the
             # sign and the reply states the direction in words; a guard

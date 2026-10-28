@@ -319,10 +319,10 @@ def test_a_card_confirmation_sources_no_amount(executor: ToolExecutor) -> None:
 
 
 def test_list_transactions_reports_rows(executor: ToolExecutor) -> None:
-    out = executor.execute(call("list_transactions", limit=3))
+    out = executor.execute(call("list_transactions", period="last month", limit=5))
 
     rows = out.result["transactions"]
-    assert len(rows) == 3
+    assert len(rows) == 2
     assert {"merchant", "amount", "amount_cents", "direction", "occurred_at"} <= set(rows[0])
 
 
@@ -330,20 +330,20 @@ def test_transaction_amounts_are_sourced_so_they_can_be_spoken(
     executor: ToolExecutor,
 ) -> None:
     """Stored negative, spoken positive. The guard compares what is spoken."""
-    out = executor.execute(call("list_transactions", merchant="netflix"))
+    out = executor.execute(call("list_transactions", period="this week", merchant="netflix"))
 
     assert out.sourced_cents and all(cents > 0 for cents in out.sourced_cents)
     assert 1_099 in out.sourced_cents
 
 
 def test_the_direction_is_stated_not_implied(executor: ToolExecutor) -> None:
-    out = executor.execute(call("list_transactions", merchant="netflix"))
+    out = executor.execute(call("list_transactions", period="this week", merchant="netflix"))
     assert out.result["transactions"][0]["direction"] == "out"
 
 
 def test_reading_the_ledger_changes_nothing(bank: SqliteBank, executor: ToolExecutor) -> None:
     before = bank.balance("checking")
-    executor.execute(call("list_transactions"))
+    executor.execute(call("list_transactions", period="this week"))
 
     assert bank.balance("checking") == before
     assert executor.writes == 0
@@ -352,12 +352,12 @@ def test_reading_the_ledger_changes_nothing(bank: SqliteBank, executor: ToolExec
 
 def test_an_absurd_limit_is_clamped(executor: ToolExecutor) -> None:
     """Replies are spoken aloud; a hundred rows is not an answer."""
-    out = executor.execute(call("list_transactions", limit=500))
+    out = executor.execute(call("list_transactions", period="this week", limit=500))
     assert len(out.result["transactions"]) <= 20
 
 
 def test_an_unknown_account_comes_back_as_a_sentence(executor: ToolExecutor) -> None:
-    out = executor.execute(call("list_transactions", account="offshore"))
+    out = executor.execute(call("list_transactions", period="this week", account="offshore"))
     assert "error" in out.result
 
 
@@ -516,7 +516,7 @@ def test_an_unroutable_reason_comes_back_as_a_sentence(executor: ToolExecutor) -
 
 def test_a_listed_transaction_can_be_named_again(executor: ToolExecutor) -> None:
     """The id is what a dispute refers to; two $10.99 charges are not alike."""
-    out = executor.execute(call("list_transactions", limit=3))
+    out = executor.execute(call("list_transactions", period="last month"))
 
     rows = out.result["transactions"]
     assert all(isinstance(row["id"], int) for row in rows)
@@ -983,3 +983,78 @@ def test_the_model_cannot_ask_for_a_payment_pin_itself(executor: ToolExecutor) -
     out = executor.execute(call("ask_for_pin", last4="4417", purpose="payment"))
 
     assert "error" in out.result
+
+
+# --- the rows need a period, and the tool insists on one ----------------------
+#
+# Without one the model listed the newest five across all time and called
+# them recent, which put last month's charges under this month's heading on
+# a screen sitting right next to the answer. Asking is enforced here rather
+# than in the prompt, so a model that forgets cannot answer anyway.
+
+
+def test_listing_transactions_without_a_period_is_refused(executor: ToolExecutor) -> None:
+    out = executor.execute(call("list_transactions", account="checking"))
+
+    assert "error" in out.result
+    assert "period" in out.result["error"].lower()
+
+
+def test_the_refusal_tells_the_model_to_ask_the_customer(executor: ToolExecutor) -> None:
+    out = executor.execute(call("list_transactions", account="checking"))
+
+    assert "ask" in out.result["hint"].lower()
+
+
+def test_a_refusal_to_list_sources_no_figures(executor: ToolExecutor) -> None:
+    """Otherwise the guard would accept whatever the refusal happened to quote."""
+    out = executor.execute(call("list_transactions", account="checking"))
+
+    assert out.sourced_cents == ()
+
+
+def test_listing_a_period_returns_only_that_period(executor: ToolExecutor) -> None:
+    out = executor.execute(call("list_transactions", account="checking", period="last month"))
+
+    assert {row["merchant"] for row in out.result["transactions"]} == {"amazon", "tesco"}
+
+
+def test_the_result_names_the_period_it_covers(executor: ToolExecutor) -> None:
+    """So the bot can say which stretch of time it is reading out."""
+    out = executor.execute(call("list_transactions", account="checking", period="last month"))
+
+    assert out.result["period"] == "last month"
+
+
+def test_an_unknown_period_lists_the_ones_that_work(executor: ToolExecutor) -> None:
+    out = executor.execute(call("list_transactions", account="checking", period="october"))
+
+    assert "error" in out.result
+    assert "this week" in out.result["error"]
+
+
+def test_a_period_with_nothing_in_it_still_names_itself(executor: ToolExecutor) -> None:
+    out = executor.execute(call("list_transactions", account="checking", period="today"))
+
+    assert out.result["transactions"] == []
+    assert out.result["period"] == "today"
+
+
+def test_the_rows_and_the_total_agree_on_the_same_period(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    """One range, used by both, so a list and its total cannot disagree."""
+    rows = executor.execute(call("list_transactions", account="checking", period="last month"))
+    listed = sum(row["amount_cents"] for row in rows.result["transactions"])
+
+    assert listed == bank.spending("last month")
+
+
+def test_listing_transactions_offers_the_periods_spending_already_uses(
+    executor: ToolExecutor,
+) -> None:
+    def periods(name: str) -> list[str]:
+        schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == name)
+        return schema["function"]["parameters"]["properties"]["period"]["enum"]
+
+    assert periods("list_transactions") == periods("get_spending")
