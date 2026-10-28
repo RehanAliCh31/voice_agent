@@ -1,0 +1,272 @@
+/* What the customer reads, what the status line says, and what happens
+ * when a turn comes back.
+ *
+ * No text here reaches the page as markup. Every element is built with
+ * createElement and textContent, because a transcript is the customer's own
+ * words read back and the reply is a language model's output -- neither is
+ * trusted markup.
+ */
+
+import { api, el, node, state } from "./core.js";
+import { base64ToBlob, canSpeak, play, speak, stopPlayback } from "./audio.js";
+
+function clearEmptyState() {
+  if (el.empty && el.empty.parentNode) {
+    el.empty.remove();
+  }
+}
+
+function addTurn(who, text, options) {
+  clearEmptyState();
+  options = options || {};
+
+  var turn = node("div", "turn turn--" + (who === "you" ? "you" : "bot"));
+  if (options.error) {
+    turn.classList.add("turn--error");
+  }
+  if (options.notice) {
+    turn.classList.add("turn--notice");
+  }
+
+  turn.appendChild(node("p", "turn__text", text));
+
+  if (options.guardHit) {
+    var flag = node("div", "turn__flag", "figure read back from your account");
+    flag.title =
+      "The model's own wording stated a figure no tool returned, so the " +
+      "stored value was spoken instead.";
+    turn.appendChild(flag);
+  }
+
+  if (options.caseRef) {
+    // Shown as its own line rather than left inside the sentence: this is
+    // the one thing the customer may need to write down. The label says
+    // which kind it is, because a dispute and a handoff mean different
+    // things -- one filed a claim, the other ended the bot's part.
+    var case_ = node("div", "turn__case");
+    case_.appendChild(node("span", "turn__case-label", options.caseLabel));
+    case_.appendChild(node("span", "turn__case-ref", options.caseRef));
+    turn.appendChild(case_);
+  }
+
+  if (options.audioBlob || options.replayText) {
+    var row = node("div", "turn__audio");
+    var replay = node("button", "replay");
+    replay.type = "button";
+    replay.setAttribute("aria-label", "Replay this reply");
+    replay.innerHTML =
+      '<svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">' +
+      '<path d="M2 1.5l8 4.5-8 4.5z" fill="currentColor"></path></svg>';
+    replay.addEventListener("click", function () {
+      if (options.audioBlob) {
+        play(options.audioBlob);
+      } else {
+        speak(options.replayText);
+      }
+    });
+    row.appendChild(replay);
+    turn.appendChild(row);
+  }
+
+  el.conversation.appendChild(turn);
+  el.conversation.scrollTop = el.conversation.scrollHeight;
+  return turn;
+}
+
+function showThinking() {
+  clearEmptyState();
+  var turn = node("div", "turn turn--bot");
+  turn.id = "thinkingTurn";
+
+  var dots = node("div", "thinking");
+  dots.appendChild(node("span"));
+  dots.appendChild(node("span"));
+  dots.appendChild(node("span"));
+  turn.appendChild(dots);
+
+  el.conversation.appendChild(turn);
+  el.conversation.scrollTop = el.conversation.scrollHeight;
+}
+
+function hideThinking() {
+  var turn = document.getElementById("thinkingTurn");
+  if (turn) {
+    turn.remove();
+  }
+}
+
+/** Say once that this browser cannot speak, rather than seeming broken. */
+function noteSilence() {
+  if (state.toldAboutVoices) {
+    return;
+  }
+  state.toldAboutVoices = true;
+  addTurn(
+    "bot",
+    "This browser has no speech voices installed, so replies are shown but " +
+      "not spoken. Everything else works.",
+    { notice: true }
+  );
+}
+
+// --- status ----------------------------------------------------------------
+
+function setStatus(label, hint, tone) {
+  el.statusLabel.textContent = label;
+  el.statusLabel.setAttribute("data-tone", tone || "");
+  el.statusHint.textContent = hint;
+}
+
+function setPhase(phase) {
+  state.phase = phase;
+  el.micButton.setAttribute("data-state", phase);
+  el.micButton.setAttribute(
+    "aria-label",
+    phase === "listening" ? "Stop recording" : "Start recording"
+  );
+}
+
+function bargeHint() {
+  return el.vadToggle.checked
+    ? "Talk over it to interrupt"
+    : "Barge-in is off — wait for it to finish";
+}
+
+function idle() {
+  setPhase("idle");
+  if (state.lastTotalMs) {
+    setStatus(
+      "Answered in " + Math.round(state.lastTotalMs) + " ms",
+      "Tap to start another turn",
+      "done"
+    );
+  } else {
+    setStatus("Ready", "Tap the microphone to start a turn", "");
+  }
+}
+
+function fail(message) {
+  hideThinking();
+  setPhase("idle");
+  setStatus("Something went wrong", message, "error");
+  addTurn("bot", message, { error: true });
+}
+
+// --- a turn ------------------------------------------------------------------
+
+// Redrawn when a turn lands. The conversation does not know which screens
+// exist -- they say so themselves by registering here, which keeps this
+// module free of them and the dependency pointing one way.
+var listeners = [];
+
+/** Hear about every turn after the conversation has been drawn. */
+function onTurn(listener) {
+  listeners.push(listener);
+}
+
+/** The read-back the customer is agreeing to, taken from the pending tool. */
+function pendingSummary(turn) {
+  var calls = turn.tool_calls || [];
+  for (var i = calls.length - 1; i >= 0; i -= 1) {
+    var result = calls[i].result || {};
+    if (result.status === "needs_confirmation" && result.summary) {
+      return result.summary + "?";
+    }
+  }
+  return "This moves money. Say yes, or choose below.";
+}
+
+function handleTurn(turn) {
+  state.sessionId = turn.session_id;
+  state.lastTotalMs = (turn.latency_ms || {}).total || null;
+  hideThinking();
+
+  if (turn.text) {
+    addTurn("you", turn.text);
+  }
+
+  var blob = turn.audio_b64 ? base64ToBlob(turn.audio_b64, "audio/wav") : null;
+  var reply = turn.reply || "";
+
+  addTurn("bot", reply, {
+    audioBlob: blob,
+    replayText: turn.speak_client_side && canSpeak() ? reply : null,
+    guardHit: Boolean(turn.guard_hit),
+    caseRef: turn.handed_off || turn.dispute_filed || null,
+    caseLabel: turn.handed_off ? "Passed to a specialist" : "Dispute filed",
+  });
+
+  // Drawn after the conversation, so whatever a screen is showing and the
+  // sentence the bot just spoke come from the same answer and describe the
+  // same moment. Which screens exist is not this module's business: each one
+  // asks to be told, and the dependency only ever runs one way.
+  listeners.forEach(function (listener) {
+    listener(turn);
+  });
+
+  // An action waits on a yes. Buttons remove any doubt about whether the
+  // word was heard correctly, which matters more here than anywhere else --
+  // and they act on the pending action directly, not through the model.
+  el.confirm.hidden = !turn.awaiting_confirmation;
+  if (turn.awaiting_confirmation) {
+    el.confirmText.textContent = pendingSummary(turn);
+  }
+
+  if (blob) {
+    setPhase("speaking");
+    setStatus("Speaking", bargeHint(), "busy");
+    play(blob).then(idle);
+  } else if (turn.speak_client_side && canSpeak()) {
+    setPhase("speaking");
+    setStatus("Speaking", bargeHint(), "busy");
+    speak(reply).then(idle);
+  } else {
+    if (turn.speak_client_side) {
+      noteSilence();
+    }
+    idle();
+  }
+}
+
+/** The Yes or Cancel button. Rendered exactly like any other turn. */
+function resolvePending(promise) {
+  showThinking();
+  setStatus("Working", "", "busy");
+  return promise.then(handleTurn, function (error) {
+    hideThinking();
+    addTurn("bot", "Sorry — that didn't go through: " + error.message, { error: true });
+    idle();
+  });
+}
+
+function send(text) {
+  stopPlayback();
+  setPhase("thinking");
+  setStatus("Processing", "Thinking", "busy");
+  addTurn("you", text);
+  showThinking();
+
+  api
+    .chat(text)
+    .then(function (turn) {
+      // The text is already on screen; do not echo it twice.
+      turn.text = "";
+      handleTurn(turn);
+    })
+    .catch(function (error) {
+      fail(error.message);
+    });
+}
+
+export {
+  addTurn,
+  fail,
+  handleTurn,
+  idle,
+  onTurn,
+  resolvePending,
+  send,
+  setPhase,
+  setStatus,
+  showThinking,
+};

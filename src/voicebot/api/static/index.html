@@ -257,7 +257,11 @@
   </div>
 </dialog>
 
+<!-- The detector is a classic script: it hangs one constructor on `window`
+     and is loaded on its own so it stays testable under Node. The client is
+     a module, and so pulls in the rest of itself -- a module script is
+     deferred, so the page is built by the time it runs. -->
 <script src="vad.js"></script>
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

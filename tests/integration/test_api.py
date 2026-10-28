@@ -9,17 +9,22 @@ a confirmation, and that the page is still served.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from voicebot.api.app import create_app
+from voicebot.api.app import STATIC_DIR, create_app
 from voicebot.config import AppConfig
 from voicebot.llm.base import FakeLLMClient, Reply, ToolCall
 from voicebot.pipeline.audio_io import encode_wav
 from voicebot.schemas import AudioBuffer
+
+# Named by what is on disk rather than by a list kept here, so a module
+# added to the page cannot be left out of the tests that serve it.
+ASSETS = sorted(p.name for p in STATIC_DIR.iterdir() if p.suffix in {".js", ".css"})
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
 MOVE = {"amount_cents": 5_000, "from_account": "checking", "to_account": "savings"}
@@ -295,9 +300,22 @@ def test_the_page_is_served_at_the_root(client: TestClient) -> None:
     assert "<!doctype html>" in response.text.lower()
 
 
-@pytest.mark.parametrize("asset", ["app.css", "app.js", "vad.js"])
+@pytest.mark.parametrize("asset", ASSETS)
 def test_every_asset_the_page_asks_for_is_served(client: TestClient, asset: str) -> None:
     assert client.get(f"/{asset}").status_code == 200
+
+
+def test_every_module_import_points_at_a_file_that_exists() -> None:
+    """A missing module is a blank page, and nothing else says so.
+
+    The browser resolves these paths itself and reports the failure only to
+    its own console, so a renamed or forgotten module leaves a page that
+    loads, draws nothing, and raises no error anyone sees.
+    """
+    for module in sorted(STATIC_DIR.glob("*.js")):
+        source = module.read_text(encoding="utf-8")
+        for target in re.findall(r'^import[\s\S]*?from "\./([\w.-]+)";', source, re.M):
+            assert (STATIC_DIR / target).is_file(), f"{module.name} imports missing {target}"
 
 
 def test_the_api_still_wins_over_the_static_mount(client: TestClient) -> None:
@@ -404,7 +422,7 @@ def test_the_committed_default_config_still_loads() -> None:
     assert config.database.path
 
 
-@pytest.mark.parametrize("asset", ["/", "/app.js", "/vad.js", "/app.css"])
+@pytest.mark.parametrize("asset", ["/", *(f"/{name}" for name in ASSETS)])
 def test_the_page_and_its_assets_must_be_revalidated(client: TestClient, asset: str) -> None:
     """Without this the browser runs yesterday's JavaScript.
 
