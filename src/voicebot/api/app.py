@@ -22,6 +22,7 @@ from voicebot import __version__
 from voicebot.api.deps import build_services
 from voicebot.api.routes import router
 from voicebot.config import AppConfig, load_config
+from voicebot.utils.env import load_env_file
 from voicebot.utils.logging import get_logger
 
 log = get_logger("api.app")
@@ -58,6 +59,10 @@ are also exposed, so a client can inspect any one of them in isolation.
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Load the engines once, before serving."""
+    # Before anything reads the environment, so a .env beside the project is
+    # as good as an export. Anything already exported still wins.
+    load_env_file()
+
     config_path = os.environ.get("VOICEBOT_CONFIG")
     config: AppConfig = load_config(config_path) if config_path else AppConfig()
 
