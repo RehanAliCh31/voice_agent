@@ -117,6 +117,7 @@ def test_the_guard_hit_counter_rises_when_a_figure_is_invented(client: TestClien
         ],
     )
     client.post("/v1/chat", json={"text": "balance?"})
+    assert client.app.state.services.audit.flush()
 
     assert "voicebot_guard_hits_total 1" in client.get("/metrics").text
 
@@ -217,6 +218,8 @@ def test_confirm_executes_the_pending_action(client: TestClient) -> None:
             Reply(text="Done. $50.00 sent to sarah."),
         ],
     )
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     session_id = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"]
     assert bank.balance("checking") == 248_350  # nothing yet
@@ -236,6 +239,8 @@ def test_cancel_leaves_the_money_alone(client: TestClient) -> None:
             Reply(text="No problem, cancelled."),
         ],
     )
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     session_id = client.post("/v1/chat", json={"text": "send sarah fifty"}).json()["session_id"]
 
@@ -262,6 +267,8 @@ def test_one_session_cannot_confirm_anothers_transfer(client: TestClient) -> Non
             Reply(text="Nothing was pending."),
         ],
     )
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     client.post("/v1/chat", json={"text": "send sarah fifty", "session_id": "tab-one"})
 
@@ -274,6 +281,8 @@ def test_one_session_cannot_confirm_anothers_transfer(client: TestClient) -> Non
 
 
 def test_reset_restores_the_seeded_balances(client: TestClient) -> None:
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     bank.transfer(5_000, "sarah", "checking")
 
@@ -421,6 +430,8 @@ def test_a_turn_with_no_tools_logs_null_rather_than_an_empty_array(
     scripted(client, [Reply(text="Hello there.")])
     client.post("/v1/chat", json={"text": "hello"})
 
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     row = support.rows(bank, "SELECT tool_calls FROM turns ORDER BY id DESC LIMIT 1")[0]
     assert row["tool_calls"] is None
@@ -620,6 +631,8 @@ def test_the_case_knows_which_conversation_raised_it(client: TestClient) -> None
 
     body = client.post("/v1/chat", json={"text": "put me through to a person"}).json()
 
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     case = bank.handoffs(session_id=body["session_id"])
     assert case and case[0].reference == body["handed_off"]
@@ -892,6 +905,8 @@ def test_the_reason_reaches_the_audit_log(client: TestClient) -> None:
         json={"tool": "freeze_card", "arguments": {"last4": "4417"}, "reason": "left it in a taxi"},
     )
 
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     rows = support.rows(bank, "SELECT user_text, bot_text FROM turns")
     assert any("taxi" in (row["user_text"] or "") for row in rows)
@@ -1009,6 +1024,8 @@ def test_a_pin_never_reaches_the_audit_log(client: TestClient) -> None:
     details(client, "1234")
     client.post("/v1/cards/4417/pin", json={"current_pin": "1234", "new_pin": "8765"})
 
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     written = " ".join(
         str(value) for row in support.rows(bank, "SELECT * FROM turns") for value in row.values()
@@ -1048,6 +1065,8 @@ def _armed_transfer(client: TestClient) -> str:
 
 
 def test_yes_comes_back_asking_for_the_pin(client: TestClient) -> None:
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     sid = _armed_transfer(client)
 
@@ -1089,6 +1108,8 @@ def test_asking_for_the_pin_does_not_reach_the_model(client: TestClient) -> None
 
 
 def test_the_right_pin_lets_the_payment_through(client: TestClient) -> None:
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     sid = _armed_transfer(client)
     client.post("/v1/confirm", json={"session_id": sid})
@@ -1101,6 +1122,8 @@ def test_the_right_pin_lets_the_payment_through(client: TestClient) -> None:
 
 
 def test_a_wrong_pin_moves_nothing_and_keeps_the_agreement(client: TestClient) -> None:
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     sid = _armed_transfer(client)
     client.post("/v1/confirm", json={"session_id": sid})
@@ -1114,6 +1137,8 @@ def test_a_wrong_pin_moves_nothing_and_keeps_the_agreement(client: TestClient) -
 
 
 def test_the_right_pin_still_works_after_a_wrong_one(client: TestClient) -> None:
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     sid = _armed_transfer(client)
     client.post("/v1/confirm", json={"session_id": sid})
@@ -1144,6 +1169,8 @@ def test_freezing_a_card_still_needs_no_pin(client: TestClient) -> None:
             Reply(text="Done, the card is frozen."),
         ],
     )
+    # Turn records are written after the turn, on a queue; wait for them.
+    assert client.app.state.services.audit.flush()
     bank = client.app.state.services.bank
     sid = client.post("/v1/chat", json={"text": "freeze my card"}).json()["session_id"]
 

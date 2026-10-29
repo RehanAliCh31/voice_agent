@@ -12,7 +12,9 @@ model, and stripping them would be deliberate damage.
 
 from __future__ import annotations
 
+import dataclasses
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,12 +22,15 @@ import numpy as np
 from voicebot.agent.loop import Agent, AgentResult, Conversation
 from voicebot.asr.base import ASREngine, ASRUnavailable
 from voicebot.assistant.language import typed_language
-from voicebot.llm.prompts import NOT_CAUGHT, UNAVAILABLE, in_language
+from voicebot.errors import Cancelled, InternalError
+from voicebot.messages import say
 from voicebot.pipeline.audio_io import is_silent, trim_silence
 from voicebot.pipeline.latency import LatencyBreakdown, LatencyTracker
 from voicebot.schemas import AudioBuffer, Transcript
 from voicebot.tts.base import TTSEngine
 from voicebot.utils.logging import get_logger
+from voicebot.utils.observability import report
+from voicebot.utils.resilience import checkpoint
 
 log = get_logger("pipeline.orchestrator")
 
@@ -82,17 +87,19 @@ class VoicePipeline:
                 tracker,
             )
 
+        checkpoint("speech recognition")
         try:
             with tracker.stage("asr"):
-                transcript = self.asr.transcribe(trimmed)
-        except ASRUnavailable as exc:
+                transcript = self.asr.transcribe(trimmed, language=conversation.language)
+        except ASRUnavailable:
             # Not "I didn't catch that": the customer said something and
-            # deserves to know it was the service, not them.
-            log.error("speech recognition unavailable: %s", exc)
+            # deserves to know it was the service, not them -- and that they
+            # can type instead. Reported where it failed, with its code.
             return self._say(
-                in_language(UNAVAILABLE, conversation.language),
+                say("speech_unavailable", conversation.language),
                 Transcript(text="", confidence=0.0, duration_s=audio.duration_s),
                 tracker,
+                key="speech_unavailable",
             )
 
         # Nothing was actually said. Short-circuit rather than spend a remote
@@ -137,9 +144,11 @@ class VoicePipeline:
         conversation: Conversation,
         tracker: LatencyTracker,
     ) -> TurnResult:
+        checkpoint("the model")
         with tracker.stage("agent"):
-            result = self.agent.handle(text, conversation)
+            result = self._safely(lambda: self.agent.handle(text, conversation), conversation)
 
+        checkpoint("speaking")
         with tracker.stage("tts"):
             audio = self._speak(result.text)
 
@@ -159,8 +168,11 @@ class VoicePipeline:
         transcript = Transcript(text="yes" if confirmed else "no", confidence=1.0, duration_s=0.0)
 
         with tracker.stage("agent"):
-            result = self.agent.resolve_pending(confirmed, conversation)
+            result = self._safely(
+                lambda: self.agent.resolve_pending(confirmed, conversation), conversation
+            )
 
+        checkpoint("speaking")
         with tracker.stage("tts"):
             audio = self._speak(result.text)
 
@@ -174,18 +186,55 @@ class VoicePipeline:
         self._log(turn)
         return turn
 
+    def _safely(self, work: Callable[[], AgentResult], conversation: Conversation) -> AgentResult:
+        """Run the agent; anything it did not expect ends the turn in a sentence.
+
+        Its own failures it already says well. This is for the rest -- a bug,
+        a shape nobody planned for -- which would otherwise reach the caller
+        as a 500 and silence. Cancelled goes straight up: there is no one left
+        to say anything to.
+        """
+        try:
+            return work()
+        except Cancelled:
+            raise
+        except Exception as exc:
+            log.error("the turn failed unexpectedly: %s", type(exc).__name__, exc_info=exc)
+            report(
+                InternalError(
+                    f"the turn failed: {type(exc).__name__}", component="agent", cause=exc
+                )
+            )
+            return AgentResult(text=say("internal", conversation.language), fallback="internal")
+
     def _speak(self, text: str) -> AudioBuffer:
         if not self.speak:
             return AudioBuffer(samples=SILENCE, sample_rate=16_000)
-        return self.tts.synthesize(text)
+        try:
+            return self.tts.synthesize(text)
+        except Exception as exc:
+            # An engine that raises rather than returning silence is treated
+            # as silence: the reply is on the page, and the page speaks it.
+            report(
+                InternalError(f"the voice raised {type(exc).__name__}", component="tts", cause=exc)
+            )
+            return AudioBuffer(samples=SILENCE, sample_rate=16_000)
 
     def _nothing_heard(
         self, transcript: Transcript, conversation: Conversation, tracker: LatencyTracker
     ) -> TurnResult:
         """Silence, or a transcript with nothing in it. The model is not called."""
-        return self._say(in_language(NOT_CAUGHT, conversation.language), transcript, tracker)
+        return self._say(
+            say("not_caught", conversation.language), transcript, tracker, key="not_caught"
+        )
 
-    def _say(self, sentence: str, transcript: Transcript, tracker: LatencyTracker) -> TurnResult:
+    def _say(
+        self,
+        sentence: str,
+        transcript: Transcript,
+        tracker: LatencyTracker,
+        key: str | None = None,
+    ) -> TurnResult:
         """A turn the bot answers with a sentence of its own, without the model."""
         with tracker.stage("agent"):
             pass  # named so every turn reports the same four stages
@@ -194,18 +243,50 @@ class VoicePipeline:
         return TurnResult(
             transcript=transcript,
             text="",
-            agent=AgentResult(text=sentence),
+            agent=AgentResult(text=sentence, fallback=key),
             audio=audio,
             latency=tracker.breakdown(),
         )
 
+    # --- for the conversation's own rules, around a turn ------------------------
+
+    def say(self, sentence: str, key: str | None = None, heard: str = "") -> TurnResult:
+        """A whole turn that is one of the bot's own sentences."""
+        return self._say(
+            sentence,
+            Transcript(text=heard, confidence=1.0, duration_s=0.0),
+            LatencyTracker(),
+            key=key,
+        )
+
+    def say_after(self, result: TurnResult, sentence: str) -> TurnResult:
+        """`result`, with `sentence` said after its reply."""
+        extra = self._speak(sentence)
+        audio = result.audio
+        if len(audio.samples) and len(extra.samples) and extra.sample_rate == audio.sample_rate:
+            audio = AudioBuffer(
+                samples=np.concatenate([audio.samples, extra.samples]),
+                sample_rate=audio.sample_rate,
+            )
+        agent = dataclasses.replace(result.agent, text=f"{result.agent.text} {sentence}".strip())
+        return dataclasses.replace(result, agent=agent, audio=audio)
+
+    def replace_reply(self, result: TurnResult, agent: AgentResult) -> TurnResult:
+        """`result`, answered with `agent`'s reply instead, spoken afresh."""
+        return dataclasses.replace(result, agent=agent, audio=self._speak(agent.text))
+
     def _log(self, result: TurnResult) -> None:
         slowest = result.latency.slowest()
+        # What was said is the customer's, and is logged only at DEBUG. At
+        # INFO a turn is its shape: how much was said, in which language,
+        # what was done, how long it took, and whether it ended in a fallback.
         log.info(
-            "heard=%r tools=%s guard_hit=%s total=%.0fms slowest=%s",
-            result.text,
+            "turn chars=%d tools=%s guard_hit=%s fallback=%s total=%.0fms slowest=%s",
+            len(result.text),
             [call.name for call in result.agent.tool_calls] or "none",
             result.agent.guard_hit,
+            result.agent.fallback or "-",
             result.latency.total_ms,
             f"{slowest[0]} {slowest[1]:.0f}ms" if slowest else "n/a",
         )
+        log.debug("heard=%r replied=%r", result.text, result.agent.text)

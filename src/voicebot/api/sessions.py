@@ -15,6 +15,7 @@ touching a single route.
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -39,6 +40,21 @@ class Session:
 
     conversation: Conversation
     executor: ToolExecutor
+    # One turn at a time. Two requests for one conversation -- a double
+    # click on Yes, Enter pressed in the PIN box -- would otherwise run side
+    # by side on the same history and the same pending action, and could
+    # carry out one transfer twice.
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    started: float = field(default_factory=time.monotonic)
+    # How this conversation is going: turns taken, turns in a row that ended
+    # in a fallback, the last reply, and whether its end has been announced.
+    turns: int = 0
+    failures: int = 0
+    last_reply: str = ""
+    warned: bool = False
+
+    def minutes(self) -> float:
+        return (time.monotonic() - self.started) / 60
 
 
 class SessionStore(ABC):
@@ -85,30 +101,44 @@ class InMemorySessionStore(SessionStore):
     ttl_seconds: float = 1800.0
     max_sessions: int = 1000
     _entries: dict[str, _Entry] = field(default_factory=dict)
+    # Requests are served on many threads at once, and eviction walks the
+    # whole dict: without a lock, one request adding a session while another
+    # evicts raised "dictionary changed size during iteration" -- a 500.
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def get(self, session_id: str) -> Session:
-        self._evict_expired()
-        entry = self._entries.get(session_id)
-        if entry is None:
-            session = Session(
-                conversation=Conversation(session_id=session_id),
-                executor=ToolExecutor(self.bank, session_id=session_id),
-            )
-            self._entries[session_id] = _Entry(session=session, touched=time.monotonic())
-            self._evict_overflow()
-            return session
-        entry.touched = time.monotonic()
-        return entry.session
+        with self._lock:
+            self._evict_expired()
+            entry = self._entries.get(session_id)
+            if entry is None:
+                session = Session(
+                    conversation=Conversation(session_id=session_id),
+                    executor=ToolExecutor(self.bank, session_id=session_id),
+                )
+                self._entries[session_id] = _Entry(session=session, touched=time.monotonic())
+                self._evict_overflow()
+                return session
+            entry.touched = time.monotonic()
+            return entry.session
 
     def put(self, session_id: str, session: Session) -> None:
-        self._entries[session_id] = _Entry(session=session, touched=time.monotonic())
-        self._evict_overflow()
+        """Mark the session used. One that was ended mid-turn stays ended."""
+        with self._lock:
+            entry = self._entries.get(session_id)
+            if entry is None:
+                log.debug("not keeping a session that was ended while its turn ran")
+                return
+            entry.session = session
+            entry.touched = time.monotonic()
 
     def drop(self, session_id: str) -> None:
-        self._entries.pop(session_id, None)
+        with self._lock:
+            self._entries.pop(session_id, None)
 
     def __len__(self) -> int:
-        return len(self._entries)
+        with self._lock:
+            cutoff = time.monotonic() - self.ttl_seconds
+            return sum(1 for entry in self._entries.values() if entry.touched >= cutoff)
 
     # --- eviction ------------------------------------------------------------
 

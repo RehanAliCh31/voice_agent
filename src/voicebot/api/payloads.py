@@ -10,14 +10,19 @@ from __future__ import annotations
 
 import base64
 import secrets
+from collections.abc import Callable
 from datetime import date
-from typing import Any
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
 
 from voicebot.bank.base import PLAN_CATEGORIES, Bank, Card, format_money
+from voicebot.errors import DatabaseError, current_call_id
 from voicebot.pipeline.audio_io import encode_wav
 from voicebot.pipeline.orchestrator import TurnResult
+from voicebot.utils.observability import report
+
+T = TypeVar("T")
 
 
 class TranscriptPayload(BaseModel):
@@ -70,8 +75,10 @@ class TurnPayload(BaseModel):
     # the figures the bot just spoke always come from the same answer. Fetched
     # separately they could disagree for a moment, which in a banking
     # interface is worse than being slow.
-    accounts: list[AccountPayload] = Field(default_factory=list)
-    bills: list[BillPayload] = Field(default_factory=list)
+    # None when the ledger could not be read just now: the page then keeps
+    # what it is showing, rather than clearing it as if the accounts were gone.
+    accounts: list[AccountPayload] | None = Field(default_factory=list)
+    bills: list[BillPayload] | None = Field(default_factory=list)
     # The reference of a case this turn opened, or null. The page shows the
     # conversation has left the bot without having to read the reply for it.
     handed_off: str | None = None
@@ -86,6 +93,10 @@ class TurnPayload(BaseModel):
     audio_b64: str | None = None
     speak_client_side: bool = False
     audio_sample_rate: int = 16_000
+    # When the reply is one of the bot's own fallback sentences, which one --
+    # and the call the turn belongs to, for anyone reading the logs after.
+    fallback: str | None = None
+    call_id: str | None = None
 
 
 class ActionRequest(BaseModel):
@@ -161,6 +172,9 @@ class ReadyPayload(BaseModel):
     tts: str
     device: str
     sessions: int
+    # What each dependency says: the database, every provider's circuit, the
+    # audit queue, whether the service is shutting down.
+    checks: dict[str, str] = Field(default_factory=dict)
 
 
 class StatementRowPayload(BaseModel):
@@ -518,6 +532,10 @@ def turn_payload(
     audio_b64 = None
     if len(result.audio.samples):
         audio_b64 = base64.b64encode(encode_wav(result.audio)).decode("ascii")
+    elif result.agent.text and not speaks_client_side:
+        # The voice failed. The page has one of its own, and a reply read by
+        # the browser beats a reply nobody hears.
+        speaks_client_side = True
 
     # The token gates money. There is no reason to publish it, even
     # same-origin to the session that owns it.
@@ -542,8 +560,8 @@ def turn_payload(
         tool_calls=calls,
         guard_hit=result.agent.guard_hit,
         awaiting_confirmation=awaiting_confirmation,
-        accounts=_accounts(bank),
-        bills=_bills(bank),
+        accounts=_read(_accounts, bank),
+        bills=_read(_bills, bank),
         handed_off=result.agent.handed_off,
         dispute_filed=result.agent.dispute_filed,
         pin_request=result.agent.pin_request,
@@ -551,4 +569,20 @@ def turn_payload(
         audio_b64=audio_b64,
         speak_client_side=speaks_client_side,
         audio_sample_rate=result.audio.sample_rate,
+        fallback=result.agent.fallback,
+        call_id=current_call_id() or session_id,
     )
+
+
+def _read(read: Callable[[Bank | None], list[T]], bank: Bank | None) -> list[T] | None:
+    """The ledger for the page, or None when the bank cannot be read just now.
+
+    The turn has already happened by the time this runs. A ledger that fails
+    to load must not turn a finished turn -- money moved, perhaps -- into an
+    error the customer reads as "it didn't work, try again".
+    """
+    try:
+        return read(bank)
+    except Exception as exc:  # the turn is done; the page keeps its last figures
+        report(DatabaseError(f"the ledger could not be read: {type(exc).__name__}", cause=exc))
+        return None

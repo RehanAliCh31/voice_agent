@@ -8,15 +8,20 @@ reports about its own work comes back with the turn itself.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextvars
 import json
 import secrets
+from collections.abc import Callable
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
 
 from voicebot import __version__
+from voicebot.api.audit import TurnRecord
 from voicebot.api.deps import Services, get_services
 from voicebot.api.payloads import (
     ActionPayload,
@@ -42,15 +47,19 @@ from voicebot.api.payloads import (
     ledger_payload,
     monthly_payload,
     statement_payload,
-    turn_payload,
 )
-from voicebot.api.sessions import SessionStore
+from voicebot.api.sessions import Session, SessionStore
+from voicebot.asr.base import ASRUnavailable
 from voicebot.bank.base import PIN_LENGTH, BankError, Card
+from voicebot.errors import Cancelled, call_context
 from voicebot.llm.base import ToolCall
+from voicebot.messages import say
 from voicebot.pipeline.audio_io import decode_wav, encode_wav
-from voicebot.pipeline.orchestrator import TurnResult
+from voicebot.pipeline.orchestrator import TurnResult, VoicePipeline
 from voicebot.schemas import AudioBuffer
 from voicebot.utils.logging import get_logger
+from voicebot.utils.observability import count, metrics_lines
+from voicebot.utils.resilience import CancelToken, cancel_context
 
 log = get_logger("api.routes")
 
@@ -71,24 +80,58 @@ def _read_audio(data: bytes) -> AudioBuffer:
     try:
         return decode_wav(data)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Could not read the audio: {exc}") from exc
+        # The decoder's own words ("file does not start with RIFF id") are
+        # for the log, not for the page.
+        log.warning("an upload could not be decoded: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=400, detail="That recording could not be read. Please try again."
+        ) from exc
 
 
 def _session_id(store: SessionStore, given: str | None) -> str:
     return given or store.new_id()
 
 
-def _publish(services: Services, session_id: str, result: TurnResult) -> TurnPayload:
-    """Count it, log it, and convert it into the published shape."""
-    session = services.sessions.get(session_id)
-    services.record_turn(session_id, session.conversation.turn_index, result)
-    return turn_payload(
-        session_id,
-        result,
-        services.speaks_client_side,
-        awaiting_confirmation=session.executor.pending is not None,
-        bank=services.bank,
-    )
+# How often a running turn looks to see whether its caller is still there.
+DISCONNECT_POLL_S = 0.25
+
+
+async def _turn(
+    request: Request,
+    services: Services,
+    session_id: str,
+    work: Callable[[Session, VoicePipeline], TurnResult],
+) -> TurnPayload | Response:
+    """Run one turn on a worker thread, and stop it if the caller leaves.
+
+    A turn is seconds of blocking work -- recognisers, the model, the voice.
+    Run on the event loop, as converse once was, it froze the whole server
+    for every turn: every other caller, and /health, waited behind it.
+
+    While it runs, the request is watched. A caller who closes the page or
+    starts over mid-turn sets the turn's cancel token, and the turn stops at
+    its next safe point -- before the model, between rounds, before the
+    voice -- rather than paying for work nobody will hear.
+    """
+    token = CancelToken()
+
+    def run() -> TurnPayload:
+        with call_context(session_id), cancel_context(token):
+            return services.take_turn(session_id, work)
+
+    job = asyncio.ensure_future(run_in_threadpool(contextvars.copy_context().run, run))
+    while not job.done():
+        done, _ = await asyncio.wait({job}, timeout=DISCONNECT_POLL_S)
+        if not done and await request.is_disconnected():
+            token.cancel("the caller left")
+    try:
+        return await job
+    except Cancelled as exc:
+        with call_context(session_id):
+            log.info("turn abandoned: %s", exc)
+        count("turns_abandoned")
+        # Nobody is reading it; the status says what happened, for the logs.
+        return Response(status_code=499)
 
 
 # --- operational -------------------------------------------------------------
@@ -101,16 +144,25 @@ def health() -> HealthPayload:
 
 
 @router.get("/ready", response_model=ReadyPayload, tags=["ops"])
-def ready(services: Services = Depends(get_services)) -> ReadyPayload:
-    """Readiness. Names the engines actually loaded, not the ones configured."""
+def ready(response: Response, services: Services = Depends(get_services)) -> ReadyPayload:
+    """Readiness: whether a turn could be served now, and what each dependency says.
+
+    503 while the bank cannot be reached or the service is shutting down. A
+    provider whose circuit is open is named in `checks` but leaves the
+    service ready: it still answers every turn, only less well.
+    """
+    is_ready, checks = services.readiness()
+    if not is_ready:
+        response.status_code = 503
     described = services.describe()
     return ReadyPayload(
-        ready=True,
+        ready=is_ready,
         asr=described["asr"],
         llm=described["llm"],
         tts=described["tts"],
         device=services.device,
         sessions=len(services.sessions),
+        checks=checks,
     )
 
 
@@ -129,16 +181,33 @@ def metrics(services: Services = Depends(get_services)) -> str:
         "# HELP voicebot_tool_calls_total Tool invocations by name.",
         "# TYPE voicebot_tool_calls_total counter",
     ]
-    for tool, count in sorted(services.tool_calls.items()):
-        lines.append(f'voicebot_tool_calls_total{{tool="{tool}"}} {count}')
+    for tool, calls in sorted(services.tool_calls.items()):
+        lines.append(f'voicebot_tool_calls_total{{tool="{tool}"}} {calls}')
+    try:
+        guard_hits = str(services.bank.guard_hit_count())
+    except Exception:  # the bank is down: the metric is unknown, not the endpoint
+        guard_hits = "NaN"
     lines += [
         "# HELP voicebot_guard_hits_total Replies suppressed for stating an unsourced figure.",
         "# TYPE voicebot_guard_hits_total counter",
-        f"voicebot_guard_hits_total {services.bank.guard_hit_count()}",
+        f"voicebot_guard_hits_total {guard_hits}",
         "# HELP voicebot_sessions Active conversations.",
         "# TYPE voicebot_sessions gauge",
         f"voicebot_sessions {len(services.sessions)}",
+        "# HELP voicebot_turns_in_flight Turns being answered right now.",
+        "# TYPE voicebot_turns_in_flight gauge",
+        f"voicebot_turns_in_flight {services.in_flight}",
     ]
+    if services.audit is not None:
+        lines += [
+            "# HELP voicebot_audit_queue Turn records waiting to be written.",
+            "# TYPE voicebot_audit_queue gauge",
+            f"voicebot_audit_queue {services.audit.pending}",
+            "# HELP voicebot_audit_dead_letters_total Turn records kept in the dead-letter file.",
+            "# TYPE voicebot_audit_dead_letters_total counter",
+            f"voicebot_audit_dead_letters_total {services.audit.dead}",
+        ]
+    lines += metrics_lines()
     return "\n".join(lines) + "\n"
 
 
@@ -152,7 +221,13 @@ async def transcribe(
 ) -> TranscriptPayload:
     """Audio to text. The ASR stage on its own."""
     buffer = _read_audio(await audio.read())
-    transcript = services.asr.transcribe(buffer)
+    try:
+        # A worker thread: recognition blocks, and the event loop is everyone's.
+        transcript = await run_in_threadpool(services.asr.transcribe, buffer)
+    except ASRUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail="Speech recognition is unavailable just now."
+        ) from exc
     return TranscriptPayload(
         text=transcript.text,
         confidence=transcript.confidence,
@@ -243,15 +318,17 @@ def action(request: ActionRequest, services: Services = Depends(get_services)) -
 
     # Written down whether it was armed or refused, because what the customer
     # asked for is as much a part of the record as what happened.
-    services.bank.log_turn(
-        session_id=sid,
-        turn_index=session.conversation.turn_index,
-        user_text=request.reason.strip(),
-        bot_text=summary or (error or ""),
-        tool_calls=json.dumps([{"name": request.tool, "arguments": request.arguments}]),
-        guard_hit=False,
-        suppressed=None,
-        latency_ms=0.0,
+    services.record(
+        TurnRecord(
+            session_id=sid,
+            turn_index=session.conversation.turn_index,
+            user_text=request.reason.strip(),
+            bot_text=summary or (error or ""),
+            tool_calls=json.dumps([{"name": request.tool, "arguments": request.arguments}]),
+            guard_hit=False,
+            suppressed=None,
+            latency_ms=0.0,
+        )
     )
     if not armed:
         log.info("screen action refused: %s", error)
@@ -362,38 +439,56 @@ def statement(
 
 @router.post("/v1/converse", response_model=TurnPayload, tags=["conversation"])
 async def converse(
+    request: Request,
     audio: UploadFile = File(..., description="16-bit PCM WAV"),
     session_id: str | None = Form(default=None),
     services: Services = Depends(get_services),
-) -> TurnPayload:
+) -> TurnPayload | Response:
     """Audio in, audio out. The whole pipeline, with conversation state."""
-    buffer = _read_audio(await audio.read())
+    data = await audio.read()
     sid = _session_id(services.sessions, session_id)
-    session = services.sessions.get(sid)
+    try:
+        buffer = _read_audio(data)
+    except HTTPException as refused:
+        # A recording that cannot be used is still a turn: the customer spoke,
+        # and hears a sentence saying so, not an error box.
+        detail = refused.detail
 
-    result = services.pipeline(session).converse(buffer, session.conversation)
+        def unusable(session: Session, pipeline: VoicePipeline) -> TurnResult:
+            log.info("answering an unusable recording: %s", detail)
+            return pipeline.say(say("bad_audio", session.conversation.language), key="bad_audio")
 
-    services.sessions.put(sid, session)
-    return _publish(services, sid, result)
+        return await _turn(request, services, sid, unusable)
+
+    return await _turn(
+        request,
+        services,
+        sid,
+        lambda session, pipeline: pipeline.converse(buffer, session.conversation),
+    )
 
 
 @router.post("/v1/chat", response_model=TurnPayload, tags=["conversation"])
-def chat(request: TextRequest, services: Services = Depends(get_services)) -> TurnPayload:
+async def chat(
+    http: Request, request: TextRequest, services: Services = Depends(get_services)
+) -> TurnPayload | Response:
     """Type instead of speaking, same turn otherwise."""
     sid = _session_id(services.sessions, request.session_id)
-    session = services.sessions.get(sid)
-
-    result = services.pipeline(session).respond_to_text(request.text, session.conversation)
-
-    services.sessions.put(sid, session)
-    return _publish(services, sid, result)
+    return await _turn(
+        http,
+        services,
+        sid,
+        lambda session, pipeline: pipeline.respond_to_text(request.text, session.conversation),
+    )
 
 
 # --- confirmation ------------------------------------------------------------
 
 
 @router.post("/v1/confirm", response_model=TurnPayload, tags=["conversation"])
-def confirm(request: ConfirmRequest, services: Services = Depends(get_services)) -> TurnPayload:
+async def confirm(
+    http: Request, request: ConfirmRequest, services: Services = Depends(get_services)
+) -> TurnPayload | Response:
     """Agree to the pending action, and approve it if it moves money.
 
     This acts on the executor directly, without asking the model whether it
@@ -405,40 +500,42 @@ def confirm(request: ConfirmRequest, services: Services = Depends(get_services))
     carries it, and it is checked here against the bank. A wrong PIN is a 403
     and the action stays pending, so the customer can try again without
     having to agree to it a second time.
+
+    The PIN is checked inside the turn, under the conversation's lock, so the
+    action it approves cannot be swapped for another between the check and
+    the approval -- and a second press of Yes waits for the first.
     """
-    if request.pin is not None:
-        executor = services.sessions.get(
-            _session_id(services.sessions, request.session_id)
-        ).executor
-        last4 = executor.pin_card()
-        if last4 is None:
-            # Nothing pending, or pending but not something that moves money.
-            # Either way there is no card to check this against, and a PIN
-            # with nothing to approve is not approval of anything.
-            raise HTTPException(status_code=409, detail="Nothing is waiting on a PIN.")
+    pin = request.pin
 
-        # The bank does the checking: it counts a wrong one and locks the card
-        # after too many. Only the fact that it was right travels on.
-        _checked(services, last4, request.pin)
-        executor.pin_accepted()
+    def agree(session: Session, pipeline: VoicePipeline) -> TurnResult:
+        if pin is not None:
+            last4 = session.executor.pin_card()
+            if last4 is None:
+                # Nothing pending, or pending but not something that moves
+                # money. Either way there is no card to check this against,
+                # and a PIN with nothing to approve is not approval of anything.
+                raise HTTPException(status_code=409, detail="Nothing is waiting on a PIN.")
 
-    return _resolve(request, services, confirmed=True)
+            # The bank does the checking: it counts a wrong one and locks the
+            # card after too many. Only the fact that it was right travels on.
+            _checked(services, last4, pin)
+            session.executor.pin_accepted()
+        return pipeline.resolve_pending(True, session.conversation)
+
+    return await _turn(http, services, _session_id(services.sessions, request.session_id), agree)
 
 
 @router.post("/v1/cancel", response_model=TurnPayload, tags=["conversation"])
-def cancel(request: SessionRequest, services: Services = Depends(get_services)) -> TurnPayload:
+async def cancel(
+    http: Request, request: SessionRequest, services: Services = Depends(get_services)
+) -> TurnPayload | Response:
     """Decline the pending action."""
-    return _resolve(request, services, confirmed=False)
-
-
-def _resolve(request: SessionRequest, services: Services, confirmed: bool) -> TurnPayload:
-    sid = _session_id(services.sessions, request.session_id)
-    session = services.sessions.get(sid)
-
-    result = services.pipeline(session).resolve_pending(confirmed, session.conversation)
-
-    services.sessions.put(sid, session)
-    return _publish(services, sid, result)
+    return await _turn(
+        http,
+        services,
+        _session_id(services.sessions, request.session_id),
+        lambda session, pipeline: pipeline.resolve_pending(False, session.conversation),
+    )
 
 
 # --- housekeeping ------------------------------------------------------------

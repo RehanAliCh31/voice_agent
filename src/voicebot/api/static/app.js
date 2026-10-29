@@ -38,8 +38,14 @@ import { onBargeIn, onMicClick } from "./mic.js";
 // the conversation stay ignorant of them: a new screen is a line in this
 // list rather than an edit inside handleTurn.
 onTurn(function (turn) {
-  renderAccounts(turn.accounts);
-  renderBills(turn.bills);
+  // null means the ledger could not be read with this turn: what is on
+  // screen stays, rather than being cleared as if the accounts were gone.
+  if (turn.accounts != null) {
+    renderAccounts(turn.accounts);
+  }
+  if (turn.bills != null) {
+    renderBills(turn.bills);
+  }
   if (state.view === "monthly") {
     // A turn can pay one of them.
     loadMonthly();

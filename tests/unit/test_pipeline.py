@@ -16,7 +16,8 @@ from voicebot.agent.loop import Agent, Conversation
 from voicebot.asr.base import ASREngine, ASRUnavailable, FakeASREngine
 from voicebot.bank.base import Bank
 from voicebot.llm.base import FakeLLMClient, Reply, ToolCall
-from voicebot.llm.prompts import LANGUAGE_NOTE, NOT_CAUGHT, UNAVAILABLE, in_language
+from voicebot.llm.prompts import LANGUAGE_NOTE, NOT_CAUGHT, in_language
+from voicebot.messages import say
 from voicebot.pipeline.orchestrator import VoicePipeline
 from voicebot.schemas import AudioBuffer, Transcript
 from voicebot.tts.base import FakeTTSEngine
@@ -170,14 +171,14 @@ class _HeardIn(ASREngine):
         self.text = text
         self.language = language
 
-    def transcribe(self, audio: AudioBuffer) -> Transcript:
+    def transcribe(self, audio: AudioBuffer, language: str | None = None) -> Transcript:
         return Transcript(
             text=self.text, confidence=1.0, duration_s=audio.duration_s, language=self.language
         )
 
 
 class _Down(ASREngine):
-    def transcribe(self, audio: AudioBuffer) -> Transcript:
+    def transcribe(self, audio: AudioBuffer, language: str | None = None) -> Transcript:
         raise ASRUnavailable("both recognisers are down")
 
 
@@ -235,8 +236,10 @@ def test_a_recogniser_outage_is_said_and_not_blamed_on_the_customer(bank: Bank) 
 
     result = pipeline.converse(_speech(), in_urdu())
 
-    # Not "I didn't catch that": they spoke, and the service failed them.
-    assert result.agent.text == in_language(UNAVAILABLE, "ur")
+    # Not "I didn't catch that": they spoke, and the service failed them --
+    # and they are told they can type instead.
+    assert result.agent.text == say("speech_unavailable", "ur")
+    assert result.agent.fallback == "speech_unavailable"
     assert client.calls == []
 
 
