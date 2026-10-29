@@ -22,15 +22,20 @@ from voicebot.utils.logging import get_logger
 
 log = get_logger("llm.openai")
 
-_THINKING = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
+# Everything up to the last closing tag, whether or not an opening tag is
+# there to match it.
+_THINKING = re.compile(r"^.*</think>\s*", re.DOTALL)
 
 
 def strip_thinking(text: str) -> str:
-    """Remove a leading <think>...</think> block.
+    """Remove the model's reasoning, keeping only the answer after it.
 
-    The observed server returns `reasoning: null` and clean content, so this
-    should never fire. It is here because the cost of being wrong is the bot
-    reading its own reasoning aloud, and the check is one regex.
+    The server usually returns `reasoning: null` and clean content. Now and
+    then, after a tool call, qwen3.6-35b-a3b-fp8 sends the answer, a closing
+    </think>, and the answer again: the template opens the block itself, so
+    no opening tag ever arrives, and a pattern that waited for one let the
+    whole thing be read aloud. The cost of being wrong here is the bot
+    speaking its own reasoning, and the check is one regex.
     """
     return _THINKING.sub("", text).strip() if text else text
 

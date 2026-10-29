@@ -87,6 +87,15 @@ def test_a_reply_with_no_choices_is_empty_rather_than_an_error() -> None:
     [
         ("<think>hmm</think>Your balance is $5.", "Your balance is $5."),
         ("<think>\nmulti\nline\n</think>  Hello.", "Hello."),
+        # What qwen3.6-35b-a3b-fp8 sends after a tool call, now and then: the
+        # server's template opens the block itself, so only the closing tag
+        # arrives, and without this the answer was read aloud twice with the
+        # tag between.
+        (
+            "Enter your PIN to approve the transfer.\n</think>\n\n"
+            "Enter your PIN to approve the transfer.",
+            "Enter your PIN to approve the transfer.",
+        ),
         ("plain text", "plain text"),
         ("", ""),
     ],
