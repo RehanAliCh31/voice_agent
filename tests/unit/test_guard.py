@@ -17,6 +17,7 @@ from decimal import Decimal
 import pytest
 
 from voicebot.agent.guard import fallback_sentence, guard, in_digits, money_in_text
+from voicebot.llm.prompts import UNVERIFIED, in_language
 
 FALLBACK = "I have that, but let me read it back from your account."
 SAVINGS = 1_902_000  # $19,020.00
@@ -432,3 +433,70 @@ def test_a_single_word_is_never_read_as_an_amount() -> None:
 def test_the_currency_word_form_still_needs_no_sourcing() -> None:
     """It says "dollars". There is nothing to disambiguate."""
     assert in_digits("You paid ten dollars ninety-nine.") == "You paid $10.99."
+
+
+# --- in Urdu -----------------------------------------------------------------
+#
+# The guard reads every reply, in either language. An Urdu reply writes its
+# figures with the same dollar sign and is checked the same way -- and an Urdu
+# currency word the guard did not know would carry an invented figure past it.
+
+
+def test_a_sourced_figure_passes_in_an_urdu_sentence() -> None:
+    sentence = "آپ کے چیکنگ اکاؤنٹ میں $2,483.50 ہیں۔"
+    assert guard(sentence, [], FALLBACK, (CHECKING,)) == (sentence, False)
+
+
+def test_an_invented_figure_is_caught_in_an_urdu_sentence() -> None:
+    text, hit = guard("آپ کے چیکنگ اکاؤنٹ میں $9,999.99 ہیں۔", [], FALLBACK, (CHECKING,))
+    assert (text, hit) == (FALLBACK, True)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("آپ کے اکاؤنٹ میں 2483 ڈالر ہیں۔", [Decimal("2483")]),
+        ("دو ہزار چار سو تراسی ڈالر اور پچاس سینٹ", [Decimal("2483.50")]),
+        ("انیس ہزار بیس ڈالر", [Decimal("19020")]),
+        ("پچاس سینٹ", [Decimal("0.50")]),
+    ],
+)
+def test_urdu_amounts_are_read(text: str, expected: list[Decimal]) -> None:
+    assert money_in_text(text) == expected
+
+
+def test_a_correct_figure_spelled_in_urdu_passes() -> None:
+    sentence = "آپ کے پاس دو ہزار چار سو تراسی ڈالر اور پچاس سینٹ ہیں۔"
+    assert guard(sentence, [], FALLBACK, (CHECKING,)) == (sentence, False)
+
+
+def test_an_invented_figure_spelled_in_urdu_is_caught() -> None:
+    _, hit = guard("آپ کے پاس پانچ سو ڈالر ہیں۔", [], FALLBACK, (CHECKING,))
+    assert hit is True
+
+
+def test_rupees_are_never_said() -> None:
+    # The bank holds dollars alone, so an amount in rupees was converted.
+    text, hit = guard("یہ تقریباً 2483 روپے بنتے ہیں۔", [], FALLBACK, (CHECKING,))
+    assert (text, hit) == (FALLBACK, True)
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "یہ سوال بہت اچھا ہے۔",  # سوال is a question, not سو -- a hundred
+        "آپ کے تین کارڈ ہیں۔",  # a count, with no currency
+        "پانچ دن میں پہنچ جائے گا۔",
+    ],
+)
+def test_urdu_without_money_has_no_figures(sentence: str) -> None:
+    assert money_in_text(sentence) == []
+
+
+def test_the_fallback_is_said_in_urdu_with_its_figures_in_digits() -> None:
+    assert fallback_sentence((CHECKING,), "ur") == "میرے پاس موجود رقم $2,483.50 ہے۔"
+    assert (
+        fallback_sentence((SAVINGS, CHECKING), "ur")
+        == "میرے پاس موجود رقمیں $2,483.50، $19,020.00 ہیں۔"
+    )
+    assert fallback_sentence((), "ur") == in_language(UNVERIFIED, "ur")

@@ -37,6 +37,7 @@ from voicebot.bank.base import (
     unknown_purpose_message,
 )
 from voicebot.llm.base import ToolCall
+from voicebot.llm.prompts import PIN_NEEDED
 from voicebot.llm.tools import (
     CONFIRMING,
     DEFAULT_TRANSACTIONS,
@@ -328,7 +329,7 @@ class ToolExecutor:
                 "last4": last4,
                 "purpose": "payment",
                 "summary": pending.summary,
-                "detail": "Enter your PIN to approve this.",
+                "detail": PIN_NEEDED,
             }
         )
 

@@ -31,14 +31,21 @@ from collections.abc import Iterable, Sequence
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from voicebot.assistant.text_prep import URDU_NUMBER_WORDS, urdu_number
+from voicebot.llm.prompts import UNVERIFIED, in_language
 from voicebot.utils.logging import get_logger
 
 log = get_logger("agent.guard")
 
 # The one currency this bank holds. Anything else was converted, which the
-# prompt forbids and no tool could have produced.
-_USD_WORDS = r"dollars?|usd|bucks?|cents?"
-_OTHER_CURRENCY = r"pounds?|sterling|gbp|euros?|eur|rupees?|pkr|yen|jpy"
+# prompt forbids and no tool could have produced. Urdu's words are here too
+# ("ڈالر", "سینٹ"; "روپے" for the rupee), because the guard reads every reply,
+# in either language -- an Urdu currency word it did not know would carry an
+# invented figure straight past it.
+_USD_WORDS = r"dollars?|usd|bucks?|cents?|ڈالرز?|سینٹس?"
+_OTHER_CURRENCY = (
+    r"pounds?|sterling|gbp|euros?|eur|rupees?|pkr|yen|jpy|روپے|روپیہ|روپیے|روپئے|پاؤنڈ|یورو"
+)
 
 # Spoken replies spell amounts out, so they have to be read rather than
 # refused. Written here rather than pulled from a library: the vocabulary a
@@ -120,6 +127,20 @@ _FOREIGN = re.compile(
 )
 
 
+# An amount spelled out in Urdu next to its currency word: "دو ہزار چار سو
+# تراسی ڈالر", with its cents after "اور" if it has any. The prompt asks for
+# figures in digits in Urdu as well, so this is the guard noticing when the
+# model did not -- the figure is read and checked like any other.
+_UR_WORD = (
+    r"(?<!\S)(?:"
+    + "|".join(sorted(map(re.escape, URDU_NUMBER_WORDS), key=len, reverse=True))
+    + r")(?!\S)"
+)
+_UR_SPELLED = re.compile(
+    rf"(?P<whole>{_UR_WORD}(?:\s+{_UR_WORD})*)\s+(?P<unit>ڈالرز?|سینٹس?)(?!\S)"
+    rf"(?:\s+اور\s+(?P<cents>{_UR_WORD}(?:\s+{_UR_WORD})*)\s+سینٹس?(?!\S))?"
+)
+
 # Two or more number words in a row, with no currency word to mark them:
 # "seven sixty", "twenty three forty". One word alone is deliberately not a
 # run -- "twenty" is a date or a count far more often than it is $20.00, and
@@ -183,7 +204,21 @@ def money_in_text(text: str) -> list[Decimal]:
         parsed = _spelled_amount(match)
         if parsed is not None:
             found.append(parsed[0])
+    for match in _UR_SPELLED.finditer(text or ""):
+        value = _urdu_amount(match)
+        if value is not None:
+            found.append(value)
     return found
+
+
+def _urdu_amount(match: re.Match[str]) -> Decimal | None:
+    whole = urdu_number(match.group("whole"))
+    if whole is None:
+        return None
+    if match.group("unit").startswith("سینٹ"):
+        return Decimal(whole) / 100
+    cents = urdu_number(match.group("cents")) if match.group("cents") else 0
+    return None if cents is None else Decimal(whole) + Decimal(cents) / 100
 
 
 def _spelled_amount(match: re.Match[str]) -> tuple[Decimal, str] | None:
@@ -300,20 +335,25 @@ def allowed_values(sourced_cents: Iterable[int]) -> set[Decimal]:
     return {Decimal(cents) / 100 for cents in sourced_cents}
 
 
-def fallback_sentence(sourced_cents: Sequence[int]) -> str:
+def fallback_sentence(sourced_cents: Sequence[int], language: str = "en") -> str:
     """What to say when the model's own sentence is rejected.
 
     Assembled from values the bank returned, never generated, and never from
     anything the model supplied. This is the one sentence that has to be
-    trustworthy by construction.
+    trustworthy by construction -- in the customer's language, with the
+    figures in digits either way.
     """
     amounts = sorted(allowed_values(sourced_cents))
     if not amounts:
-        return "Let me check that properly — could you ask me again?"
-    if len(amounts) == 1:
-        return f"The figure I have is ${amounts[0]:,.2f}."
-    readable = ", ".join(f"${amount:,.2f}" for amount in amounts)
-    return f"The figures I have are {readable}."
+        return in_language(UNVERIFIED, language)
+    figures = [f"${amount:,.2f}" for amount in amounts]
+    if language == "ur":
+        if len(figures) == 1:
+            return f"میرے پاس موجود رقم {figures[0]} ہے۔"
+        return f"میرے پاس موجود رقمیں {'، '.join(figures)} ہیں۔"
+    if len(figures) == 1:
+        return f"The figure I have is {figures[0]}."
+    return f"The figures I have are {', '.join(figures)}."
 
 
 def guard(

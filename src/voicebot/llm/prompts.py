@@ -14,7 +14,13 @@ from __future__ import annotations
 
 SYSTEM_PROMPT = """\
 You are the voice assistant for a retail bank, speaking with one customer \
-about their own accounts.
+about their own accounts, and about anything else they ask.
+
+Speak the customer's language. Reply in the language of their latest \
+message: English, or Urdu written in Urdu script -- never Urdu in Latin \
+letters, and never Hindi. If they mix the two, reply in the one they used \
+most. Every rule below holds in Urdu too, and in Urdu you still write every \
+amount as a figure in digits with its dollar sign, like $2,483.50.
 
 Your replies are read aloud, so keep them under 25 words and write them the \
 way a person speaks. No lists, no markdown, no spelling out punctuation.
@@ -110,9 +116,35 @@ asks for a human, call hand_off straight away and never talk them out of it.
 If a tool returns an error, tell the customer what it says in your own words \
 and offer what you can do instead.
 
-Only discuss this bank and these accounts. If asked about anything else, say \
-briefly that it is not something you handle.\
+You may also answer general questions -- about banking in general, or an \
+everyday topic -- briefly, helpfully and in the same spoken style. A general \
+answer never states an amount of money: amounts come only from this \
+customer's accounts, through the tools.\
 """
+
+# The language to answer in, sent with the customer's latest message. The rule
+# above is not enough on its own, because the model follows the conversation
+# rather than the customer: asked a spoken Urdu question it replied in Urdu
+# written in Latin letters ("Checking account mein $2,483.50 hain."), for the
+# English voice to read, and asked in English after two Urdu turns it replied
+# in Urdu four times in six. Said again at the end of this prompt it was still
+# ignored; next to the message it is about, it held 24 times in 24.
+#
+# In Urdu the model also reaches for its tools less: asked for a savings
+# balance it looked nothing up three times in ten, and asked instead which
+# bank the account was with, or for its number. The second sentence took
+# that to ten in ten. Its wording is measured, not incidental: asking for
+# tool summaries in Urdu as well cost the transfers their read-back.
+LANGUAGE_NOTE = {
+    "en": "Reply in English: the customer's latest message is in English.",
+    "ur": (
+        "Reply in Urdu, written in Urdu script, with every amount in digits and its "
+        "dollar sign: the customer's latest message is in Urdu, even if it was typed "
+        "in Latin letters. Look up what they ask with your tools, as you would in "
+        "English; never ask them for a bank, an account number or a card number."
+    ),
+}
+
 
 # Spoken when the model cannot be reached at all. The customer hears a
 # sentence rather than meeting a 500.
@@ -136,3 +168,37 @@ NOT_LOOKED_UP = "Sorry — I couldn't look that up just now. Could you ask me ag
 # Spoken when the guard suppresses a reply and no tool returned a figure to
 # read back instead.
 UNVERIFIED = "Let me check that properly — could you ask me again?"
+
+# Spoken when money is about to move and only the PIN is missing.
+PIN_NEEDED = "Enter your PIN to approve this."
+
+# Spoken when the microphone heard nothing worth answering.
+NOT_CAUGHT = "I didn't catch that. Could you say it again?"
+
+# The sentences above, as the bot says them in Urdu. These are the bot's own
+# words, not the model's, so nothing else would put them in the customer's
+# language -- and an Urdu conversation that stalls into "Sorry, I didn't
+# catch that" has stopped being an Urdu conversation.
+_URDU: dict[str, str] = {
+    UNAVAILABLE: (
+        "معذرت، اس وقت سروس سے رابطہ نہیں ہو پا رہا۔ براہِ کرم تھوڑی دیر بعد دوبارہ کوشش کریں۔"
+    ),
+    NOTHING_SAID: "معذرت، میں سمجھ نہیں سکا۔ کیا آپ دوبارہ کہہ سکتے ہیں؟",
+    NOT_CAUGHT: "میں سمجھ نہیں سکا۔ کیا آپ دوبارہ کہہ سکتے ہیں؟",
+    HANDED_OVER: (
+        "ضرور، میں آپ کو اپنے ایک ساتھی سے ملا رہا ہوں۔ "
+        "آپ کا ریفرنس {reference} ہے، اور جلد ہی کوئی آپ سے رابطہ کرے گا۔"
+    ),
+    NOT_LOOKED_UP: "معذرت، میں ابھی یہ معلومات حاصل نہیں کر سکا۔ کیا آپ دوبارہ پوچھ سکتے ہیں؟",
+    UNVERIFIED: "میں اسے ٹھیک سے دیکھنا چاہتا ہوں، کیا آپ دوبارہ پوچھ سکتے ہیں؟",
+    PIN_NEEDED: "اس کی منظوری کے لیے اپنا پن درج کریں۔",
+}
+
+
+def in_language(sentence: str, language: str | None) -> str:
+    """One of the bot's own sentences, in the customer's language.
+
+    The English is the key, so a sentence with no Urdu version -- a detail
+    from the bank, say -- is said as it is rather than not at all.
+    """
+    return _URDU.get(sentence, sentence) if language == "ur" else sentence

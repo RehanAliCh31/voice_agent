@@ -12,10 +12,19 @@ from typing import Any
 import pytest
 
 from voicebot.agent.executor import ToolExecutor
-from voicebot.agent.loop import Agent, Conversation
+from voicebot.agent.loop import Agent, Conversation, announces_action, asked_for_a_person
+from voicebot.assistant.language import spoken_language
 from voicebot.bank.sqlite_bank import SqliteBank
 from voicebot.llm.base import FakeLLMClient, LLMClient, LLMUnavailable, Reply, ToolCall
-from voicebot.llm.prompts import SYSTEM_PROMPT, UNAVAILABLE, UNVERIFIED
+from voicebot.llm.prompts import (
+    HANDED_OVER,
+    LANGUAGE_NOTE,
+    PIN_NEEDED,
+    SYSTEM_PROMPT,
+    UNAVAILABLE,
+    UNVERIFIED,
+    in_language,
+)
 from voicebot.llm.tools import TOOL_SCHEMAS
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
@@ -1078,3 +1087,171 @@ def test_a_handoff_by_rule_drops_an_armed_transfer(
 
     assert executor.pending is None
     assert bank.balance("checking") == 248_350
+
+
+# --- in Urdu -----------------------------------------------------------------
+#
+# The bot follows the customer into Urdu. The model is reminded of it on every
+# Urdu turn, and what the bot says without the model -- an apology, a
+# handoff, a figure it would not repeat -- is said in Urdu as well.
+
+
+def in_urdu() -> Conversation:
+    conversation = Conversation("s1")
+    conversation.language = "ur"
+    return conversation
+
+
+def test_each_turn_tells_the_model_the_language_to_answer_in(executor: ToolExecutor) -> None:
+    client = FakeLLMClient([Reply(text="میں ٹھیک ہوں۔"), Reply(text="I'm well.")])
+    agent = Agent(client, executor)
+    conversation = in_urdu()
+
+    agent.handle("آپ کیسے ہیں", conversation)
+    conversation.language = "en"
+    agent.handle("how are you?", conversation)
+
+    # Measured: without the note a spoken Urdu question was answered in Urdu
+    # written in Latin letters, and English after two Urdu turns in Urdu.
+    first, second = client.calls[0][0], client.calls[1][0]
+    assert first[-1]["content"] == f"آپ کیسے ہیں\n\n({LANGUAGE_NOTE['ur']})"
+    assert second[-1]["content"] == f"how are you?\n\n({LANGUAGE_NOTE['en']})"
+    # Only the latest message carries one, and only in what is sent: the
+    # history keeps the customer's words as they were said.
+    assert second[1]["content"] == "آپ کیسے ہیں"
+    said = [m["content"] for m in conversation.messages if m["role"] == "user"]
+    assert said == ["آپ کیسے ہیں", "how are you?"]
+    # The system prompt is the same on every turn.
+    assert first[0] == second[0] == {"role": "system", "content": SYSTEM_PROMPT}
+
+
+def test_the_note_stays_on_the_customers_message_through_a_tool_round(
+    executor: ToolExecutor,
+) -> None:
+    client = FakeLLMClient(
+        [
+            Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "savings"}),)),
+            Reply(text="آپ کے سیونگز اکاؤنٹ میں $19,020.00 ہیں۔"),
+        ]
+    )
+    Agent(client, executor).handle("میرا سیونگز بیلنس", in_urdu())
+
+    after_the_tool = client.calls[1][0]
+    assert after_the_tool[-1]["role"] == "tool"
+    assert after_the_tool[1]["content"].endswith(f"({LANGUAGE_NOTE['ur']})")
+
+
+@pytest.mark.parametrize(
+    "promise",
+    [
+        # Seen live, with nothing called after it.
+        "میں آپ کے چیکنگ اکاؤنٹ میں موجود رقم دیکھتا ہوں۔ براہ کرم انتظار کریں۔",
+        "میں آپ کے لیے چیک کروں گا۔",
+        "میں ابھی چیک کر رہا ہوں۔",
+        "ایک لمحہ، میں دیکھ لیتا ہوں۔",
+        "میں آپ کا بیلنس دیکھ لوں گا۔",
+    ],
+)
+def test_an_urdu_promise_is_a_promise(promise: str) -> None:
+    assert announces_action(promise)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # A question, with the question mark Urdu is written with.
+        "میں آپ کے لیے چیک کر سکتا ہوں، کون سا اکاؤنٹ؟",
+        # The customer can look; the bot promised nothing.
+        "آپ اپنی ایپ میں دیکھ سکتے ہیں۔",
+        # Done, not promised.
+        "میں نے دیکھا کہ آپ کے تمام بل ادا ہو چکے ہیں۔",
+        "اسلام آباد پاکستان کا دارالحکومت ہے۔",
+    ],
+)
+def test_urdu_that_promises_nothing_is_left_alone(reply: str) -> None:
+    assert not announces_action(reply)
+
+
+def test_an_urdu_promise_forces_the_call(executor: ToolExecutor) -> None:
+    client = FakeLLMClient(
+        [
+            Reply(text="میں آپ کے بل دیکھتا ہوں۔ براہ کرم انتظار کریں۔"),
+            Reply(tool_calls=(ToolCall("c1", "list_bills", {}),)),
+            Reply(text="آپ کے نو بل باقی ہیں۔"),
+        ]
+    )
+
+    out = Agent(client, executor).handle("میرے بل", in_urdu())
+
+    assert client.choices == ["auto", "required", "auto"]
+    assert out.text == "آپ کے نو بل باقی ہیں۔"
+
+
+def test_an_outage_is_apologised_for_in_urdu(executor: ToolExecutor) -> None:
+    class Down(LLMClient):
+        def complete(self, messages: Any, tools: Any, tool_choice: str = "auto") -> Reply:
+            raise LLMUnavailable("down")
+
+    out = Agent(Down(), executor).handle("میرا بیلنس", in_urdu())
+
+    assert out.text == in_language(UNAVAILABLE, "ur") != UNAVAILABLE
+
+
+def test_a_figure_the_bank_never_gave_is_replaced_in_urdu(executor: ToolExecutor) -> None:
+    client = FakeLLMClient(
+        [
+            Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "savings"}),)),
+            Reply(text="آپ کے سیونگز اکاؤنٹ میں $31,415.00 ہیں۔"),
+        ]
+    )
+
+    out = Agent(client, executor).handle("میرا سیونگز بیلنس", in_urdu())
+
+    assert out.guard_hit is True
+    assert "31,415" not in out.text
+    assert "$19,020.00" in out.text and spoken_language(out.text) == "ur"
+
+
+def test_asking_for_a_person_in_urdu_is_answered_in_urdu(
+    bank: SqliteBank, executor: ToolExecutor
+) -> None:
+    agent = agent_with([Reply(text="میں خود آپ کی مدد کر سکتا ہوں!")], executor)
+
+    out = agent.handle("مجھے کسی انسان سے بات کرنی ہے", in_urdu())
+
+    reference = bank.handoffs()[0].reference
+    assert out.text == in_language(HANDED_OVER, "ur").format(reference=reference)
+
+
+@pytest.mark.parametrize(
+    ("said", "wants"),
+    [
+        ("مجھے کسی انسان سے بات کرنی ہے", True),
+        ("نمائندے سے بات کروائیں", True),
+        ("کسٹمر سروس سے ملائیں", True),
+        ("انسان سے غلطی ہو جاتی ہے", False),  # people make mistakes
+        ("میرا بیلنس کیا ہے", False),
+        # Typed in Latin letters, as Urdu often is.
+        ("mujhe kisi insaan se baat karni hai", True),
+        ("agent se baat karao", True),
+        ("insaan se ghalti ho jati hai", False),
+    ],
+)
+def test_asking_for_a_person_in_urdu(said: str, wants: bool) -> None:
+    assert asked_for_a_person(said) is wants
+
+
+def test_waiting_on_the_pin_is_said_in_urdu(executor: ToolExecutor) -> None:
+    agent = agent_with(
+        [
+            Reply(tool_calls=(ToolCall("c1", "pay_bill", {"bill": "internet"}),)),
+            Reply(text="انٹرنیٹ کا بل $40.00 ادا کر دوں، کیا آپ کو یقین ہے؟"),
+        ],
+        executor,
+    )
+    conversation = in_urdu()
+    agent.handle("میرا انٹرنیٹ کا بل ادا کر دیں", conversation)
+
+    out = agent.resolve_pending(True, conversation)
+
+    assert out.text == in_language(PIN_NEEDED, "ur") != PIN_NEEDED

@@ -28,10 +28,12 @@ from voicebot.agent.guard import (
 from voicebot.llm.base import LLMClient, LLMUnavailable, Reply, ToolCall
 from voicebot.llm.prompts import (
     HANDED_OVER,
+    LANGUAGE_NOTE,
     NOT_LOOKED_UP,
     NOTHING_SAID,
     SYSTEM_PROMPT,
     UNAVAILABLE,
+    in_language,
 )
 from voicebot.llm.tools import TOOL_SCHEMAS
 from voicebot.utils.logging import get_logger
@@ -66,6 +68,19 @@ _ANNOUNCEMENT = re.compile(
     re.IGNORECASE,
 )
 
+# The same promises in Urdu, in the first person: "دیکھتا ہوں" and "دیکھ لیتا
+# ہوں" (I'll take a look), "چیک کر رہا ہوں" (I'm checking), "معلوم کروں گا"
+# (I'll find out) -- and "انتظار کریں", "ایک لمحہ": please wait, one moment.
+# Observed live as "...موجود رقم دیکھتا ہوں۔ براہ کرم انتظار کریں۔" with
+# nothing called. The ending is what makes it the bot speaking, so "آپ دیکھ
+# سکتے ہیں" -- you can see -- is not a promise.
+_ACTION_UR = r"(?:دیکھ|چیک\s+کر|معلوم\s+کر|پتہ\s+کر|تلاش\s+کر|نکال)"
+_ANNOUNCEMENT_UR = re.compile(
+    _ACTION_UR
+    + r"(?:(?:تا|تی)\s+ہوں|\s+(?:رہا|رہی|لیتا|لیتی)\s+ہوں|(?:وں|\s+لوں)\s+(?:گا|گی))"
+    + r"|انتظار\s+(?:کریں|کیجیے|کیجئے|فرمائیں)|ایک\s+لمحہ|ذرا\s+رک"
+)
+
 
 def announces_action(text: str | None) -> bool:
     """True when a reply promises to look something up instead of doing it.
@@ -75,14 +90,15 @@ def announces_action(text: str | None) -> bool:
     that as "I can check that for you -- which one?" must stay a question
     rather than be turned into a lookup of the wrong account.
 
-    This is a guess about English, and it is allowed to be: a miss leaves the
-    old behaviour, and a false positive costs one extra round. What follows it
-    is not a guess.
+    This is a guess about English and Urdu, and it is allowed to be: a miss
+    leaves the old behaviour, and a false positive costs one extra round.
+    What follows it is not a guess.
     """
     said = (text or "").strip()
-    if not said or said.endswith("?"):
+    # "؟" is the question mark Urdu is written with.
+    if not said or said.endswith(("?", "؟")):
         return False
-    return bool(_ANNOUNCEMENT.search(said))
+    return bool(_ANNOUNCEMENT.search(said) or _ANNOUNCEMENT_UR.search(said))
 
 
 # Asking the customer to agree to something: "are you sure", "shall I",
@@ -126,15 +142,36 @@ _WANTS_A_PERSON = re.compile(
     re.IGNORECASE,
 )
 
+# The same request in Urdu: a person to talk to ("کسی انسان سے بات کرنی ہے",
+# "نمائندے سے بات کروائیں"), or customer service. "Talk" has to follow the
+# person, because a case is opened on a match: "انسان سے غلطی ہو جاتی ہے" --
+# people make mistakes -- is not a request for one.
+_WANTS_A_PERSON_UR = re.compile(
+    r"(?:انسان|نمائندے|نمائندہ|ایجنٹ|بندے|شخص|آپریٹر|عملے)\s+سے\s+(?:\S+\s+){0,2}?بات"
+    r"|کسٹمر\s+(?:سروس|سپورٹ|کیئر)"
+)
+
+# And as Urdu is typed, in Latin letters: "kisi insaan se baat karni hai",
+# "agent se baat karao". "insaan se ghalti ho jati hai" is not a request.
+_WANTS_A_PERSON_ROMAN = re.compile(
+    r"\b(?:insaan|insan|banda|bande|banday|numainda|numainde|numainday|agent|operator|staff)"
+    r"\s+se\s+(?:\w+\s+){0,2}?baat\b",
+    re.IGNORECASE,
+)
+
 
 def asked_for_a_person(text: str | None) -> bool:
     """True when the customer asked to be put through to a human.
 
-    Reading English is a guess, and this one is allowed to be: a miss leaves
-    the model's own judgement, which the prompt already directs. What follows
-    a match is not a guess -- the case is opened in Python either way.
+    Reading a language is a guess, and this one is allowed to be: a miss
+    leaves the model's own judgement, which the prompt already directs. What
+    follows a match is not a guess -- the case is opened in Python either way.
     """
-    return bool(_WANTS_A_PERSON.search((text or "").strip()))
+    said = (text or "").strip()
+    return any(
+        pattern.search(said)
+        for pattern in (_WANTS_A_PERSON, _WANTS_A_PERSON_UR, _WANTS_A_PERSON_ROMAN)
+    )
 
 
 @dataclass
@@ -144,6 +181,10 @@ class Conversation:
     session_id: str
     messages: list[dict[str, Any]] = field(default_factory=list)
     turn_index: int = 0
+    # The language of the customer's latest turn, "en" or "ur". The model
+    # follows the customer by itself; this is for the sentences the bot says
+    # without it.
+    language: str = "en"
     # Figures the bank has reported in this conversation, with the turn they
     # came from, so the bot can restate a balance it looked up a moment ago
     # without querying again. Only tool results land here -- never the model's
@@ -229,6 +270,26 @@ class Conversation:
         self.messages = system + rest[starts[-max_turns] :]
 
 
+def with_language_note(conversation: Conversation) -> list[dict[str, Any]]:
+    """The history as the model is sent it: the customer's latest message
+    carries the language to answer in.
+
+    Next to the message is the one place the note was measured to work. At
+    the end of the system prompt it was ignored as often as followed, and a
+    system message nearer the reply is refused by the server ("System message
+    must be at the beginning"). Only this copy carries it: the history keeps
+    the customer's words exactly as they were said.
+    """
+    messages = list(conversation.messages)
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("role") == "user":
+            note = LANGUAGE_NOTE.get(conversation.language, LANGUAGE_NOTE["en"])
+            said = messages[index].get("content") or ""
+            messages[index] = {**messages[index], "content": f"{said}\n\n({note})"}
+            break
+    return messages
+
+
 @dataclass(frozen=True)
 class AgentResult:
     """Everything one turn produced."""
@@ -310,7 +371,7 @@ class Agent:
             # the customer spends looking at a keypad that has not appeared.
             log.info("confirmed, now holding for a PIN")
             return self._result(
-                str(outcome.result.get("detail", "")),
+                in_language(str(outcome.result.get("detail", "")), conversation.language),
                 calls=[],
                 outcomes=[outcome],
                 rounds=0,
@@ -342,7 +403,13 @@ class Agent:
             # second tab confirms a transfer armed in the first.
             said = outcome.result.get("detail") or outcome.result.get("error")
             log.info("settling without the model: nothing was ever said here")
-            return self._result(str(said or NOTHING_SAID), calls, [outcome], rounds=0, hit=False)
+            return self._result(
+                in_language(str(said or NOTHING_SAID), conversation.language),
+                calls,
+                [outcome],
+                rounds=0,
+                hit=False,
+            )
 
         # The injected call travels with its outcome, so the confirmed
         # action appears in the inspector. Without it the one turn that
@@ -372,7 +439,7 @@ class Agent:
             rounds += 1
             try:
                 reply = self.client.complete(
-                    list(conversation.messages), list(TOOL_SCHEMAS), choice
+                    with_language_note(conversation), list(TOOL_SCHEMAS), choice
                 )
             except LLMUnavailable as exc:
                 # Carry what already ran. A transfer that executed before the
@@ -380,7 +447,13 @@ class Agent:
                 # it would make `turns` wrong exactly when something went
                 # wrong, which is when it is read.
                 log.warning("llm unavailable on round %d: %s", rounds, exc)
-                return self._result(UNAVAILABLE, calls, outcomes, rounds, hit=False)
+                return self._result(
+                    in_language(UNAVAILABLE, conversation.language),
+                    calls,
+                    outcomes,
+                    rounds,
+                    hit=False,
+                )
 
             conversation.append_assistant(reply)
 
@@ -422,7 +495,9 @@ class Agent:
         spoken = (reply.text or "").strip()
         if not spoken:
             # No words and no rounds left: say something rather than nothing.
-            return self._result(NOTHING_SAID, calls, outcomes, rounds, hit=False)
+            return self._result(
+                in_language(NOTHING_SAID, conversation.language), calls, outcomes, rounds, hit=False
+            )
 
         if not calls and self._unfinished(spoken):
             # Compelled to call a tool, it still did not. Whatever it wrote is
@@ -430,7 +505,12 @@ class Agent:
             # the customer to try again is at least true.
             log.warning("suppressing an unkept promise: %r", spoken)
             return self._result(
-                NOT_LOOKED_UP, calls, outcomes, rounds, hit=False, suppressed=spoken
+                in_language(NOT_LOOKED_UP, conversation.language),
+                calls,
+                outcomes,
+                rounds,
+                hit=False,
+                suppressed=spoken,
             )
 
         sourced = _sourced(outcomes)
@@ -438,7 +518,7 @@ class Agent:
         checked, hit = guard(
             spoken,
             [o.result for o in outcomes],
-            fallback_sentence(sourced),
+            fallback_sentence(sourced, conversation.language),
             sourced_cents=allowed,
         )
         # Amounts go out in figures, including the ones the model wrote with
@@ -497,7 +577,7 @@ class Agent:
         log.info("handing off by rule: the customer asked for a person")
 
         return AgentResult(
-            text=HANDED_OVER.format(reference=reference),
+            text=in_language(HANDED_OVER, conversation.language).format(reference=reference),
             tool_calls=(*result.tool_calls, call),
             tool_results=(*result.tool_results, outcome.result),
             sourced_cents=result.sourced_cents,
