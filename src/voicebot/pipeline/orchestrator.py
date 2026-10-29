@@ -18,7 +18,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from voicebot.agent.loop import Agent, AgentResult, Conversation
-from voicebot.asr.base import ASREngine
+from voicebot.asr.base import ASREngine, ASRUnavailable
+from voicebot.assistant.language import typed_language
+from voicebot.llm.prompts import NOT_CAUGHT, UNAVAILABLE, in_language
 from voicebot.pipeline.audio_io import is_silent, trim_silence
 from voicebot.pipeline.latency import LatencyBreakdown, LatencyTracker
 from voicebot.schemas import AudioBuffer, Transcript
@@ -27,12 +29,12 @@ from voicebot.utils.logging import get_logger
 
 log = get_logger("pipeline.orchestrator")
 
-NOT_CAUGHT = "I didn't catch that. Could you say it again?"
 SILENCE = np.zeros(0, dtype=np.float32)
 
 # Whisper returns punctuation-only strings on room tone -- "...", ".", "?!".
-# Anything with no letter or digit in it carries no request.
-_HAS_CONTENT = re.compile(r"[A-Za-z0-9]")
+# Anything with no letter or digit in it carries no request. A letter of any
+# script counts: an Urdu question has no A to Z in it at all.
+_HAS_CONTENT = re.compile(r"[^\W_]")
 
 
 @dataclass(frozen=True)
@@ -75,17 +77,37 @@ class VoicePipeline:
         # hallucinate. Checking first also skips the expensive call entirely.
         if not heard_something:
             return self._nothing_heard(
-                Transcript(text="", confidence=0.0, duration_s=audio.duration_s), tracker
+                Transcript(text="", confidence=0.0, duration_s=audio.duration_s),
+                conversation,
+                tracker,
             )
 
-        with tracker.stage("asr"):
-            transcript = self.asr.transcribe(trimmed)
+        try:
+            with tracker.stage("asr"):
+                transcript = self.asr.transcribe(trimmed)
+        except ASRUnavailable as exc:
+            # Not "I didn't catch that": the customer said something and
+            # deserves to know it was the service, not them.
+            log.error("speech recognition unavailable: %s", exc)
+            return self._say(
+                in_language(UNAVAILABLE, conversation.language),
+                Transcript(text="", confidence=0.0, duration_s=audio.duration_s),
+                tracker,
+            )
 
         # Nothing was actually said. Short-circuit rather than spend a remote
         # round trip asking a model what "..." means.
         if not _HAS_CONTENT.search(transcript.text or ""):
-            return self._nothing_heard(transcript, tracker)
+            return self._nothing_heard(transcript, conversation, tracker)
 
+        # The recognisers' "Urdu" stands. Anything else is read as typing is,
+        # so a word or two -- "yes", "savings" -- leaves the conversation in
+        # the language it was already in.
+        conversation.language = (
+            "ur"
+            if transcript.language == "ur"
+            else typed_language(transcript.text, conversation.language)  # type: ignore[arg-type]
+        )
         return self._finish(transcript, transcript.text.strip(), conversation, tracker)
 
     def respond_to_text(self, text: str, conversation: Conversation) -> TurnResult:
@@ -98,8 +120,12 @@ class VoicePipeline:
         transcript = Transcript(text=text, confidence=1.0, duration_s=0.0)
 
         if not _HAS_CONTENT.search(text or ""):
-            return self._nothing_heard(transcript, tracker)
+            return self._nothing_heard(transcript, conversation, tracker)
 
+        # Typed Urdu is often in Latin letters, "mera balance kitna hai", and
+        # is answered in Urdu like the spoken kind -- in Urdu script, so the
+        # Urdu voice can read it.
+        conversation.language = typed_language(text, conversation.language)  # type: ignore[arg-type]
         return self._finish(transcript, text.strip(), conversation, tracker)
 
     # --- internals -----------------------------------------------------------
@@ -153,16 +179,22 @@ class VoicePipeline:
             return AudioBuffer(samples=SILENCE, sample_rate=16_000)
         return self.tts.synthesize(text)
 
-    def _nothing_heard(self, transcript: Transcript, tracker: LatencyTracker) -> TurnResult:
+    def _nothing_heard(
+        self, transcript: Transcript, conversation: Conversation, tracker: LatencyTracker
+    ) -> TurnResult:
         """Silence, or a transcript with nothing in it. The model is not called."""
+        return self._say(in_language(NOT_CAUGHT, conversation.language), transcript, tracker)
+
+    def _say(self, sentence: str, transcript: Transcript, tracker: LatencyTracker) -> TurnResult:
+        """A turn the bot answers with a sentence of its own, without the model."""
         with tracker.stage("agent"):
             pass  # named so every turn reports the same four stages
         with tracker.stage("tts"):
-            audio = self._speak(NOT_CAUGHT)
+            audio = self._speak(sentence)
         return TurnResult(
             transcript=transcript,
             text="",
-            agent=AgentResult(text=NOT_CAUGHT),
+            agent=AgentResult(text=sentence),
             audio=audio,
             latency=tracker.breakdown(),
         )
