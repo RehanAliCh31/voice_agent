@@ -34,10 +34,12 @@ serve = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# The frontend is package data, not a loose directory: it then ships
-# inside a wheel exactly as it does in an editable install.
+# The frontend and the SQL are package data, not loose files: they then ship
+# inside a wheel exactly as they do in an editable install. The SQL was
+# missing from this list, so a wheel -- which is what the Dockerfile installs
+# -- had no schema.sql, and the bank could not open.
 [tool.setuptools.package-data]
-voicebot = ["api/static/*"]
+voicebot = ["api/static/*", "bank/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
