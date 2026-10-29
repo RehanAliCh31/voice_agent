@@ -57,7 +57,7 @@ where = ["src"]
 # missing from this list, so a wheel -- which is what the Dockerfile installs
 # -- had no schema.sql, and the bank could not open.
 [tool.setuptools.package-data]
-voicebot = ["api/static/*", "bank/*.sql", "bank/migrations/*.sql"]
+voicebot = ["api/static/*", "bank/*.sql", "bank/migrations/*.sql", "messages.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

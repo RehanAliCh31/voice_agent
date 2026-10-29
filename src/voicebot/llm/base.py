@@ -13,13 +13,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from voicebot.errors import ProviderUnavailable
 
-class LLMUnavailable(Exception):
+
+class LLMUnavailable(ProviderUnavailable):
     """The model could not be reached, or refused to answer.
 
     Raised only after retries are exhausted. The agent turns this into a
-    sentence the user hears, never a 500.
+    sentence the user hears, never a 500. `code` says which way it failed: a
+    timeout, a 429, a refused request, a server error.
     """
+
+    default_component = "llm"
 
 
 @dataclass(frozen=True)

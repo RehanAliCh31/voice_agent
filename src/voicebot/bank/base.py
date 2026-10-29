@@ -11,16 +11,20 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from voicebot.errors import DatabaseError, InvalidInput
 
-class BankError(Exception):
+
+class BankError(InvalidInput):
     """The request was understood but cannot be carried out.
 
     Every message is written to be read aloud to the customer, because the
     tool executor passes it straight to the model as a hint.
     """
 
+    default_component = "bank"
 
-class StorageError(Exception):
+
+class StorageError(DatabaseError):
     """The database itself failed: unreachable, refused, or broke mid-write.
 
     Not a BankError. Those are refusals worded for the customer; this is the

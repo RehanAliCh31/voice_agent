@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from voicebot.errors import ProviderUnavailable
 from voicebot.schemas import AudioBuffer, Segment, Transcript
 from voicebot.utils.registry import register
 
 
-class ASRUnavailable(Exception):
+class ASRUnavailable(ProviderUnavailable):
     """The recogniser could not be reached. Not the same as hearing nothing."""
+
+    default_component = "asr"
 
 
 class ASREngine(ABC):

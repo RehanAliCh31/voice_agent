@@ -12,6 +12,8 @@ defence.
 
 from __future__ import annotations
 
+from voicebot.messages import english, in_language
+
 SYSTEM_PROMPT = """\
 You are the voice assistant for a retail bank, speaking with one customer \
 about their own accounts, and about anything else they ask.
@@ -146,59 +148,27 @@ LANGUAGE_NOTE = {
 }
 
 
-# Spoken when the model cannot be reached at all. The customer hears a
-# sentence rather than meeting a 500.
-UNAVAILABLE = "Sorry — I can't reach the service just now. Please try again in a moment."
+# The bot's own sentences -- what it says without the model, when something
+# has failed -- live in voicebot/messages.yaml, the one file they are kept
+# in, in English and Urdu. These names are the English ones, kept so the
+# code that compares against them reads as it always did.
+UNAVAILABLE = english("unavailable")
+NOTHING_SAID = english("nothing_said")
+HANDED_OVER = english("handed_over")
+NOT_LOOKED_UP = english("not_looked_up")
+UNVERIFIED = english("unverified")
+PIN_NEEDED = english("pin_needed")
+NOT_CAUGHT = english("not_caught")
 
-# Spoken when the model returns nothing at all, or runs out of tool rounds.
-NOTHING_SAID = "Sorry, I didn't catch that. Could you say it again?"
-
-# Spoken when the customer asked for a person and the model carried on anyway.
-# Assembled from the case the bank opened rather than written by the model,
-# because the one thing in it that must be exactly right is the reference.
-HANDED_OVER = (
-    "Of course — I'm passing you to a colleague. "
-    "Your reference is {reference}, and someone will pick this up shortly."
-)
-
-# Spoken when the model announced a lookup and never made one, even after the
-# call was forced. Better than reading out a promise nothing is going to keep.
-NOT_LOOKED_UP = "Sorry — I couldn't look that up just now. Could you ask me again?"
-
-# Spoken when the guard suppresses a reply and no tool returned a figure to
-# read back instead.
-UNVERIFIED = "Let me check that properly — could you ask me again?"
-
-# Spoken when money is about to move and only the PIN is missing.
-PIN_NEEDED = "Enter your PIN to approve this."
-
-# Spoken when the microphone heard nothing worth answering.
-NOT_CAUGHT = "I didn't catch that. Could you say it again?"
-
-# The sentences above, as the bot says them in Urdu. These are the bot's own
-# words, not the model's, so nothing else would put them in the customer's
-# language -- and an Urdu conversation that stalls into "Sorry, I didn't
-# catch that" has stopped being an Urdu conversation.
-_URDU: dict[str, str] = {
-    UNAVAILABLE: (
-        "معذرت، اس وقت سروس سے رابطہ نہیں ہو پا رہا۔ براہِ کرم تھوڑی دیر بعد دوبارہ کوشش کریں۔"
-    ),
-    NOTHING_SAID: "معذرت، میں سمجھ نہیں سکا۔ کیا آپ دوبارہ کہہ سکتے ہیں؟",
-    NOT_CAUGHT: "میں سمجھ نہیں سکا۔ کیا آپ دوبارہ کہہ سکتے ہیں؟",
-    HANDED_OVER: (
-        "ضرور، میں آپ کو اپنے ایک ساتھی سے ملا رہا ہوں۔ "
-        "آپ کا ریفرنس {reference} ہے، اور جلد ہی کوئی آپ سے رابطہ کرے گا۔"
-    ),
-    NOT_LOOKED_UP: "معذرت، میں ابھی یہ معلومات حاصل نہیں کر سکا۔ کیا آپ دوبارہ پوچھ سکتے ہیں؟",
-    UNVERIFIED: "میں اسے ٹھیک سے دیکھنا چاہتا ہوں، کیا آپ دوبارہ پوچھ سکتے ہیں؟",
-    PIN_NEEDED: "اس کی منظوری کے لیے اپنا پن درج کریں۔",
-}
-
-
-def in_language(sentence: str, language: str | None) -> str:
-    """One of the bot's own sentences, in the customer's language.
-
-    The English is the key, so a sentence with no Urdu version -- a detail
-    from the bank, say -- is said as it is rather than not at all.
-    """
-    return _URDU.get(sentence, sentence) if language == "ur" else sentence
+__all__ = [
+    "HANDED_OVER",
+    "LANGUAGE_NOTE",
+    "NOTHING_SAID",
+    "NOT_CAUGHT",
+    "NOT_LOOKED_UP",
+    "PIN_NEEDED",
+    "SYSTEM_PROMPT",
+    "UNAVAILABLE",
+    "UNVERIFIED",
+    "in_language",
+]

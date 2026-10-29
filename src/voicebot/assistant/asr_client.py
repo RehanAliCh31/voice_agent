@@ -22,13 +22,16 @@ import httpx
 import numpy as np
 
 from voicebot.assistant.config import AsrEndpoint
+from voicebot.errors import ProviderUnavailable
 from voicebot.utils.logging import get_logger
 
 log = get_logger("assistant.asr")
 
 
-class AsrError(Exception):
+class AsrError(ProviderUnavailable):
     """The recogniser could not be reached, or answered with something unreadable."""
+
+    default_component = "asr"
 
 
 @dataclass(frozen=True)

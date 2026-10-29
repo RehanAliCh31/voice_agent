@@ -1,0 +1,124 @@
+# Everything the bot says when something has gone wrong -- and nothing else.
+#
+# One place for every fallback sentence, in English and in Urdu, so the
+# wording can be reviewed and changed without reading code. Each is short,
+# polite, true, and never technical: a customer is told what they can do
+# next, not what failed inside.
+#
+# Checked when it loads: every message needs both languages, and the ones
+# that carry a value ({reference}) must carry it in both. A file that fails
+# the check stops the service at startup rather than mid-call.
+#
+# Urdu is in logical order, as typed. Nothing reverses, reshapes or "fixes"
+# it on the way to the voice.
+
+# The model could not be reached at all.
+unavailable:
+  en: "Sorry — I can't reach the service just now. Please try again in a moment."
+  ur: "معذرت، اس وقت سروس سے رابطہ نہیں ہو پا رہا۔ براہِ کرم تھوڑی دیر بعد دوبارہ کوشش کریں۔"
+
+# The model answered with nothing, or ran out of rounds.
+nothing_said:
+  en: "Sorry, I didn't catch that. Could you say it again?"
+  ur: "معذرت، میں سمجھ نہیں سکا۔ کیا آپ دوبارہ کہہ سکتے ہیں؟"
+
+# The microphone heard nothing worth answering.
+not_caught:
+  en: "I didn't catch that. Could you say it again?"
+  ur: "میں سمجھ نہیں سکا۔ کیا آپ دوبارہ کہہ سکتے ہیں؟"
+
+# The speech recognisers are down: the customer spoke, and the service failed them.
+speech_unavailable:
+  en: "Sorry — I'm having trouble hearing you just now. You can type your question instead, or try again in a moment."
+  ur: "معذرت، اس وقت مجھے آپ کی آواز سننے میں دشواری ہو رہی ہے۔ آپ اپنا سوال لکھ کر بھیج سکتے ہیں، یا تھوڑی دیر بعد دوبارہ کوشش کریں۔"
+
+# The recording that arrived could not be used.
+bad_audio:
+  en: "Sorry, I couldn't use that recording. Could you try again?"
+  ur: "معذرت، میں اس ریکارڈنگ کو استعمال نہیں کر سکا۔ کیا آپ دوبارہ کوشش کریں گے؟"
+
+# The customer asked for a person; assembled from the case, so the reference is exact.
+handed_over:
+  en: "Of course — I'm passing you to a colleague. Your reference is {reference}, and someone will pick this up shortly."
+  ur: "ضرور، میں آپ کو اپنے ایک ساتھی سے ملا رہا ہوں۔ آپ کا ریفرنس {reference} ہے، اور جلد ہی کوئی آپ سے رابطہ کرے گا۔"
+
+# The model promised a lookup and never made one.
+not_looked_up:
+  en: "Sorry — I couldn't look that up just now. Could you ask me again?"
+  ur: "معذرت، میں ابھی یہ معلومات حاصل نہیں کر سکا۔ کیا آپ دوبارہ پوچھ سکتے ہیں؟"
+
+# The guard stopped an unsourced figure and had no real one to read instead.
+unverified:
+  en: "Let me check that properly — could you ask me again?"
+  ur: "میں اسے ٹھیک سے دیکھنا چاہتا ہوں، کیا آپ دوبارہ پوچھ سکتے ہیں؟"
+
+# Money is about to move and only the PIN is missing.
+pin_needed:
+  en: "Enter your PIN to approve this."
+  ur: "اس کی منظوری کے لیے اپنا پن درج کریں۔"
+
+# A lookup failed: the bank could not be read. Never followed by a guess.
+tool_failed:
+  en: "Sorry — I'm having trouble checking that right now. Please try again in a moment."
+  ur: "معذرت، میں ابھی یہ چیک نہیں کر پا رہا۔ براہِ کرم تھوڑی دیر بعد دوبارہ کوشش کریں۔"
+
+# A write failed in a way that leaves it unknown whether it happened.
+outcome_unknown:
+  en: "I'm sorry — I couldn't confirm whether that went through. Please check your balance before you try it again."
+  ur: "معذرت، میں تصدیق نہیں کر سکا کہ یہ کام مکمل ہوا یا نہیں۔ دوبارہ کوشش کرنے سے پہلے براہِ کرم اپنا بیلنس دیکھ لیں۔"
+
+# The action the customer agreed to went through, but the model could not be
+# reached to say so. The balances on the page are already the new ones.
+action_done:
+  en: "That's done — it has gone through. I can't reach the rest of the service just now, so please check your balance on the screen."
+  ur: "یہ کام ہو گیا ہے۔ اس وقت باقی سروس سے رابطہ نہیں ہو پا رہا، اس لیے براہِ کرم اپنا بیلنس اسکرین پر دیکھ لیں۔"
+
+# Cancel was pressed, and the model could not be reached to say so.
+action_cancelled:
+  en: "Okay, I've cancelled that. Nothing has changed."
+  ur: "ٹھیک ہے، میں نے اسے منسوخ کر دیا ہے۔ کچھ بھی تبدیل نہیں ہوا۔"
+
+# Several turns in a row have failed, and a colleague has been asked to help.
+escalated:
+  en: "I'm sorry for the trouble. I've passed this to a colleague, and your reference is {reference}. Someone will pick it up shortly."
+  ur: "پریشانی کے لیے معذرت۔ میں نے یہ معاملہ اپنے ایک ساتھی کے حوالے کر دیا ہے، اور آپ کا ریفرنس {reference} ہے۔ جلد ہی کوئی آپ سے رابطہ کرے گا۔"
+
+# Several turns in a row have failed, and no case could be opened either.
+cannot_complete:
+  en: "I'm sorry, I can't help with this right now. Please try again later, or contact the bank's helpline."
+  ur: "معذرت، میں اس وقت اس میں مدد نہیں کر سکتا۔ براہِ کرم بعد میں دوبارہ کوشش کریں، یا بینک کی ہیلپ لائن سے رابطہ کریں۔"
+
+# Said after a reply when the conversation is close to its limit.
+session_warning:
+  en: "Just so you know, I'll need to close this conversation soon."
+  ur: "آپ کو بتاتا چلوں کہ مجھے جلد ہی یہ گفتگو ختم کرنی ہوگی۔"
+
+# The conversation reached its limit on turns or time, and starts over.
+session_ended:
+  en: "This conversation has reached its limit, so I'm closing it now. Thank you, and goodbye."
+  ur: "یہ گفتگو اپنی حد تک پہنچ گئی ہے، اس لیے میں اسے ابھی ختم کر رہا ہوں۔ شکریہ، اللہ حافظ۔"
+
+# A second request arrived while the first for the same conversation was still running.
+busy:
+  en: "One moment — I'm still answering your last question."
+  ur: "ایک لمحہ، میں ابھی آپ کے پچھلے سوال کا جواب دے رہا ہوں۔"
+
+# The service is shutting down or restarting.
+restarting:
+  en: "I'm restarting for a moment. Please try again shortly."
+  ur: "میں ایک لمحے کے لیے دوبارہ شروع ہو رہا ہوں۔ براہِ کرم تھوڑی دیر بعد دوبارہ کوشش کریں۔"
+
+# Anything else: a failure with no better sentence.
+internal:
+  en: "Sorry — something went wrong on my side. Please try that again."
+  ur: "معذرت، میری طرف سے کچھ خرابی ہو گئی۔ براہِ کرم دوبارہ کوشش کریں۔"
+
+# Said by the page itself when it cannot reach the service at all.
+connection_lost:
+  en: "Sorry — I've lost the connection. Please check your network and try again."
+  ur: "معذرت، رابطہ منقطع ہو گیا ہے۔ براہِ کرم اپنا نیٹ ورک دیکھیں اور دوبارہ کوشش کریں۔"
+
+# Said by the page itself when a reply takes too long to arrive.
+timed_out:
+  en: "Sorry — that took too long. Please try again."
+  ur: "معذرت، اس میں بہت دیر لگ گئی۔ براہِ کرم دوبارہ کوشش کریں۔"

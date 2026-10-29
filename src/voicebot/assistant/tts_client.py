@@ -19,13 +19,16 @@ import httpx
 import numpy as np
 
 from voicebot.assistant.config import TtsEndpoint
+from voicebot.errors import ProviderUnavailable
 from voicebot.utils.logging import get_logger
 
 log = get_logger("assistant.tts")
 
 
-class TtsError(Exception):
+class TtsError(ProviderUnavailable):
     """The voice could not be reached, or did not send back audio."""
+
+    default_component = "tts"
 
 
 @dataclass(frozen=True)
