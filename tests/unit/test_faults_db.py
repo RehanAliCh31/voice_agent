@@ -132,3 +132,12 @@ def test_a_driver_error_arrives_as_a_storage_error() -> None:
 
 def test_the_bank_answers_a_readiness_ping() -> None:
     SqliteBank().ping()
+
+
+def test_a_bank_opened_on_the_29th_of_february_still_opens() -> None:
+    from datetime import datetime
+
+    from voicebot.bank.sqlite_bank import _validity
+
+    assert _validity(datetime(2028, 2, 29)) == ("02/28", "02/33")
+    assert _validity(datetime(2026, 10, 30)) == ("10/26", "10/31")

@@ -774,8 +774,13 @@ def _number_for(last4: str) -> str:
 
 
 def _validity(now: datetime) -> tuple[str, str]:
-    """Issued this month, good for five years, as MM/YY."""
-    return now.strftime("%m/%y"), now.replace(year=now.year + 5).strftime("%m/%y")
+    """Issued this month, good for five years, as MM/YY.
+
+    Built from the month and year alone. `now.replace(year=now.year + 5)`
+    raised on 29 February, and this runs every time a bank opens: the
+    service could not have started that day.
+    """
+    return now.strftime("%m/%y"), f"{now.month:02d}/{(now.year + 5) % 100:02d}"
 
 
 # How hard the stored PIN is to reverse. Lowered by the test suite, which
