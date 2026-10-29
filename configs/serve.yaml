@@ -27,7 +27,7 @@ tts:
 llm:
   engine: openai
   base_url: http://localhost:8001/v1
-  model: qwen3.8-27b-fp8
+  model: qwen3.6-35b-a3b-fp8
   api_key_env: VOICEBOT_LLM_KEY
   timeout_s: 30.0
   max_retries: 2

@@ -13,12 +13,19 @@ fakes assume — the assumptions most likely to rot.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from voicebot.config import load_config
 from voicebot.llm.openai_client import OpenAIClient
 
-BASE_URL = "http://localhost:8001/v1"
-MODEL = "qwen3.8-27b-fp8"
+# The server and model the app is configured with, read from the same file,
+# so these tests check the configuration rather than a copy of it. A copy is
+# how a renamed model went unnoticed here.
+_LLM = load_config(Path(__file__).resolve().parents[2] / "configs" / "serve.yaml").llm
+BASE_URL = _LLM.base_url
+MODEL = _LLM.model
 
 BALANCE_TOOL = {
     "type": "function",
