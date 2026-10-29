@@ -164,7 +164,7 @@ class PostgresBank(Bank):
         timeouts = " ".join(
             part
             for part in (
-                conninfo_to_dict(conninfo).get("options") or "",
+                str(conninfo_to_dict(conninfo).get("options") or ""),
                 f"-c statement_timeout={statement_timeout_ms}",
                 f"-c lock_timeout={lock_timeout_ms}",
                 f"-c idle_in_transaction_session_timeout={max(statement_timeout_ms * 2, 10_000)}",
