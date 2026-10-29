@@ -375,7 +375,9 @@ def guard(
 
     unverifiable = unverifiable_figure(text)
     if unverifiable:
-        log.warning("guard suppressed an unverifiable figure %r in %r", unverifiable, text)
+        # The reply and the figure are the customer's business: DEBUG only.
+        log.warning("guard suppressed a reply quoting a currency the bank does not hold")
+        log.debug("the figure was %r, in %r", unverifiable, text)
         return fallback, True
 
     spoken = money_in_text(text)
@@ -387,8 +389,15 @@ def guard(
     if not unsourced:
         return text, False
 
+    # How many, not which: the figures are balances, and the reply is the
+    # customer's. Both are at DEBUG for whoever is reproducing it.
     log.warning(
-        "guard suppressed a reply: %s not in %s | text=%r",
+        "guard suppressed a reply: %d figure(s) no tool returned, %d sourced",
+        len(unsourced),
+        len(allowed),
+    )
+    log.debug(
+        "unsourced %s, sourced %s, in %r",
         [str(v) for v in unsourced],
         sorted(str(v) for v in allowed),
         text,
