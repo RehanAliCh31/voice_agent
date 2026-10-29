@@ -21,15 +21,17 @@ never come through this module.
 
 from __future__ import annotations
 
+import contextvars
 import random
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeVar
 
-from voicebot.errors import ErrorCode, ProviderUnavailable, VoicebotError
+from voicebot.errors import Cancelled, ErrorCode, ProviderUnavailable, VoicebotError
 from voicebot.utils.logging import get_logger
 
 log = get_logger("utils.resilience")
@@ -55,6 +57,72 @@ class Deadline:
     def cap(self, timeout: float) -> float:
         """`timeout`, or less if the deadline comes first."""
         return min(timeout, self.remaining())
+
+
+# The deadline of the turn in hand, and whether its caller is still there.
+# Set once at the top of a turn; every provider call below reads them, so
+# no signature has to carry them through.
+_DEADLINE: contextvars.ContextVar[Deadline | None] = contextvars.ContextVar(
+    "deadline", default=None
+)
+
+
+def current_deadline() -> Deadline | None:
+    return _DEADLINE.get()
+
+
+@contextmanager
+def deadline_context(seconds: float) -> Iterator[Deadline]:
+    """Everything inside shares one deadline, `seconds` from now."""
+    deadline = Deadline(seconds)
+    token = _DEADLINE.set(deadline)
+    try:
+        yield deadline
+    finally:
+        _DEADLINE.reset(token)
+
+
+class CancelToken:
+    """Set when the caller has gone -- closed the page, hung up, started over.
+
+    Work checks it at the points where stopping leaves nothing half done:
+    before the recogniser, before each model round, before the voice.
+    """
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self.reason = ""
+
+    def cancel(self, reason: str = "the caller left") -> None:
+        self.reason = reason
+        self._event.set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._event.is_set()
+
+    def check(self, stage: str) -> None:
+        if self._event.is_set():
+            raise Cancelled(f"{self.reason} before {stage}", component=stage)
+
+
+_CANCEL: contextvars.ContextVar[CancelToken | None] = contextvars.ContextVar("cancel", default=None)
+
+
+@contextmanager
+def cancel_context(token: CancelToken) -> Iterator[CancelToken]:
+    reset = _CANCEL.set(token)
+    try:
+        yield token
+    finally:
+        _CANCEL.reset(reset)
+
+
+def checkpoint(stage: str) -> None:
+    """Stop here if the caller has gone. Does nothing outside a turn."""
+    token = _CANCEL.get()
+    if token is not None:
+        token.check(stage)
 
 
 @dataclass(frozen=True)
@@ -209,23 +277,31 @@ def call_with_retry(
     policy: RetryPolicy | None = None,
     deadline: Deadline | None = None,
     circuit: CircuitBreaker | None = None,
-    sleep: Callable[[float], None] = time.sleep,
+    sleep: Callable[[float], None] | None = None,
+    error_type: type[VoicebotError] = ProviderUnavailable,
 ) -> T:
     """Call `attempt(timeout)` until it succeeds or there is no point trying again.
 
     `attempt` gets the timeout to use for that one try, already cut down to
     what the deadline allows, and must raise a VoicebotError when it fails --
-    anything else is a bug and goes straight up.
+    anything else is a bug and goes straight up. An open circuit is raised
+    as `error_type`, the provider's own error, so whatever catches that
+    provider's failures catches this one too.
     """
     # Imported here: observability imports this module's breakers for metrics.
     from voicebot.utils.observability import report
 
     policy = policy or RetryPolicy()
-    deadline = deadline or Deadline(timeout_s * policy.attempts + policy.cap_s * policy.attempts)
+    sleep = sleep or time.sleep
+    deadline = (
+        deadline
+        or current_deadline()
+        or Deadline(timeout_s * policy.attempts + policy.cap_s * policy.attempts)
+    )
 
     for number in range(policy.attempts):
         if circuit is not None and not circuit.allow():
-            raise ProviderUnavailable(
+            raise error_type(
                 f"{circuit.name} is failing; its circuit is open",
                 component=component,
                 code=ErrorCode.PROVIDER_UNAVAILABLE,
@@ -276,6 +352,6 @@ def call_with_retry(
             circuit.success()
         return result
 
-    raise ProviderUnavailable(
+    raise error_type(
         f"{component}: out of time before another attempt", component=component, retryable=False
     )

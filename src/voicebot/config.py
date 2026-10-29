@@ -3,7 +3,10 @@ resolved object is serialized into the run's result file."""
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -52,14 +55,22 @@ class LLMConfig(_Strict):
     base_url: str = ""
     model: str = ""
     api_key_env: str = "VOICEBOT_LLM_KEY"
-    timeout_s: float = 30.0
-    max_retries: int = 2
+    # One request. The caller is listening to silence for all of it: a long
+    # reply measured 9.4 s, so 12 s fails a dead server fast without cutting
+    # a slow answer off. The turn's own budget (resilience.turn_budget_s)
+    # bounds every round together.
+    timeout_s: float = Field(default=12.0, gt=0)
+    max_retries: int = Field(default=1, ge=0, le=3)
     temperature: float = 0.4
-    max_tokens: int = 200
+    max_tokens: int = Field(default=200, gt=0)
     # A model that keeps calling tools is stuck; an unbounded loop against a
     # shared endpoint is an outage rather than a bug.
-    max_tool_rounds: int = 4
-    max_turns: int = 20
+    max_tool_rounds: int = Field(default=4, ge=1)
+    max_turns: int = Field(default=20, ge=1)
+    # A second model to ask when the first is down. Empty: there is none,
+    # and the customer hears the "unavailable" sentence instead.
+    backup_base_url: str = ""
+    backup_model: str = ""
 
 
 class DatabaseConfig(_Strict):
@@ -75,7 +86,53 @@ class DatabaseConfig(_Strict):
     path: str = ":memory:"
     seed_on_create: bool = True
     # The most connections the PostgreSQL bank holds open at once.
-    pool_size: int = 10
+    pool_size: int = Field(default=10, ge=1)
+    # How long a request waits for a free connection before it is refused.
+    pool_timeout_s: float = Field(default=5.0, gt=0)
+    # The longest any one statement may run, and wait for a lock, on the
+    # server. Without them a hung query holds a caller's turn for ever.
+    statement_timeout_ms: int = Field(default=5000, gt=0)
+    lock_timeout_ms: int = Field(default=3000, gt=0)
+
+
+class ResilienceConfig(_Strict):
+    """How provider calls are retried and cut off. See voicebot.utils.resilience."""
+
+    # Every model round of one turn together. Past it the turn ends with a
+    # sentence rather than another round.
+    turn_budget_s: float = Field(default=20.0, gt=0)
+    retry_base_s: float = Field(default=0.2, ge=0)
+    retry_cap_s: float = Field(default=1.0, ge=0)
+    # A provider is skipped after this many failures in a row, for this long.
+    breaker_failures: int = Field(default=3, ge=1)
+    breaker_cooldown_s: float = Field(default=20.0, gt=0)
+
+
+class SessionConfig(_Strict):
+    """How long a conversation may run, and when it is handed to a person."""
+
+    ttl_s: float = Field(default=1800.0, gt=0)
+    max_sessions: int = Field(default=1000, ge=1)
+    # The longest conversation, in turns and in minutes. It is warned about
+    # `warn_turns` turns before the end, then closed politely.
+    max_turns: int = Field(default=60, ge=2)
+    max_minutes: float = Field(default=30.0, gt=0)
+    warn_turns: int = Field(default=3, ge=0)
+    # Turns in a row that end in a fallback -- not heard, not answered, a
+    # lookup failed -- before a colleague is asked to take over.
+    failure_limit: int = Field(default=3, ge=1)
+    # How long a second request for a conversation waits for the first.
+    busy_wait_s: float = Field(default=2.0, ge=0)
+
+
+class AuditConfig(_Strict):
+    """The record of every turn, written after the turn rather than during it."""
+
+    retries: int = Field(default=3, ge=0)
+    queue_size: int = Field(default=1000, ge=1)
+    # Where a turn the database would not take is kept, one JSON line each,
+    # so a failed save is never silently lost.
+    dead_letter: str = "data/dead_letter/turns.jsonl"
 
 
 class AppConfig(_Strict):
@@ -84,6 +141,54 @@ class AppConfig(_Strict):
     tts: TTSConfig = Field(default_factory=TTSConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    resilience: ResilienceConfig = Field(default_factory=ResilienceConfig)
+    session: SessionConfig = Field(default_factory=SessionConfig)
+    audit: AuditConfig = Field(default_factory=AuditConfig)
+
+
+ENV_PREFIX = "VOICEBOT__"
+
+
+def env_overrides(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Settings from the environment: VOICEBOT__LLM__TIMEOUT_S=8 sets llm.timeout_s.
+
+    Double underscores separate the levels, so a deployment can tighten a
+    timeout without editing a committed file. The value is checked like any
+    other.
+    """
+    environ = os.environ if environ is None else environ
+    found: dict[str, Any] = {}
+    for name, value in environ.items():
+        if not name.startswith(ENV_PREFIX):
+            continue
+        path = [part.lower() for part in name[len(ENV_PREFIX) :].split("__") if part]
+        if not path:
+            continue
+        node = found
+        for part in path[:-1]:
+            node = node.setdefault(part, {})
+            if not isinstance(node, dict):
+                raise ValueError(f"{name} sets a value inside one that is not a section")
+        node[path[-1]] = value
+    return found
+
+
+def _merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in over.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def build_config(raw: dict[str, Any], source: str = "defaults") -> AppConfig:
+    """`raw` with the environment's overrides applied, checked."""
+    try:
+        return AppConfig(**_merge(raw, env_overrides()))
+    except ValidationError as exc:
+        raise ValueError(f"Invalid config in {source}:\n{exc}") from exc
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -96,7 +201,4 @@ def load_config(path: str | Path) -> AppConfig:
         raise ValueError(
             f"Config file {path} must contain a YAML mapping, got {type(raw).__name__}"
         )
-    try:
-        return AppConfig(**raw)
-    except ValidationError as exc:
-        raise ValueError(f"Invalid config in {path}:\n{exc}") from exc
+    return build_config(raw, str(path))

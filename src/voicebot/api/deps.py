@@ -23,6 +23,7 @@ from voicebot.llm.base import FakeLLMClient, LLMClient, Reply
 from voicebot.pipeline.orchestrator import TurnResult, VoicePipeline
 from voicebot.tts.base import FakeTTSEngine, TTSEngine
 from voicebot.utils.logging import get_logger
+from voicebot.utils.resilience import configure_breakers
 from voicebot.utils.seed import set_seed
 
 log = get_logger("api.deps")
@@ -106,6 +107,7 @@ def build_services(config: AppConfig | None = None) -> Services:
     """
     config = config or AppConfig()
     set_seed(config.seed)
+    configure_breakers(config.resilience.breaker_failures, config.resilience.breaker_cooldown_s)
 
     # Config is strict about unknown keys; it has to be strict about unknown
     # values too. A single typo would otherwise start cleanly and answer every
@@ -134,19 +136,31 @@ def build_services(config: AppConfig | None = None) -> Services:
 
     llm: LLMClient
     if config.llm.engine == "openai":
-        from voicebot.llm.openai_client import OpenAIClient
+        from voicebot.llm.openai_client import FallbackLLMClient, OpenAIClient
 
         if not config.llm.base_url or not config.llm.model:
             raise ValueError("llm.engine is 'openai' but base_url or model is missing")
-        llm = OpenAIClient(
-            base_url=config.llm.base_url,
-            model=config.llm.model,
-            api_key=os.environ.get(config.llm.api_key_env) or None,
-            timeout_s=config.llm.timeout_s,
-            max_retries=config.llm.max_retries,
-            temperature=config.llm.temperature,
-            max_tokens=config.llm.max_tokens,
-        )
+
+        def client(base_url: str, model: str, name: str) -> OpenAIClient:
+            return OpenAIClient(
+                base_url=base_url,
+                model=model,
+                api_key=os.environ.get(config.llm.api_key_env) or None,
+                timeout_s=config.llm.timeout_s,
+                max_retries=config.llm.max_retries,
+                temperature=config.llm.temperature,
+                max_tokens=config.llm.max_tokens,
+                backoff_s=config.resilience.retry_base_s,
+                backoff_cap_s=config.resilience.retry_cap_s,
+                name=name,
+            )
+
+        llm = client(config.llm.base_url, config.llm.model, "llm")
+        if config.llm.backup_base_url and config.llm.backup_model:
+            log.info("a backup model is configured: %s", config.llm.backup_model)
+            llm = FallbackLLMClient(
+                llm, client(config.llm.backup_base_url, config.llm.backup_model, "llm-backup")
+            )
     else:
         # A scripted client that says one neutral thing, so the service starts
         # and the page loads with no endpoint configured.

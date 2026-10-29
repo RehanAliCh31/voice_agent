@@ -32,8 +32,10 @@ llm:
   base_url: http://localhost:8001/v1
   model: qwen3.6-35b-a3b-fp8
   api_key_env: VOICEBOT_LLM_KEY
-  timeout_s: 30.0
-  max_retries: 2
+  # One request; a long reply measured 9.4 s. The caller hears silence for
+  # all of it, so a dead server is given up on fast, and retried once.
+  timeout_s: 12.0
+  max_retries: 1
   temperature: 0.4
   # Replies are spoken aloud, so they are short by design.
   max_tokens: 200
@@ -48,3 +50,29 @@ database:
   path: data/bank.db
   seed_on_create: true
   pool_size: 10
+  # A free connection is waited for this long, and no statement may run, or
+  # wait for a lock, longer than this. A hung query must not hold a caller.
+  pool_timeout_s: 5.0
+  statement_timeout_ms: 5000
+  lock_timeout_ms: 3000
+
+# How provider calls are cut off and retried; see ERROR_HANDLING.md.
+resilience:
+  turn_budget_s: 20.0        # every model round of one turn, together
+  retry_base_s: 0.2          # backoff: up to 0.2 s, 0.4 s ... with jitter
+  retry_cap_s: 1.0
+  breaker_failures: 3        # a provider failing this often in a row is skipped
+  breaker_cooldown_s: 20.0   # for this long, then tried again
+
+# How long a conversation may run, and when a colleague takes over.
+session:
+  max_turns: 60
+  max_minutes: 30
+  warn_turns: 3
+  failure_limit: 3           # failed turns in a row before handing over
+  busy_wait_s: 2.0
+
+# The record of each turn is written after the turn, never during it.
+audit:
+  retries: 3
+  dead_letter: data/dead_letter/turns.jsonl

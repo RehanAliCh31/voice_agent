@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from voicebot.errors import ProviderUnavailable
+from voicebot.errors import ErrorCode, ProviderUnavailable
 
 
 class LLMUnavailable(ProviderUnavailable):
@@ -25,6 +25,16 @@ class LLMUnavailable(ProviderUnavailable):
     """
 
     default_component = "llm"
+
+
+class ContextOverflow(LLMUnavailable):
+    """The conversation is longer than the model can take.
+
+    Sending it again unchanged fails again, so it is not retried as it is:
+    the agent trims the history and asks once more.
+    """
+
+    default_code = ErrorCode.INVALID_INPUT
 
 
 @dataclass(frozen=True)
