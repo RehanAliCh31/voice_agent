@@ -18,8 +18,10 @@ switch language mid-conversation; the session's language is the tie-break.
 
 from __future__ import annotations
 
+import contextvars
 import re
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 
 from voicebot.assistant.asr_client import AsrClient, AsrError, Transcript
@@ -136,6 +138,10 @@ def _pct(share: float | None) -> str:
 class LanguageRouter:
     """Sends an utterance to the right recogniser, or to both, and decides."""
 
+    # Beyond the clients' own timeouts and retries, how long to wait for a
+    # recogniser before deciding without it.
+    wait_margin_s = 2.0
+
     def __init__(self, mode: str, en: AsrClient, ur: AsrClient) -> None:
         self.mode = mode
         self.en = en
@@ -152,18 +158,27 @@ class LanguageRouter:
             return Decision("ur", transcript.text, "Urdu only", {"ur": transcript})
 
         # Whisper is not told a language, so that it says which one it heard.
+        # Each job runs in the caller's context, so its log lines carry the
+        # caller's call id.
         jobs = {
-            "en": self._pool.submit(self.en.transcribe, wav, "en"),
-            "ur": self._pool.submit(self.ur.transcribe, wav, None),
+            "en": self._pool.submit(contextvars.copy_context().run, self.en.transcribe, wav, "en"),
+            "ur": self._pool.submit(contextvars.copy_context().run, self.ur.transcribe, wav, None),
         }
         results: dict[str, Transcript | None] = {}
         errors = []
         for name, job in jobs.items():
             try:
-                results[name] = job.result()
+                # The clients bound their own requests; this bounds the wait
+                # for them too, so a recogniser that hangs past its timeout
+                # cannot hold the turn.
+                results[name] = job.result(timeout=self._wait_s(name))
             except AsrError as exc:
                 results[name] = None
                 errors.append(str(exc))
+            except FutureTimeout:
+                job.cancel()
+                results[name] = None
+                errors.append(f"the {name} recogniser did not finish in time")
         if all(t is None for t in results.values()):
             raise AsrError("; ".join(errors))
         for error in errors:
@@ -172,5 +187,15 @@ class LanguageRouter:
         log.info("language %s: %s", decision.language, decision.reason)
         return decision
 
+    def _wait_s(self, name: str) -> float:
+        client = self.en if name == "en" else self.ur
+        timeout = float(getattr(client, "timeout_s", 10.0))
+        attempts = int(getattr(client, "retries", 1)) + 1
+        return timeout * attempts + self.wait_margin_s
+
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
+        for client in (self.en, self.ur):
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()

@@ -18,6 +18,9 @@ class TTSEngine(ABC):
     # getting; every server-side engine leaves it False.
     speaks_client_side: bool = False
 
+    def close(self) -> None:
+        """Release what the engine holds open. Called once, at shutdown."""
+
     @abstractmethod
     def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
         """Synthesize one reply."""

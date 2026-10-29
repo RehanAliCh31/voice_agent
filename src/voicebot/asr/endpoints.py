@@ -36,9 +36,6 @@ class EndpointsASREngine(ASREngine):
     def __init__(self, router: LanguageRouter, config: AsrConfig) -> None:
         self.router = router
         self.config = config
-        # The language of the last utterance, the tie-break when the
-        # recognisers cannot tell.
-        self._language: Language = "en"
 
     @classmethod
     def from_config(cls, config: AssistantConfig) -> EndpointsASREngine:
@@ -50,16 +47,17 @@ class EndpointsASREngine(ASREngine):
         )
         return cls(router, asr)
 
-    def transcribe(self, audio: AudioBuffer) -> Transcript:
+    def transcribe(self, audio: AudioBuffer, language: str | None = None) -> Transcript:
+        """`language`, the conversation's, breaks a tie when the recognisers cannot tell."""
         pcm = (np.clip(audio.samples, -1.0, 1.0) * 32767).astype(np.int16)
         pcm = to_rate(pcm, audio.sample_rate, RATE)
+        tie_break: Language = "ur" if language == "ur" else "en"
         try:
-            decision = self.router.transcribe(to_wav(pcm, RATE), self._language)
+            decision = self.router.transcribe(to_wav(pcm, RATE), tie_break)
         except AsrError as exc:
-            raise ASRUnavailable(str(exc)) from exc
+            raise ASRUnavailable(str(exc), code=exc.code, cause=exc) from exc
 
         language = decision.language
-        self._language = language
         heard = decision.heard.get(language) or Heard(decision.text, language, 0)
         checked = Heard(
             decision.text, heard.endpoint, heard.latency_ms, heard.language, heard.avg_logprob
@@ -88,3 +86,6 @@ class EndpointsASREngine(ASREngine):
             segments=(Segment(text=text, start_s=0.0, end_s=audio.duration_s),) if text else (),
             language=language,
         )
+
+    def close(self) -> None:
+        self.router.close()

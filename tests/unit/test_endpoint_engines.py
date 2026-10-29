@@ -115,14 +115,13 @@ def test_both_recognisers_down_is_unavailable_not_silence() -> None:
         engine.transcribe(_speech())
 
 
-def test_when_nothing_is_heard_the_last_language_stands() -> None:
-    engine = EndpointsASREngine(_router(URDU_BY_QWEN, URDU_BY_WHISPER), CONFIG.asr)
-    engine.transcribe(_speech())
+def test_when_nothing_is_heard_the_conversations_language_stands() -> None:
+    # Passed in by the caller, not remembered by the engine: the engine is
+    # shared by every conversation, and one caller's Urdu is not another's.
+    engine = EndpointsASREngine(_router(Heard("", "en", 1), Heard("", "ur", 1)), CONFIG.asr)
 
-    engine.router = _router(Heard("", "en", 1), Heard("", "ur", 1))
-    heard = engine.transcribe(_speech())
-
-    assert (heard.text, heard.language) == ("", "ur")
+    assert engine.transcribe(_speech(), language="ur").language == "ur"
+    assert engine.transcribe(_speech(), language="en").language == "en"
 
 
 # --- speaking ----------------------------------------------------------------

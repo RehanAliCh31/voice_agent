@@ -22,8 +22,10 @@ import httpx
 import numpy as np
 
 from voicebot.assistant.config import AsrEndpoint
+from voicebot.assistant.http_errors import from_status, from_transport
 from voicebot.errors import ProviderUnavailable
 from voicebot.utils.logging import get_logger
+from voicebot.utils.resilience import RetryPolicy, breaker, call_with_retry
 
 log = get_logger("assistant.asr")
 
@@ -56,6 +58,15 @@ def to_wav(audio: np.ndarray, sample_rate: int = 16000) -> bytes:
 
 
 class AsrClient:
+    """One office recogniser.
+
+    Called through call_with_retry with its own circuit breaker, so a timeout
+    or a 5xx is retried once with backoff, a 4xx never is, and a recogniser
+    that keeps failing is skipped for a while -- the other one then decides
+    alone. The response body is only ever logged at DEBUG: it can hold what
+    the customer said.
+    """
+
     def __init__(
         self,
         endpoint: AsrEndpoint,
@@ -67,6 +78,8 @@ class AsrClient:
         self.endpoint = endpoint
         self.name = name
         self.retries = retries
+        self.timeout_s = timeout_s
+        self.policy = RetryPolicy(attempts=max(0, retries) + 1)
         self._client = client or httpx.Client(timeout=httpx.Timeout(timeout_s, connect=5.0))
 
     def transcribe(self, wav: bytes, language: str | None) -> Transcript:
@@ -74,27 +87,32 @@ class AsrClient:
         form = {"model": self.endpoint.model, "response_format": self.endpoint.response_format}
         if language:
             form["language"] = language
-        for attempt in range(1, self.retries + 2):
+        what = f"the {self.name} recogniser"
+
+        def attempt(timeout: float) -> Transcript:
             start = time.perf_counter()
             try:
                 response = self._client.post(
-                    self.endpoint.url, files={"file": ("speech.wav", wav, "audio/wav")}, data=form
+                    self.endpoint.url,
+                    files={"file": ("speech.wav", wav, "audio/wav")},
+                    data=form,
+                    timeout=httpx.Timeout(timeout, connect=min(5.0, timeout)),
                 )
-                if response.status_code != 200:
-                    raise AsrError(f"HTTP {response.status_code}: {response.text[:200]}")
+            except httpx.HTTPError as exc:
+                raise from_transport(exc, what, AsrError, timeout) from exc
+            if response.status_code != 200:
+                raise from_status(response, what, AsrError)
+            try:
                 body = response.json()
-                if not isinstance(body, dict) or not isinstance(body.get("text"), str):
-                    raise AsrError(f"no text in the response: {str(body)[:200]}")
-            except (httpx.HTTPError, AsrError, ValueError) as exc:
-                if attempt > self.retries:
-                    raise AsrError(f"{self.name} recogniser: {type(exc).__name__}: {exc}") from exc
-                log.warning(
-                    "%s recogniser attempt %d failed (%s), retrying", self.name, attempt, exc
-                )
-                continue
-            segments = body.get("segments") or []
+            except ValueError as exc:
+                raise AsrError(f"{what} sent something that is not JSON", cause=exc) from exc
+            if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+                raise AsrError(f"{what} sent no text")
+            segments = body.get("segments")
             logprobs = [
-                s["avg_logprob"] for s in segments if isinstance(s.get("avg_logprob"), int | float)
+                s["avg_logprob"]
+                for s in (segments if isinstance(segments, list) else [])
+                if isinstance(s, dict) and isinstance(s.get("avg_logprob"), int | float)
             ]
             return Transcript(
                 text=body["text"].strip(),
@@ -103,7 +121,18 @@ class AsrClient:
                 language=body.get("language") if isinstance(body.get("language"), str) else None,
                 avg_logprob=float(np.mean(logprobs)) if logprobs else None,
             )
-        raise AssertionError("unreachable")
+
+        return call_with_retry(
+            attempt,
+            component=f"asr-{self.name}",
+            timeout_s=self.timeout_s,
+            policy=self.policy,
+            circuit=breaker(f"asr-{self.name}"),
+            error_type=AsrError,
+        )
+
+    def close(self) -> None:
+        self._client.close()
 
 
 _PUNCTUATION = re.compile(r"[^\w\s]", re.UNICODE)

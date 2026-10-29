@@ -18,7 +18,10 @@ asr:
     url: http://localhost:8104/v1/audio/transcriptions
     model: whisper-urdu
     response_format: verbose_json    # carries the language heard and a confidence
-  timeout_s: 10
+  # Both answered a short question in 0.3-0.6 s, measured. A recogniser that
+  # takes 6 s is down, and the other one decides alone; a timeout or 5xx is
+  # retried once with backoff, a 4xx never.
+  timeout_s: 6
   retries: 1
   min_avg_logprob: -0.8
   # What each recogniser makes of silence and noise, measured. A transcript
@@ -45,7 +48,9 @@ tts:
     voice: assistant-pk
     first_chunk_words: 8
     chunk_growth: 0
-  timeout_s: 20
+  # A long Urdu reply took 5.7 s whole; the assistant asks for a sentence
+  # at a time. Past 12 s the voice is down and the fallback plays instead.
+  timeout_s: 12
   retries: 1
   trim_silence: true
 
@@ -55,7 +60,8 @@ llm:
   api_key_env: VOICEBOT_LLM_KEY
   max_tokens: 150
   temperature: 0.4
-  timeout_s: 20
+  # Per read: the longest the stream may go quiet, first token included.
+  timeout_s: 12
   retries: 1
   stream: true
   disable_thinking: true

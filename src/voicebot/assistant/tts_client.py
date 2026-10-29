@@ -19,8 +19,10 @@ import httpx
 import numpy as np
 
 from voicebot.assistant.config import TtsEndpoint
+from voicebot.assistant.http_errors import from_status, from_transport
 from voicebot.errors import ProviderUnavailable
 from voicebot.utils.logging import get_logger
+from voicebot.utils.resilience import RetryPolicy, breaker, call_with_retry
 
 log = get_logger("assistant.tts")
 
@@ -96,6 +98,8 @@ def trim_silence(
 
 
 class TtsClient:
+    """One office voice, called the same way as the recognisers: see AsrClient."""
+
     def __init__(
         self,
         endpoint: TtsEndpoint,
@@ -109,6 +113,8 @@ class TtsClient:
         self.name = name
         self.retries = retries
         self.trim = trim
+        self.timeout_s = timeout_s
+        self.policy = RetryPolicy(attempts=max(0, retries) + 1)
         self._client = client or httpx.Client(timeout=httpx.Timeout(timeout_s, connect=5.0))
 
     def synthesize(self, text: str) -> Speech:
@@ -120,19 +126,35 @@ class TtsClient:
         if self.endpoint.voice:
             body["voice"] = self.endpoint.voice
         body.update(self.endpoint.extra)
-        for attempt in range(1, self.retries + 2):
+        what = f"the {self.name} voice"
+
+        def attempt(timeout: float) -> Speech:
             start = time.perf_counter()
             try:
-                response = self._client.post(self.endpoint.url, json=body)
-                if response.status_code != 200:
-                    raise TtsError(f"HTTP {response.status_code}: {response.text[:200]}")
-                samples, rate = parse_wav(response.content)
-            except (httpx.HTTPError, TtsError) as exc:
-                if attempt > self.retries:
-                    raise TtsError(f"{self.name} voice: {type(exc).__name__}: {exc}") from exc
-                log.warning("%s voice attempt %d failed (%s), retrying", self.name, attempt, exc)
-                continue
+                response = self._client.post(
+                    self.endpoint.url,
+                    json=body,
+                    timeout=httpx.Timeout(timeout, connect=min(5.0, timeout)),
+                )
+            except httpx.HTTPError as exc:
+                raise from_transport(exc, what, TtsError, timeout) from exc
+            if response.status_code != 200:
+                raise from_status(response, what, TtsError)
+            samples, rate = parse_wav(response.content)
+            if not len(samples):
+                raise TtsError(f"{what} sent a WAV with no sound in it")
             if self.trim:
                 samples = trim_silence(samples, rate)
             return Speech(samples, rate, text, round((time.perf_counter() - start) * 1000))
-        raise AssertionError("unreachable")
+
+        return call_with_retry(
+            attempt,
+            component=f"tts-{self.name}",
+            timeout_s=self.timeout_s,
+            policy=self.policy,
+            circuit=breaker(f"tts-{self.name}"),
+            error_type=TtsError,
+        )
+
+    def close(self) -> None:
+        self._client.close()

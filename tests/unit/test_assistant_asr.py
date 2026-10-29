@@ -101,9 +101,9 @@ def test_a_timeout_is_retried_once() -> None:
 @pytest.mark.parametrize(
     ("response", "message"),
     [
-        (httpx.Response(400, json={"error": "Invalid or unsupported audio file."}), "HTTP 400"),
-        (httpx.Response(200, content=b"not json"), "ValueError|JSONDecodeError"),
+        (httpx.Response(200, content=b"not json"), "not JSON"),
         (httpx.Response(200, json={"no": "text"}), "no text"),
+        (httpx.Response(503), "answered 503"),
     ],
 )
 def test_bad_answers_are_errors_after_the_retry(response: httpx.Response, message: str) -> None:
@@ -116,6 +116,20 @@ def test_bad_answers_are_errors_after_the_retry(response: httpx.Response, messag
     with pytest.raises(AsrError, match=message):
         AsrClient(QWEN, "en", 5, 1, _client(handler)).transcribe(b"w", "en")
     assert len(calls) == 2
+
+
+def test_a_refused_request_is_not_retried() -> None:
+    # A 400 is the request's fault and fails identically every time: sending
+    # it again only makes the caller wait longer for the same answer.
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(400, json={"error": "Invalid or unsupported audio file."})
+
+    with pytest.raises(AsrError, match="answered 400") as raised:
+        AsrClient(QWEN, "en", 5, 1, _client(handler)).transcribe(b"w", "en")
+    assert len(calls) == 1 and not raised.value.retryable
 
 
 # --- what the recognisers say about silence (measured) ------------------------------

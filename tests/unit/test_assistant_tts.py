@@ -115,13 +115,27 @@ def test_a_failure_is_retried_once_then_reported() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(1)
-        return httpx.Response(400, json={"error": "response_format must be pcm or wav"})
+        return httpx.Response(503, json={"error": "overloaded"})
 
-    with pytest.raises(TtsError, match="HTTP 400"):
+    with pytest.raises(TtsError, match="answered 503"):
         TtsClient(
             TtsEndpoint(url="http://t/x", model="m"), "en", 5, 1, client=_client(handler)
         ).synthesize("Hi")
     assert len(calls) == 2
+
+
+def test_a_refused_request_is_reported_without_a_retry() -> None:
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(400, json={"error": "response_format must be pcm or wav"})
+
+    with pytest.raises(TtsError, match="answered 400"):
+        TtsClient(
+            TtsEndpoint(url="http://t/x", model="m"), "en", 5, 1, client=_client(handler)
+        ).synthesize("Hi")
+    assert len(calls) == 1
 
 
 def test_a_timeout_then_success_is_a_success() -> None:

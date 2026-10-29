@@ -19,8 +19,16 @@ class ASREngine(ABC):
     """Turns audio into text."""
 
     @abstractmethod
-    def transcribe(self, audio: AudioBuffer) -> Transcript:
-        """Transcribe one utterance."""
+    def transcribe(self, audio: AudioBuffer, language: str | None = None) -> Transcript:
+        """Transcribe one utterance.
+
+        `language` is the conversation's own language, for an engine that can
+        use it as a tie-break. Passed per call, never kept: the engine is
+        shared by every caller, and one caller's Urdu is not another's.
+        """
+
+    def close(self) -> None:
+        """Release what the engine holds open. Called once, at shutdown."""
 
 
 @register("asr", "fake")
@@ -31,7 +39,7 @@ class FakeASREngine(ASREngine):
         self.fixed_text = fixed_text
         self.confidence = confidence
 
-    def transcribe(self, audio: AudioBuffer) -> Transcript:
+    def transcribe(self, audio: AudioBuffer, language: str | None = None) -> Transcript:
         return Transcript(
             text=self.fixed_text,
             confidence=self.confidence,
