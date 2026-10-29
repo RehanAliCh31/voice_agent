@@ -50,7 +50,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --extra-index-url https://download.pytorch.org/whl/cpu \
-            -e ".[dev,serve]" -c constraints.txt
+            -e ".[dev,serve,assistant]" -c constraints.txt
+
+      - name: Assistant models
+        # The wake word and voice activity models, about 6 MB and each
+        # checked against its pinned hash, so their tests run on the real
+        # files rather than being skipped.
+        run: python -m voicebot.assistant setup
 
       - name: Lint
         run: ruff check src tests scripts
