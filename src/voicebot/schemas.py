@@ -53,3 +53,6 @@ class Transcript:
     confidence: float
     duration_s: float
     segments: tuple[Segment, ...] = ()
+    # "en" or "ur" when the recogniser says which it heard; None when it
+    # cannot tell, and the text's own script decides.
+    language: str | None = None

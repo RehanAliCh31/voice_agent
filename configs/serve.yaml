@@ -10,19 +10,22 @@
 seed: 42
 
 asr:
-  engine: whisper
-  # base.en rather than small: this host has two cores and no CUDA, and the
-  # English-only model is markedly faster for the same transcript quality on
-  # clear speech.
+  # The office recognisers, English and Urdu (qwen3-asr and whisper-urdu),
+  # both hearing every question so the language is decided each turn. Their
+  # addresses are in the file named by `endpoints`.
+  # `engine: whisper` goes back to the local, English-only model below.
+  engine: endpoints
+  endpoints: configs/assistant.yaml
   model_name: openai/whisper-base.en
   device: cpu
   language: en
 
 tts:
-  # The page speaks, using the browser's own synthesiser. VITS on this host
-  # took 10-15s a turn and had to be held in memory alongside Whisper.
-  # Set this to `vits` for a recording where the neural voice is the point.
-  engine: browser
+  # The office voices: qwen3-tts for English, OmniVoice for Urdu, chosen by
+  # the reply's own script and played by the page. `engine: browser` goes back
+  # to the browser's own synthesiser, which has no Urdu voice.
+  engine: endpoints
+  endpoints: configs/assistant.yaml
 
 llm:
   engine: openai

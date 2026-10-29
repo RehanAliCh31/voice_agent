@@ -22,6 +22,9 @@ class ASRConfig(_Strict):
     model_name: str = "openai/whisper-small"
     device: str = "auto"
     language: str = "en"
+    # `engine: endpoints` uses the office recognisers, English and Urdu, as
+    # listed in this file -- the one place their addresses are kept.
+    endpoints: str = "configs/assistant.yaml"
 
 
 # Engines default to "fake" so a bare AppConfig() downloads nothing and
@@ -32,6 +35,9 @@ class TTSConfig(_Strict):
     speaker_index: int = 0
     sample_rate: int = 16000
     device: str = "auto"
+    # `engine: endpoints` uses the office voices, English and Urdu, as listed
+    # in this file.
+    endpoints: str = "configs/assistant.yaml"
 
 
 class LLMConfig(_Strict):

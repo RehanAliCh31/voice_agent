@@ -110,9 +110,9 @@ def build_services(config: AppConfig | None = None) -> Services:
     # Config is strict about unknown keys; it has to be strict about unknown
     # values too. A single typo would otherwise start cleanly and answer every
     # question with "the model isn't configured yet".
-    _check_engine("asr", config.asr.engine, {"whisper", "fake"})
+    _check_engine("asr", config.asr.engine, {"whisper", "endpoints", "fake"})
     _check_engine("llm", config.llm.engine, {"openai", "fake"})
-    _check_engine("tts", config.tts.engine, {"vits", "browser", "fake"})
+    _check_engine("tts", config.tts.engine, {"vits", "browser", "endpoints", "fake"})
     _check_engine("database", config.database.engine, {"sqlite", "postgres"})
 
     asr: ASREngine
@@ -124,6 +124,11 @@ def build_services(config: AppConfig | None = None) -> Services:
             device=config.asr.device,
             language=config.asr.language,
         )
+    elif config.asr.engine == "endpoints":
+        from voicebot.asr.endpoints import EndpointsASREngine
+        from voicebot.assistant.config import load_assistant_config
+
+        asr = EndpointsASREngine.from_config(load_assistant_config(config.asr.endpoints))
     else:
         asr = FakeASREngine()
 
@@ -156,6 +161,11 @@ def build_services(config: AppConfig | None = None) -> Services:
         from voicebot.tts.browser import BrowserTTSEngine
 
         tts = BrowserTTSEngine()
+    elif config.tts.engine == "endpoints":
+        from voicebot.assistant.config import load_assistant_config
+        from voicebot.tts.endpoints import EndpointsTTSEngine
+
+        tts = EndpointsTTSEngine.from_config(load_assistant_config(config.tts.endpoints))
     else:
         tts = FakeTTSEngine()
 

@@ -442,6 +442,31 @@ def test_an_unknown_engine_name_is_refused_rather_than_silently_faked() -> None:
             build_services(config=config)
 
 
+def test_the_office_endpoints_build_as_the_engines() -> None:
+    # Building opens no connection, so this needs no network: the office
+    # recognisers and voices are first called on the first turn.
+    from voicebot.api.deps import build_services
+    from voicebot.asr.endpoints import EndpointsASREngine
+    from voicebot.config import AppConfig, ASRConfig, TTSConfig
+    from voicebot.tts.endpoints import EndpointsTTSEngine
+
+    services = build_services(
+        config=AppConfig(asr=ASRConfig(engine="endpoints"), tts=TTSConfig(engine="endpoints"))
+    )
+
+    assert isinstance(services.asr, EndpointsASREngine)
+    assert isinstance(services.tts, EndpointsTTSEngine)
+    # The page plays what the office voice made, rather than speaking itself.
+    assert services.speaks_client_side is False
+
+
+def test_the_serving_config_uses_the_office_endpoints() -> None:
+    from voicebot.config import load_config
+
+    config = load_config("configs/serve.yaml")
+    assert (config.asr.engine, config.tts.engine) == ("endpoints", "endpoints")
+
+
 def test_the_committed_default_config_still_loads() -> None:
     # configs/app.yaml is what the docs point at; it must not rot.
     from voicebot.config import load_config

@@ -8,6 +8,10 @@ from voicebot.schemas import AudioBuffer, Segment, Transcript
 from voicebot.utils.registry import register
 
 
+class ASRUnavailable(Exception):
+    """The recogniser could not be reached. Not the same as hearing nothing."""
+
+
 class ASREngine(ABC):
     """Turns audio into text."""
 
