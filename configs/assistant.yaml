@@ -1,0 +1,129 @@
+# The hands-free assistant: every service it talks to, and every threshold.
+#
+#   python -m voicebot.assistant check    # validates this file and every endpoint
+#   python -m voicebot.assistant run
+#
+# No secrets here, so this file is safe to commit. The LLM accepts any key or
+# none; if one is ever needed it is read from the variable named below.
+# Another file can be used instead with VOICEBOT_ASSISTANT_CONFIG=path.
+#
+# What each service was measured to do is in docs/assistant/endpoints.md.
+
+asr:
+  en:
+    url: http://localhost:8092/v1/audio/transcriptions
+    model: qwen3-asr
+    response_format: json            # verbose_json is refused by qwen3-asr
+  ur:
+    url: http://localhost:8104/v1/audio/transcriptions
+    model: whisper-urdu
+    response_format: verbose_json    # carries the language heard and a confidence
+  timeout_s: 10
+  retries: 1
+  min_avg_logprob: -0.8
+  # What each recogniser makes of silence and noise, measured. A transcript
+  # that is one of these, from less speech than phantom_max_speech_ms, is
+  # dropped rather than answered.
+  phantom_max_speech_ms: 600
+  phantom_phrases:
+    en: ["i", "okay", "ok", "you", "thank you", "thanks for watching", "so", "uh", "um", "hmm"]
+    ur: ["ملتے ہیں", "ملتی ہے", "شکریہ", "thank you", "you"]
+
+# Nothing is heard until the first piece of a reply is synthesised, so it is
+# cut short (first_chunk_words), and for English the next pieces grow by
+# chunk_growth so each is ready before the last one ends. Urdu's voice costs
+# ~1.1 s per request whatever its length, so it goes to whole sentences.
+tts:
+  en:
+    url: http://localhost:8094/v1/audio/speech
+    model: qwen3-tts                 # the server lists itself as Qwen3-TTS-12Hz-0.6B-Base; both names work
+    first_chunk_words: 5
+    chunk_growth: 1.6
+  ur:
+    url: http://localhost:8091/v1/audio/speech
+    model: k2-fsa/OmniVoice
+    voice: assistant-pk
+    first_chunk_words: 8
+    chunk_growth: 0
+  timeout_s: 20
+  retries: 1
+  trim_silence: true
+
+llm:
+  url: http://localhost:8001/v1/chat/completions
+  model: qwen3.6-35b-a3b-fp8
+  api_key_env: VOICEBOT_LLM_KEY
+  max_tokens: 150
+  temperature: 0.4
+  timeout_s: 20
+  retries: 1
+  stream: true
+  disable_thinking: true
+  history_turns: 6
+  system_prompts:
+    en: >-
+      You are a polite, helpful voice assistant for a bank, talking with a customer.
+      Reply in English, in one to three short sentences that sound natural when spoken,
+      and keep the whole reply under 40 words.
+      Never use markdown, lists, emojis or links: everything you write is read aloud.
+      Never ask for, or repeat, a PIN, password, OTP, card number or account number.
+      For anything sensitive, tell the customer to use the bank's official app,
+      website or helpline.
+    ur: >-
+      آپ ایک مؤدب اور مددگار بینک اسسٹنٹ ہیں جو ایک صارف سے بات کر رہے ہیں۔
+      صرف اردو میں، اردو رسم الخط میں، ایک سے تین مختصر جملوں میں جواب دیں جو بولنے میں فطری لگیں،
+      اور پورا جواب چالیس الفاظ سے کم رکھیں۔
+      کوئی مارک ڈاؤن، فہرست، ایموجی یا لنک استعمال نہ کریں، کیونکہ آپ کا جواب بول کر سنایا جائے گا۔
+      کبھی بھی پن، پاس ورڈ، او ٹی پی، کارڈ نمبر یا اکاؤنٹ نمبر نہ مانگیں اور نہ دہرائیں۔
+      حساس کاموں کے لیے صارف سے کہیں کہ وہ بینک کی آفیشل ایپ، ویب سائٹ یا ہیلپ لائن استعمال کرے۔
+
+audio:
+  sample_rate: 16000
+  input_device:                      # a name, part of one, or an index from `devices`
+  output_device:
+  queue_frames: 64
+
+wake_word:
+  phrase: Hey Jarvis
+  model: hey_jarvis_v0.1             # openWakeWord's pre-trained model: non-commercial licence
+  models_dir: models/openwakeword
+  threshold: 0.5
+  cooldown_ms: 1500
+
+vad:
+  model_path: models/silero/silero_vad.onnx
+  threshold: 0.5
+  neg_threshold: 0.35
+  pre_roll_ms: 300
+  min_speech_ms: 250
+  end_silence_ms: 800
+  max_utterance_s: 20                # Whisper reads at most 30 s at a time
+  no_speech_timeout_s: 6
+
+session:
+  language: auto                     # auto, en or ur
+  follow_up_s: 8
+  max_session_s: 300
+  earcon: true
+  echo_mode: speakers                # speakers or headphones
+  echo_tail_ms: 300
+  barge_in_min_speech_ms: 300
+  post_wake_ignore_ms: 0
+  phrases:
+    fallback:
+      en: Sorry, I'm having trouble right now. Please try again in a moment.
+      ur: معذرت، اس وقت مجھے کچھ دشواری ہو رہی ہے۔ براہِ کرم تھوڑی دیر بعد دوبارہ کوشش کریں۔
+    goodbye:
+      en: Goodbye, and have a good day.
+      ur: اللہ حافظ۔
+  commands:
+    stop:
+      en: ["stop", "cancel", "never mind", "nevermind", "be quiet", "quiet", "shut up", "stop it"]
+      ur: ["رک جاؤ", "رکو", "بس", "بس کرو", "بند کرو", "خاموش", "خاموش ہو جاؤ", "چپ", "سٹاپ", "اسٹاپ"]
+    goodbye:
+      en: ["goodbye", "good bye", "bye", "bye bye", "that's all", "that is all", "thank you goodbye"]
+      ur: ["خدا حافظ", "اللہ حافظ", "بائے", "بائے بائے", "بس شکریہ", "شکریہ بس"]
+
+debug:
+  save_audio: false                  # microphone audio is never written to disk unless this is on
+  audio_dir: debug_audio
