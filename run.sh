@@ -94,6 +94,53 @@ print(load_config('$CONFIG').llm.base_url)
 
         To work on the interface without it:  ./run.sh --fake"
     fi
+
+    # The bank is in PostgreSQL when the config says so. A wrong password or
+    # a server that is not running should stop here, in the server's own
+    # words, rather than as a crash on the first request. The last line the
+    # check prints is its verdict; anything above it is logging.
+    say "Checking the database"
+    DB_CHECK=$("$PYTHON" - "$CONFIG" 2>&1 <<'PY' | tail -n 1
+import importlib.util
+import sys
+from pathlib import Path
+
+from voicebot.config import load_config
+
+config = load_config(sys.argv[1])
+if config.database.engine != "postgres":
+    print(f"sqlite {config.database.path}")
+    sys.exit(0)
+if importlib.util.find_spec("psycopg") is None:
+    print("missing-driver")
+    sys.exit(0)
+
+import psycopg
+
+from voicebot.bank.postgres_bank import conninfo_from_env, describe
+from voicebot.utils.env import load_env_file
+
+load_env_file(Path(".env"))
+info = conninfo_from_env()
+where = describe(info)
+try:
+    psycopg.connect(info).close()
+except psycopg.Error as exc:
+    print(f"unreachable {where}: {str(exc).strip().splitlines()[-1]}")
+    sys.exit(0)
+print(f"postgres {where}")
+PY
+)
+    case "$DB_CHECK" in
+        sqlite*) ok "bank in SQLite: ${DB_CHECK#sqlite }" ;;
+        postgres*) ok "bank in PostgreSQL: ${DB_CHECK#postgres }" ;;
+        missing-driver) die "$CONFIG uses PostgreSQL, but psycopg is not installed:
+        .venv/Scripts/python -m pip install -e \".[dev,serve]\" -c constraints.txt" ;;
+        *) die "Cannot open the PostgreSQL bank: ${DB_CHECK#unreachable }
+
+        Check VOICEBOT_DB_* in .env, and that PostgreSQL is running.
+        To use the SQLite file instead, set database.engine: sqlite in $CONFIG." ;;
+    esac
     export VOICEBOT_CONFIG="$CONFIG"
 fi
 

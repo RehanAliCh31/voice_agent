@@ -38,5 +38,10 @@ llm:
   max_turns: 20
 
 database:
+  # PostgreSQL, reached with VOICEBOT_DB_* from the environment or .env.
+  # To go back to SQLite, set `engine: sqlite`: `path` below is the untouched
+  # file the data was migrated from, and it is read again exactly as before.
+  engine: postgres
   path: data/bank.db
   seed_on_create: true
+  pool_size: 10

@@ -4,17 +4,25 @@
 # them. CPU wheels for torch throughout: nothing here uses a GPU, and the
 # CUDA build is an order of magnitude larger.
 #
-# The model endpoint is reached over the network at runtime, so a container
-# needs to be able to see it:
+# The model endpoint and the PostgreSQL bank are both reached over the
+# network at runtime, so a container needs to be able to see them:
 #
 #     docker build -t voicebot .
 #     docker run --rm -p 8000:8000 \
 #       -e VOICEBOT_CONFIG=configs/serve.yaml \
+#       --env-file .env -e VOICEBOT_DB_HOST=host.docker.internal \
 #       -v voicebot-data:/app/data \
 #       voicebot
 #
-# The volume matters. Without it the bank is recreated from seed on every
-# run, and the audit log goes with it.
+# `--env-file .env` passes the database settings in at run time; .env is in
+# .dockerignore, so the password is never baked into the image.
+# `host.docker.internal` is the machine running Docker, which is where a
+# local PostgreSQL is -- inside the container, localhost is the container.
+# PostgreSQL must then accept that connection: `listen_addresses` in
+# postgresql.conf and a host line in pg_hba.conf.
+#
+# The volume holds the downloaded models, and the SQLite file if the config
+# is switched back to `engine: sqlite`.
 
 FROM python:3.12-slim AS build
 
@@ -28,9 +36,7 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/venv/bin/pip install --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cpu \
-        . -c constraints.txt \
-    && /opt/venv/bin/pip install --no-cache-dir \
-        fastapi uvicorn python-multipart -c constraints.txt
+        ".[serve]" -c constraints.txt
 
 FROM python:3.12-slim
 
