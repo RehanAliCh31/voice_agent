@@ -26,6 +26,7 @@ from voicebot.llm.prompts import (
     in_language,
 )
 from voicebot.llm.tools import TOOL_SCHEMAS
+from voicebot.messages import say
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
 TO_ALI = {"amount_cents": 40_000, "payee": "ali", "from_account": "checking"}
@@ -369,7 +370,8 @@ def test_an_outage_after_a_tool_ran_still_reports_it(bank: SqliteBank) -> None:
     out = Agent(DiesAfterOneRound(), executor).handle("confirm it", Conversation("s1"))
 
     assert bank.balance("checking") == 243_350  # the money moved
-    assert out.text == UNAVAILABLE
+    # Told it went through -- not "try again", which invites a second transfer.
+    assert out.text == say("action_done", "en") and out.fallback == "action_done"
     assert [call.name for call in out.tool_calls] == ["transfer_money"]
     assert out.tool_results and out.tool_results[0]["status"] == "done"
 

@@ -36,6 +36,7 @@ from voicebot.bank.base import (
     unknown_payee_message,
     unknown_purpose_message,
 )
+from voicebot.errors import DatabaseError, ToolError
 from voicebot.llm.base import ToolCall
 from voicebot.llm.prompts import PIN_NEEDED
 from voicebot.llm.tools import (
@@ -45,6 +46,7 @@ from voicebot.llm.tools import (
     PIN_GUARDED,
 )
 from voicebot.utils.logging import get_logger
+from voicebot.utils.observability import report
 
 log = get_logger("agent.executor")
 
@@ -67,6 +69,15 @@ class ToolOutcome:
 
     result: dict[str, Any]
     sourced_cents: tuple[int, ...] = ()
+    # Set when the tool itself failed, as the message the loop then says --
+    # never the model's to put into its own words, because a model told
+    # "the database is down" goes on to guess. TOOL_FAILED: nothing was done.
+    # OUTCOME_UNKNOWN: a write was under way and may or may not have landed.
+    failed: str | None = None
+
+
+TOOL_FAILED = "tool_failed"
+OUTCOME_UNKNOWN = "outcome_unknown"
 
 
 @dataclass
@@ -94,6 +105,24 @@ def _error(message: str, hint: str) -> ToolOutcome:
     # No sourced figures: an error message may quote the model's own
     # argument back, and nothing in it came from the database.
     return ToolOutcome({"error": message, "hint": hint})
+
+
+def _require_flag(value: Any, field: str, default: bool = False) -> bool:
+    """A yes or no, and nothing that merely looks like one.
+
+    `bool("false")` is True. A model that sends the word rather than the
+    literal would otherwise report fraud, order a card or switch a control on
+    when it meant the opposite.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "yes"):
+        return True
+    if isinstance(value, str) and value.strip().lower() in ("false", "no"):
+        return False
+    raise ValueError(f"{field} must be true or false.")
 
 
 def _require_positive_int(value: Any, field: str) -> int:
@@ -147,6 +176,9 @@ class ToolExecutor:
         # in step; the executor never advances it itself.
         self.session_id = session_id
         self.turn_index = 0
+        # The case this conversation was handed to a person under, once it
+        # has been. Asking again returns the same one.
+        self.handed_off: tuple[str, str] | None = None
         self.pending: PendingAction | None = None
         # Counts balance-changing writes. A figure reported before a write is
         # stale after it, and the count is how a caller knows. Kept here
@@ -168,24 +200,25 @@ class ToolExecutor:
         arguments = {k: v for k, v in tool_call.arguments.items() if k != "confirmation_token"}
         token = tool_call.arguments.get("confirmation_token")
 
+        # A write is under way when a gated tool comes back with its token,
+        # or for the one ungated tool that writes. A failure part-way through
+        # one of those may or may not have landed, and saying "nothing has
+        # changed" then could make a customer pay twice.
+        writing = tool_call.name == "hand_off" or (tool_call.name in CONFIRMING and bool(token))
         try:
             if tool_call.name in CONFIRMING:
                 return self._gated(tool_call.name, arguments, token, handler)
             return handler(arguments)
-        except (ValueError, KeyError) as exc:
-            return _error(str(exc), "Check the tool's parameters and try again.")
-        except (sqlite3.Error, StorageError) as exc:
-            # A CHECK violation from two concurrent writes, say. The customer
-            # hears a refusal; they do not meet a 500.
-            log.warning("database refused %s: %s", tool_call.name, exc)
-            return _error(
-                "I couldn't complete that against your account just now.",
-                "The database refused the write. Nothing has changed.",
-            )
         except BankError as exc:
             # The bank writes its refusals to be read aloud, so the message is
             # the hint: it says both what went wrong and what is allowed.
             return _error(str(exc), str(exc))
+        except (ValueError, KeyError) as exc:
+            return _error(str(exc), "Check the tool's parameters and try again.")
+        except (sqlite3.Error, StorageError) as exc:
+            return self._storage_failed(tool_call.name, exc, writing)
+        except Exception as exc:  # a bug in a tool must not leave the turn half-built
+            return self._crashed(tool_call.name, exc, writing)
 
     def confirm(self) -> ToolOutcome:
         """Perform the pending action. Called by the Yes button, not the model."""
@@ -209,20 +242,53 @@ class ToolExecutor:
             # Yes was not enough. The action stays pending while the keypad is
             # on screen, so cancelling the PIN leaves the customer exactly
             # where they were rather than losing what they agreed to.
-            return self._needs_pin(pending)
+            try:
+                return self._needs_pin(pending)
+            except (sqlite3.Error, StorageError) as exc:
+                # Which card to ask about could not be read; nothing ran, and
+                # the action is still there to approve once it can be.
+                return self._storage_failed(pending.tool, exc, writing=False)
         self.pending = None
         try:
             return self._handlers()[pending.tool](pending.arguments)
+        except BankError as exc:
+            return _error(str(exc), str(exc))
         except (ValueError, KeyError) as exc:
             return _error(str(exc), "The pending action could not be completed.")
         except (sqlite3.Error, StorageError) as exc:
-            log.warning("database refused %s: %s", pending.tool, exc)
-            return _error(
-                "I couldn't complete that against your account just now.",
-                "The database refused the write. Nothing has changed.",
+            return self._storage_failed(pending.tool, exc, writing=True)
+        except Exception as exc:  # a bug in a tool must not leave the turn half-built
+            return self._crashed(pending.tool, exc, writing=True)
+
+    def _storage_failed(self, tool: str, exc: Exception, writing: bool) -> ToolOutcome:
+        """The database failed under a tool: a refusal for a read, uncertainty for a write."""
+        report(DatabaseError(f"{tool}: {type(exc).__name__}", component="bank", cause=exc))
+        return self._failure(writing)
+
+    def _crashed(self, tool: str, exc: Exception, writing: bool) -> ToolOutcome:
+        log.error("%s raised %s", tool, type(exc).__name__, exc_info=exc)
+        report(ToolError(f"{tool} raised {type(exc).__name__}", component=tool, cause=exc))
+        return self._failure(writing)
+
+    def _failure(self, writing: bool) -> ToolOutcome:
+        if writing:
+            # It may have happened. Every figure read before it is treated as
+            # stale, the same as after a write that is known to have landed.
+            self.writes += 1
+            return ToolOutcome(
+                {
+                    "error": "It could not be confirmed whether that went through.",
+                    "hint": "Do not repeat it. The customer should check their balance first.",
+                },
+                failed=OUTCOME_UNKNOWN,
             )
-        except BankError as exc:
-            return _error(str(exc), str(exc))
+        return ToolOutcome(
+            {
+                "error": "That could not be looked up just now.",
+                "hint": "Nothing was changed. Do not guess the answer.",
+            },
+            failed=TOOL_FAILED,
+        )
 
     def pin_accepted(self) -> None:
         """Record that a PIN was given and the bank accepted it.
@@ -392,8 +458,10 @@ class ToolExecutor:
                 raise ValueError(f"I don't have a card ending {last4}. I have: {known}.")
             return {
                 "last4": last4,
-                "report_fraud": bool(arguments.get("report_fraud", False)),
-                "order_replacement": bool(arguments.get("order_replacement", False)),
+                "report_fraud": _require_flag(arguments.get("report_fraud"), "report_fraud"),
+                "order_replacement": _require_flag(
+                    arguments.get("order_replacement"), "order_replacement"
+                ),
             }
         if name == "order_card":
             return {"account": _require_text(arguments.get("account"), "account")}
@@ -410,7 +478,7 @@ class ToolExecutor:
             return {
                 "last4": last4,
                 "control": control,
-                "enabled": bool(arguments.get("enabled")),
+                "enabled": _require_flag(arguments.get("enabled"), "enabled"),
             }
         if name == "dispute_transaction":
             charge = self._charge(arguments.get("transaction_id"))
@@ -734,7 +802,16 @@ class ToolExecutor:
     def _hand_off(self, arguments: dict[str, Any]) -> ToolOutcome:
         reason = _require_text(arguments.get("reason"), "reason")
         note = _optional_text(arguments.get("note"))
+        if self.handed_off is not None:
+            # Already with a colleague. Asked again -- by the model after an
+            # error, by the rule and the model both -- it is the same case,
+            # not a second one for someone to work twice.
+            reference, opened_for = self.handed_off
+            return ToolOutcome(
+                {"status": "handed_off", "reference": reference, "reason": opened_for}
+            )
         case = self.bank.open_handoff(self.session_id, self.turn_index, reason, note)
+        self.handed_off = (case.reference, case.reason)
 
         # Whatever was waiting on a yes is dropped. A conversation that needs
         # a person must not also leave money one word away from moving, and a

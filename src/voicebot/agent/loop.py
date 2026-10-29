@@ -25,18 +25,20 @@ from voicebot.agent.guard import (
     in_digits,
     money_in_text,
 )
-from voicebot.llm.base import LLMClient, LLMUnavailable, Reply, ToolCall
+from voicebot.errors import ProviderTimeout, ToolError
+from voicebot.llm.base import ContextOverflow, LLMClient, LLMUnavailable, Reply, ToolCall
 from voicebot.llm.prompts import (
     HANDED_OVER,
     LANGUAGE_NOTE,
-    NOT_LOOKED_UP,
     NOTHING_SAID,
     SYSTEM_PROMPT,
-    UNAVAILABLE,
     in_language,
 )
 from voicebot.llm.tools import TOOL_SCHEMAS
+from voicebot.messages import say
 from voicebot.utils.logging import get_logger
+from voicebot.utils.observability import report
+from voicebot.utils.resilience import checkpoint, current_deadline, deadline_context
 
 log = get_logger("agent.loop")
 
@@ -312,6 +314,15 @@ class AgentResult:
     # The card and purpose a PIN was asked for, if one was. The page opens
     # its keypad from this; nothing in the turn ever holds the PIN itself.
     pin_request: dict[str, str] | None = None
+    # When the turn ended in one of the bot's own fallback sentences rather
+    # than an answer, which one (a key in messages.yaml). The conversation
+    # counts these: several in a row and a colleague is asked to take over.
+    fallback: str | None = None
+
+
+# A model round is not started with less than this left of the turn's budget:
+# it would only be cut off, and the customer would hear nothing for it.
+MIN_ROUND_S = 1.0
 
 
 class Agent:
@@ -323,11 +334,14 @@ class Agent:
         executor: ToolExecutor,
         max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
         max_turns: int = DEFAULT_MAX_TURNS,
+        turn_budget_s: float = 20.0,
     ) -> None:
         self.client = client
         self.executor = executor
         self.max_tool_rounds = max_tool_rounds
         self.max_turns = max_turns
+        # Every model round of one turn, together. See voicebot.utils.resilience.
+        self.turn_budget_s = turn_budget_s
 
     # --- public --------------------------------------------------------------
 
@@ -341,7 +355,8 @@ class Agent:
         conversation.append_user(text)
         conversation.trim(self.max_turns)
 
-        result = self._run(conversation)
+        with deadline_context(self.turn_budget_s):
+            result = self._run(conversation)
         if result.handed_off is None and asked_for_a_person(text):
             result = self._hand_off_by_rule(conversation, result)
         return result
@@ -359,6 +374,17 @@ class Agent:
         pending = self.executor.pending
         before = self.executor.writes
         outcome = self.executor.confirm() if confirmed else self.executor.cancel()
+
+        if outcome.failed is not None and pending is not None:
+            # The bank failed under the action itself. What to say is known --
+            # nothing was done, or it is not known whether it was -- and a
+            # model asked to phrase it is a model asked to guess.
+            call_id = f"confirm-{secrets.token_urlsafe(6)}"
+            failed_call = ToolCall(id=call_id, name=pending.tool, arguments=dict(pending.arguments))
+            if spoken_to:
+                conversation.append_assistant(Reply(tool_calls=(failed_call,)))
+                conversation.append_tool_result(call_id, outcome.result)
+            return self._fallback(outcome.failed, conversation, [failed_call], [outcome], rounds=0)
 
         if outcome.result.get("status") == "pin_required":
             # Yes was given, the PIN has not been. Nothing ran and the action
@@ -414,7 +440,8 @@ class Agent:
         # The injected call travels with its outcome, so the confirmed
         # action appears in the inspector. Without it the one turn that
         # moved money rendered as 'no tools called'.
-        return self._run(conversation, seeded=[outcome], seeded_calls=[injected])
+        with deadline_context(self.turn_budget_s):
+            return self._run(conversation, seeded=[outcome], seeded_calls=[injected])
 
     # --- internals -----------------------------------------------------------
 
@@ -434,26 +461,44 @@ class Agent:
         rounds = 0
         reply = Reply()
         choice = "auto"
+        trimmed = False
 
-        for _ in range(self.max_tool_rounds):
+        while rounds < self.max_tool_rounds:
+            # Stop here, between rounds, if the caller has gone: the history
+            # is whole at this point, so nothing is left half-written.
+            checkpoint("model round")
+            deadline = current_deadline()
+            if deadline is not None and deadline.remaining() < MIN_ROUND_S:
+                report(
+                    ProviderTimeout(
+                        f"the turn's {deadline.seconds:.0f}s budget ran out "
+                        f"after {rounds} round(s)",
+                        component="agent",
+                    )
+                )
+                return self._unavailable(conversation, calls, outcomes, rounds)
             rounds += 1
             try:
                 reply = self.client.complete(
                     with_language_note(conversation), list(TOOL_SCHEMAS), choice
                 )
-            except LLMUnavailable as exc:
-                # Carry what already ran. A transfer that executed before the
-                # endpoint died still has to appear in the audit log; losing
-                # it would make `turns` wrong exactly when something went
-                # wrong, which is when it is read.
-                log.warning("llm unavailable on round %d: %s", rounds, exc)
-                return self._result(
-                    in_language(UNAVAILABLE, conversation.language),
-                    calls,
-                    outcomes,
-                    rounds,
-                    hit=False,
-                )
+            except ContextOverflow:
+                if trimmed:
+                    return self._unavailable(conversation, calls, outcomes, rounds)
+                # Too long for the model. The oldest turns go -- the latest
+                # two are kept, with whatever this turn has done so far -- and
+                # the round is asked once more.
+                log.warning("the conversation is too long for the model; trimming it")
+                conversation.trim(2)
+                trimmed = True
+                rounds -= 1
+                continue
+            except LLMUnavailable:
+                # Reported where it failed, with its code and the call. What
+                # already ran is carried: a transfer that executed before the
+                # endpoint died still has to appear in the audit log, and the
+                # customer has to hear that it went through.
+                return self._unavailable(conversation, calls, outcomes, rounds)
 
             conversation.append_assistant(reply)
 
@@ -480,7 +525,17 @@ class Agent:
                 break
 
             choice = "auto"
+            failed: str | None = None
             for call in reply.tool_calls:
+                if failed is not None:
+                    # Every call gets a result, or the next request is a
+                    # history with a dangling call in it, which the server
+                    # refuses -- every turn, until it scrolls away.
+                    conversation.append_tool_result(
+                        call.id,
+                        {"error": "Not run: an earlier tool failed.", "hint": "Do not retry it."},
+                    )
+                    continue
                 before = self.executor.writes
                 outcome = self.executor.execute(call)
                 if self.executor.writes != before:
@@ -489,28 +544,39 @@ class Agent:
                 outcomes.append(outcome)
                 conversation.remember(outcome.sourced_cents, self.executor.writes)
                 conversation.append_tool_result(call.id, outcome.result)
+                failed = outcome.failed
+            if failed is not None:
+                # The bank failed under a tool. The model is not asked what to
+                # make of that: told a lookup failed, it fills the gap with a
+                # guess. The bot says what it knows, and that is all.
+                return self._fallback(failed, conversation, calls, outcomes, rounds, record=True)
 
         conversation.trim(self.max_turns)
 
         spoken = (reply.text or "").strip()
+        pending = self.executor.pending
+        if (
+            not spoken
+            and pending is not None
+            and any(o.result.get("status") == "needs_confirmation" for o in outcomes)
+        ):
+            # The rounds ran out on the call that armed an action, before the
+            # model could read it back. The bank's own summary is the
+            # read-back, and it is the sentence the Yes button acts on.
+            log.warning("no words after arming %s; reading back its summary", pending.tool)
+            return self._result(f"{pending.summary}?", calls, outcomes, rounds, hit=False)
         if not spoken:
             # No words and no rounds left: say something rather than nothing.
-            return self._result(
-                in_language(NOTHING_SAID, conversation.language), calls, outcomes, rounds, hit=False
-            )
+            return self._fallback("nothing_said", conversation, calls, outcomes, rounds)
 
         if not calls and self._unfinished(spoken):
             # Compelled to call a tool, it still did not. Whatever it wrote is
             # a promise nothing will keep, so it is not worth saying. Asking
             # the customer to try again is at least true.
-            log.warning("suppressing an unkept promise: %r", spoken)
-            return self._result(
-                in_language(NOT_LOOKED_UP, conversation.language),
-                calls,
-                outcomes,
-                rounds,
-                hit=False,
-                suppressed=spoken,
+            log.warning("suppressing an unkept promise")
+            log.debug("the promise was: %r", spoken)
+            return self._fallback(
+                "not_looked_up", conversation, calls, outcomes, rounds, suppressed=spoken
             )
 
         sourced = _sourced(outcomes)
@@ -544,6 +610,63 @@ class Agent:
             rounds,
             hit=hit,
             suppressed=spoken if hit else None,
+            # A guard hit with no real figure to read instead is not an
+            # answer; one that reads the bank's figure back is.
+            fallback=(
+                "unverified"
+                if hit and checked == say("unverified", conversation.language)
+                else None
+            ),
+        )
+
+    def _unavailable(
+        self,
+        conversation: Conversation,
+        calls: list[ToolCall],
+        outcomes: list[ToolOutcome],
+        rounds: int,
+    ) -> AgentResult:
+        """The model cannot be reached, or the turn ran out of time: say what is true.
+
+        If something already happened this turn, that is what the customer
+        must hear. "I can't reach the service, please try again" after Yes has
+        moved the money invites them to move it a second time.
+        """
+        statuses = [o.result.get("status") for o in outcomes]
+        if "done" in statuses:
+            return self._fallback("action_done", conversation, calls, outcomes, rounds)
+        if "cancelled" in statuses:
+            return self._fallback("action_cancelled", conversation, calls, outcomes, rounds)
+        pending = self.executor.pending
+        if pending is not None and "needs_confirmation" in statuses:
+            # Armed this turn: its read-back is the bank's summary, and the
+            # Yes button can still act on it without the model.
+            return self._result(f"{pending.summary}?", calls, outcomes, rounds, hit=False)
+        return self._fallback("unavailable", conversation, calls, outcomes, rounds)
+
+    def _fallback(
+        self,
+        key: str,
+        conversation: Conversation,
+        calls: list[ToolCall],
+        outcomes: list[ToolOutcome],
+        rounds: int,
+        suppressed: str | None = None,
+        record: bool = False,
+        **fields: str,
+    ) -> AgentResult:
+        """End the turn with one of the bot's own sentences, in the customer's language.
+
+        `record` writes it into the history as the bot's reply, so the next
+        round -- which will see the failed tool's result -- also sees what the
+        customer was told about it.
+        """
+        text = say(key, conversation.language, **fields)
+        if record:
+            conversation.append_assistant(Reply(text=text))
+            conversation.trim(self.max_turns)
+        return self._result(
+            text, calls, outcomes, rounds, hit=False, suppressed=suppressed, fallback=key
         )
 
     def _hand_off_by_rule(self, conversation: Conversation, result: AgentResult) -> AgentResult:
@@ -565,9 +688,20 @@ class Agent:
         )
         outcome = self.executor.execute(call)
         reference = _reference([outcome], "handed_off")
-        if reference is None:  # pragma: no cover - the bank refused its own reason
-            log.warning("could not open a handoff the customer asked for")
-            return result
+        if reference is None:
+            # They asked for a person and no case could be opened -- the bank
+            # is down, most likely. The model's reply would carry on as if
+            # nothing had been asked; the customer needs another way through.
+            report(
+                ToolError("could not open the handoff the customer asked for", component="hand_off")
+            )
+            return self._fallback(
+                "cannot_complete",
+                conversation,
+                [*result.tool_calls, call],
+                [ToolOutcome(r) for r in result.tool_results] + [outcome],
+                result.rounds,
+            )
 
         # Recorded in the history too, so the next turn knows the conversation
         # has already left the bot.
@@ -640,6 +774,7 @@ class Agent:
         rounds: int,
         hit: bool,
         suppressed: str | None = None,
+        fallback: str | None = None,
     ) -> AgentResult:
         return AgentResult(
             text=text,
@@ -652,6 +787,7 @@ class Agent:
             handed_off=_reference(outcomes, "handed_off"),
             dispute_filed=_reference(outcomes, "filed"),
             pin_request=_pin_request(outcomes),
+            fallback=fallback,
         )
 
 
