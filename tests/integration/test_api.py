@@ -430,12 +430,13 @@ def test_an_unknown_engine_name_is_refused_rather_than_silently_faked() -> None:
     # A single typo in a deploy would otherwise start cleanly and answer every
     # question with "the model isn't configured yet".
     from voicebot.api.deps import build_services
-    from voicebot.config import AppConfig, ASRConfig, LLMConfig, TTSConfig
+    from voicebot.config import AppConfig, ASRConfig, DatabaseConfig, LLMConfig, TTSConfig
 
     for config in (
         AppConfig(asr=ASRConfig(engine="whispr")),
         AppConfig(llm=LLMConfig(engine="openapi")),
         AppConfig(tts=TTSConfig(engine="vit")),
+        AppConfig(database=DatabaseConfig(engine="postgress")),
     ):
         with pytest.raises(ValueError, match="unknown"):
             build_services(config=config)

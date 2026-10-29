@@ -71,7 +71,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        app.state.services = None
+        services, app.state.services = app.state.services, None
+        if services is not None:
+            # A pooled bank holds server connections; hand them back rather
+            # than leaving the database to time them out.
+            services.bank.close()
         log.info("services released")
 
 

@@ -57,10 +57,19 @@ class LLMConfig(_Strict):
 
 
 class DatabaseConfig(_Strict):
-    """Where the bank lives. `:memory:` for tests, a file for serving."""
+    """Where the bank lives.
 
+    `sqlite` keeps it in a file, or in memory for tests and the offline
+    path. `postgres` puts it on a server, reached with the VOICEBOT_DB_*
+    environment variables -- the connection is not configured here, because
+    a config file is committed and a password must never be.
+    """
+
+    engine: str = "sqlite"
     path: str = ":memory:"
     seed_on_create: bool = True
+    # The most connections the PostgreSQL bank holds open at once.
+    pool_size: int = 10
 
 
 class AppConfig(_Strict):

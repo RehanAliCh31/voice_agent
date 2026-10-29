@@ -9,15 +9,16 @@ always in the past whatever day the demo runs on.
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from voicebot.bank.base import format_money, period_range
+from voicebot.bank.base import Bank, StorageError, format_money, period_range
 
 if TYPE_CHECKING:
-    from voicebot.bank.sqlite_bank import SqliteBank
+    from voicebot.config import DatabaseConfig
 
 ACCOUNTS: tuple[tuple[str, int], ...] = (
     ("checking", 248_350),
@@ -146,21 +147,36 @@ def clear(connection: sqlite3.Connection) -> None:
         connection.execute("DELETE FROM sqlite_sequence WHERE name = 'transactions'")
 
 
-def _show(bank: SqliteBank) -> None:
-    print()
+def _where(database: DatabaseConfig) -> str:
+    """Which bank this is, for a person to read: the file, or the database."""
+    if database.engine == "postgres":
+        from voicebot.bank.postgres_bank import conninfo_from_env, describe
+
+        return f"PostgreSQL {describe(conninfo_from_env())}"
+    return database.path
+
+
+def _show(bank: Bank, where: str) -> None:
+    print(f"\n  {where}\n")
     for account in bank.accounts():
         print(f"  {account.name:<10} {format_money(account.balance_cents):>14}")
     print(f"\n  {bank.turn_count()} turns in the audit log\n")
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Look after the demo bank from the shell.
 
     Editing the opening balances in this file does nothing to a database that
     already exists -- the seed runs once, when the tables are empty. These are
     the commands that act on a live one.
+
+    The live one is the bank the server opens: the one its configuration
+    names, read the same way, .env included. A deposit made anywhere else is
+    money the assistant never sees. `--path` names a SQLite file outright.
     """
-    from voicebot.bank.sqlite_bank import SqliteBank
+    from voicebot.bank import open_bank
+    from voicebot.config import DatabaseConfig, load_config
+    from voicebot.utils.env import load_env_file
 
     parser = argparse.ArgumentParser(
         description="Create, inspect, top up or reset the demo bank.",
@@ -172,7 +188,12 @@ def main() -> None:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--path", default="data/bank.db", help="database file to act on")
+    parser.add_argument(
+        "--config",
+        help="the configuration whose bank to act on "
+        "(default: $VOICEBOT_CONFIG, else configs/serve.yaml)",
+    )
+    parser.add_argument("--path", help="a SQLite file to act on instead of the configured bank")
     parser.add_argument("--show", action="store_true", help="print the balances and exit")
     parser.add_argument(
         "--deposit",
@@ -188,27 +209,45 @@ def main() -> None:
         action="store_true",
         help="restore the opening balances, keeping the audit log",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    existed = Path(args.path).exists() if args.path != ":memory:" else False
-    bank = SqliteBank(path=args.path, seed_if_empty=True)
-    if not existed:
-        print(f"created {args.path}")
+    # Before the configuration is read, so .env counts here exactly as it
+    # does for the server: VOICEBOT_CONFIG and the VOICEBOT_DB_* settings.
+    load_env_file()
+    if args.path:
+        database = DatabaseConfig(engine="sqlite", path=args.path)
+    else:
+        config = args.config or os.environ.get("VOICEBOT_CONFIG") or "configs/serve.yaml"
+        database = load_config(config).database
+    where = _where(database)
 
-    if args.reset:
-        bank.reset()
-        print(f"reset {args.path} to its opening balances")
-    elif args.deposit is not None:
-        # Dollars on the command line because a person types dollars; cents
-        # everywhere inside, because money is integer cents throughout.
-        cents = round(args.deposit * 100)
-        new_balance = bank.deposit(cents, args.account, source="manual top-up")
-        print(
-            f"paid {format_money(cents)} into {args.account}; "
-            f"it now holds {format_money(new_balance)}"
-        )
+    created = database.engine == "sqlite" and (
+        database.path == ":memory:" or not Path(database.path).exists()
+    )
+    try:
+        bank = open_bank(database)
+    except StorageError as exc:
+        parser.exit(1, f"cannot open the bank at {where}: {exc}\n")
+    if created:
+        print(f"created {where}")
 
-    _show(bank)
+    try:
+        if args.reset:
+            bank.reset()
+            print(f"reset {where} to its opening balances")
+        elif args.deposit is not None:
+            # Dollars on the command line because a person types dollars; cents
+            # everywhere inside, because money is integer cents throughout.
+            cents = round(args.deposit * 100)
+            new_balance = bank.deposit(cents, args.account, source="manual top-up")
+            print(
+                f"paid {format_money(cents)} into {args.account}; "
+                f"it now holds {format_money(new_balance)}"
+            )
+
+        _show(bank, where)
+    finally:
+        bank.close()
 
 
 if __name__ == "__main__":

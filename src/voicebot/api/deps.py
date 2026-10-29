@@ -16,8 +16,8 @@ from fastapi import Request
 from voicebot.agent.loop import Agent
 from voicebot.api.sessions import InMemorySessionStore, Session, SessionStore
 from voicebot.asr.base import ASREngine, FakeASREngine
+from voicebot.bank import open_bank
 from voicebot.bank.base import Bank
-from voicebot.bank.sqlite_bank import SqliteBank
 from voicebot.config import AppConfig
 from voicebot.llm.base import FakeLLMClient, LLMClient, Reply
 from voicebot.pipeline.orchestrator import TurnResult, VoicePipeline
@@ -113,6 +113,7 @@ def build_services(config: AppConfig | None = None) -> Services:
     _check_engine("asr", config.asr.engine, {"whisper", "fake"})
     _check_engine("llm", config.llm.engine, {"openai", "fake"})
     _check_engine("tts", config.tts.engine, {"vits", "browser", "fake"})
+    _check_engine("database", config.database.engine, {"sqlite", "postgres"})
 
     asr: ASREngine
     if config.asr.engine == "whisper":
@@ -158,7 +159,7 @@ def build_services(config: AppConfig | None = None) -> Services:
     else:
         tts = FakeTTSEngine()
 
-    bank = SqliteBank(path=config.database.path, seed_if_empty=config.database.seed_on_create)
+    bank = open_bank(config.database)
 
     import torch
 
