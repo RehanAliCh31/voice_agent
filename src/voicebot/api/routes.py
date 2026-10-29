@@ -53,7 +53,7 @@ from voicebot.asr.base import ASRUnavailable
 from voicebot.bank.base import PIN_LENGTH, BankError, Card
 from voicebot.errors import Cancelled, call_context
 from voicebot.llm.base import ToolCall
-from voicebot.messages import say
+from voicebot.messages import messages, say
 from voicebot.pipeline.audio_io import decode_wav, encode_wav
 from voicebot.pipeline.orchestrator import TurnResult, VoicePipeline
 from voicebot.schemas import AudioBuffer
@@ -209,6 +209,17 @@ def metrics(services: Services = Depends(get_services)) -> str:
         ]
     lines += metrics_lines()
     return "\n".join(lines) + "\n"
+
+
+@router.get("/v1/messages", tags=["ops"])
+def fallback_messages() -> dict[str, dict[str, str]]:
+    """The bot's fallback sentences, in English and Urdu, from messages.yaml.
+
+    The page fetches them once, so what it says when it cannot reach the
+    service -- a lost connection, a reply that took too long -- comes from
+    the same one file as everything else the bot says when something fails.
+    """
+    return messages()
 
 
 # --- single stages, for debugging -------------------------------------------

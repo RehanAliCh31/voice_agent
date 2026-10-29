@@ -56,7 +56,7 @@ function toWav(blob) {
   return blob.arrayBuffer().then(function (raw) {
     var context = new Ctx();
     return context.decodeAudioData(raw).then(function (decoded) {
-      context.close();
+      context.close().catch(function () {});
       var frames = Math.ceil(decoded.duration * TARGET_RATE);
       var offline = new OfflineAudioContext(1, Math.max(frames, 1), TARGET_RATE);
       var source = offline.createBufferSource();
@@ -66,6 +66,11 @@ function toWav(blob) {
       return offline.startRendering().then(function (rendered) {
         return encodeWav(rendered.getChannelData(0), TARGET_RATE);
       });
+    }, function (error) {
+      // Closed on failure too: a context left open on every bad recording
+      // is how a page runs out of audio contexts.
+      context.close().catch(function () {});
+      throw error;
     });
   });
 }
@@ -109,18 +114,32 @@ function speak(text) {
       return;
     }
 
+    // Urdu goes to an Urdu voice, or to none: read by an English voice it is
+    // noise, and the words are on the screen anyway.
+    var urdu = /[\u0600-\u06FF]/.test(text);
+    var voice = urdu ? urduVoice() : state.voice;
+    if (urdu && !voice) {
+      resolve();
+      return;
+    }
+
     var utterance = new SpeechSynthesisUtterance(text);
-    if (state.voice) {
-      utterance.voice = state.voice;
+    if (voice) {
+      utterance.voice = voice;
+      utterance.lang = voice.lang;
     }
     utterance.rate = 1.05;
 
     var settled = false;
+    // Some browsers never fire onend -- after a cancel, or a voice that
+    // failed to load -- and the page would say "Speaking" for ever.
+    var watchdog = setTimeout(finish, Math.max(5000, text.length * 120));
     function finish() {
       if (settled) {
         return;
       }
       settled = true;
+      clearTimeout(watchdog);
       if (state.vad) {
         state.vad.disarm();
       }
@@ -177,6 +196,17 @@ function play(blob) {
 }
 
 /** Pick a voice once. Chrome populates the list asynchronously. */
+function urduVoice() {
+  if (!window.speechSynthesis) {
+    return null;
+  }
+  return (
+    window.speechSynthesis.getVoices().filter(function (v) {
+      return /^ur/i.test(v.lang);
+    })[0] || null
+  );
+}
+
 function loadVoices() {
   if (!window.speechSynthesis) {
     return;

@@ -25,6 +25,8 @@ var state = {
   ask: null, // the card action being asked about, if any
   detailsTimer: null, // counts the card details off the screen
   pin: null, // the card and purpose the PIN dialogue is open for
+  language: "en", // the language of the last reply: what a failure is said in
+  turnRequest: null, // the turn being waited for, so it can be abandoned
 };
 
 var el = {};
@@ -47,15 +49,23 @@ var api = {
     if (state.sessionId) {
       form.append("session_id", state.sessionId);
     }
-    return request("/v1/converse", { method: "POST", body: form });
+    return request("/v1/converse", { method: "POST", body: form }, TURN);
   },
 
   chat: function (text) {
-    return request("/v1/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: text, session_id: state.sessionId }),
-    });
+    return request(
+      "/v1/chat",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text, session_id: state.sessionId }),
+      },
+      TURN
+    );
+  },
+
+  messages: function () {
+    return request("/v1/messages", { method: "GET" });
   },
 
   // The PIN is left out of the first press. Whether one is needed at all is
@@ -66,19 +76,27 @@ var api = {
     if (pin) {
       body.pin = pin;
     }
-    return request("/v1/confirm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    return request(
+      "/v1/confirm",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      TURN
+    );
   },
 
   cancel: function () {
-    return request("/v1/cancel", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: state.sessionId }),
-    });
+    return request(
+      "/v1/cancel",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: state.sessionId }),
+      },
+      TURN
+    );
   },
 
   accounts: function () {
@@ -129,22 +147,64 @@ var api = {
   },
 
   reset: function () {
-    return fetch("/v1/reset", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: state.sessionId }),
-    });
+    return post("/v1/reset", { session_id: state.sessionId });
   },
 
   endSession: function () {
     if (!state.sessionId) {
       return Promise.resolve();
     }
-    return fetch("/v1/session/" + encodeURIComponent(state.sessionId), {
+    return request("/v1/session/" + encodeURIComponent(state.sessionId), {
       method: "DELETE",
     });
   },
 };
+
+// --- how long to wait ----------------------------------------------------
+//
+// A turn is given 20 s of model by the service, plus hearing and speaking;
+// past 45 s it is not coming, and the caller is told rather than left with a
+// spinner. Anything else is a quick read.
+var TURN = { timeoutMs: 45000, turn: true };
+var REQUEST_TIMEOUT_MS = 10000;
+
+/** Abandon the turn being waited for: the caller has started over. */
+function abortTurn() {
+  if (state.turnRequest) {
+    state.turnRequest.abort("abandoned");
+  }
+}
+
+// --- what the page says when the service cannot -------------------------
+//
+// The service's own sentences, from its messages.yaml, are fetched on load
+// and replace these. These two are kept here only for the moment the service
+// cannot be reached at all -- which is exactly when the page cannot ask it.
+var sentences = {
+  connection_lost: {
+    en: "Sorry — I've lost the connection. Please check your network and try again.",
+  },
+  timed_out: { en: "Sorry — that took too long. Please try again." },
+  internal: { en: "Sorry — something went wrong on my side. Please try that again." },
+};
+
+function sentence(key, language) {
+  var found = sentences[key] || sentences.internal;
+  return (language === "ur" && found.ur) || found.en;
+}
+
+function loadSentences() {
+  return api
+    .messages()
+    .then(function (table) {
+      Object.keys(table).forEach(function (key) {
+        sentences[key] = table[key];
+      });
+    })
+    .catch(function () {
+      // The built-in ones stand; the next load will try again.
+    });
+}
 
 function post(url, body) {
   return request(url, {
@@ -154,20 +214,60 @@ function post(url, body) {
   });
 }
 
-function request(url, options) {
-  return fetch(url, options).then(function (response) {
-    return response.json().then(
-      function (body) {
-        if (!response.ok) {
-          throw new Error(body.detail || "The server returned " + response.status);
-        }
-        return body;
+/**
+ * A request that cannot wait for ever, and whose failure says what kind it
+ * was: "timeout", "network" (the service could not be reached), "aborted"
+ * (the page gave up on it on purpose), or "server" with the service's own
+ * safe sentence as the message, when it sent one.
+ */
+function request(url, options, how) {
+  how = how || {};
+  var controller = new AbortController();
+  var timer = setTimeout(function () {
+    controller.abort("timeout");
+  }, how.timeoutMs || REQUEST_TIMEOUT_MS);
+  if (how.turn) {
+    state.turnRequest = controller;
+  }
+
+  return fetch(url, Object.assign({}, options, { signal: controller.signal }))
+    .then(
+      function (response) {
+        return response.json().then(
+          function (body) {
+            if (!response.ok) {
+              // Only a sentence the service wrote for people. A 422 lists
+              // fields, which are for developers, not for the page.
+              var said = body && typeof body.detail === "string" ? body.detail : null;
+              throw failure("server", said, response.status);
+            }
+            return body;
+          },
+          function () {
+            throw failure("server", null, response.status);
+          }
+        );
       },
       function () {
-        throw new Error("The server returned " + response.status);
+        if (controller.signal.aborted) {
+          throw failure(controller.signal.reason === "timeout" ? "timeout" : "aborted");
+        }
+        throw failure("network");
       }
-    );
-  });
+    )
+    .finally(function () {
+      clearTimeout(timer);
+      if (state.turnRequest === controller) {
+        state.turnRequest = null;
+      }
+    });
+}
+
+function failure(kind, message, status) {
+  var error = new Error(message || "");
+  error.kind = kind;
+  error.status = status || 0;
+  return error;
 }
 
 // --- small helpers ---------------------------------------------------------
@@ -227,4 +327,16 @@ function dayLabel(moment) {
   });
 }
 
-export { api, capitalise, dayLabel, el, momentOf, money, node, state };
+export {
+  abortTurn,
+  api,
+  capitalise,
+  dayLabel,
+  el,
+  loadSentences,
+  momentOf,
+  money,
+  node,
+  sentence,
+  state,
+};

@@ -20,6 +20,11 @@ function ensureStream() {
   if (state.stream) {
     return Promise.resolve(state.stream);
   }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    // Not a secure page, or a browser without it: a rejection, not a throw
+    // that escapes the handler waiting for one.
+    return Promise.reject(new Error("no microphone here"));
+  }
 
   return navigator.mediaDevices
     .getUserMedia({
@@ -66,7 +71,16 @@ function stopRecording() {
     recorder.addEventListener("stop", function () {
       resolve(new Blob(state.chunks, { type: recorder.mimeType }));
     });
-    recorder.stop();
+    // A recorder that fails never fires "stop"; without this the turn waits
+    // for ever.
+    recorder.addEventListener("error", function () {
+      resolve(null);
+    });
+    try {
+      recorder.stop();
+    } catch (error) {
+      resolve(null);
+    }
   });
 }
 
@@ -85,12 +99,15 @@ function finishTurn() {
     })
     .then(api.converse)
     .then(handleTurn)
-    .catch(function (error) {
-      fail(error.message);
-    });
+    .catch(fail);
 }
 
 function onMicClick() {
+  if (state.phase === "thinking") {
+    // One turn at a time. A second one sent now would only be told the
+    // service is still answering the first.
+    return;
+  }
   if (state.phase === "listening") {
     finishTurn();
     return;

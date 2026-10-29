@@ -438,3 +438,9 @@ def test_failed_calls_leave_no_threads_or_locks_behind(client: TestClient) -> No
         session = services.sessions.get(f"leak-{n}")
         assert session.lock.acquire(blocking=False)
         session.lock.release()
+
+
+def test_the_page_gets_the_same_fallback_sentences_as_the_bot(client: TestClient) -> None:
+    table = client.get("/v1/messages").json()
+    assert table["connection_lost"]["ur"] and table["timed_out"]["en"]
+    assert table["internal"]["en"] == say("internal", "en")

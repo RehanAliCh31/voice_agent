@@ -7,7 +7,7 @@
  * trusted markup.
  */
 
-import { api, el, node, state } from "./core.js";
+import { api, el, node, sentence, state } from "./core.js";
 import { base64ToBlob, canSpeak, play, speak, stopPlayback } from "./audio.js";
 
 function clearEmptyState() {
@@ -150,11 +150,41 @@ function idle() {
   }
 }
 
-function fail(message) {
+/**
+ * Something failed. Say so -- shown and spoken, in the language of the
+ * conversation -- with the service's own words when it sent some, and never
+ * the browser's ("Failed to fetch") or a status code.
+ */
+function fail(error) {
   hideThinking();
-  setPhase("idle");
+  var kind = error && error.kind;
+  if (kind === "aborted") {
+    // The caller started over; there is nothing to report.
+    idle();
+    return;
+  }
+  var message;
+  if (typeof error === "string") {
+    message = error;
+  } else if (kind === "timeout") {
+    message = sentence("timed_out", state.language);
+  } else if (kind === "network") {
+    message = sentence("connection_lost", state.language);
+  } else if (error && error.message) {
+    message = error.message;
+  } else {
+    message = sentence("internal", state.language);
+  }
   setStatus("Something went wrong", message, "error");
   addTurn("bot", message, { error: true });
+  // Said as well as shown: someone listening rather than looking must not be
+  // left in silence.
+  if (canSpeak()) {
+    setPhase("speaking");
+    speak(message).then(idle, idle);
+  } else {
+    setPhase("idle");
+  }
 }
 
 // --- a turn ------------------------------------------------------------------
@@ -192,6 +222,8 @@ function handleTurn(turn) {
 
   var blob = turn.audio_b64 ? base64ToBlob(turn.audio_b64, "audio/wav") : null;
   var reply = turn.reply || "";
+  // What the next failure is said in.
+  state.language = /[\u0600-\u06FF]/.test(reply) ? "ur" : "en";
 
   addTurn("bot", reply, {
     audioBlob: blob,
@@ -237,14 +269,14 @@ function handleTurn(turn) {
 function resolvePending(promise) {
   showThinking();
   setStatus("Working", "", "busy");
-  return promise.then(handleTurn, function (error) {
-    hideThinking();
-    addTurn("bot", "Sorry — that didn't go through: " + error.message, { error: true });
-    idle();
-  });
+  return promise.then(handleTurn, fail);
 }
 
 function send(text) {
+  if (state.phase === "thinking") {
+    // One turn at a time: the service would only say it is still busy.
+    return;
+  }
   stopPlayback();
   setPhase("thinking");
   setStatus("Processing", "Thinking", "busy");
@@ -258,9 +290,7 @@ function send(text) {
       turn.text = "";
       handleTurn(turn);
     })
-    .catch(function (error) {
-      fail(error.message);
-    });
+    .catch(fail);
 }
 
 export {

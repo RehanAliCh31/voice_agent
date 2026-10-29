@@ -10,9 +10,9 @@
  * turn, and starts. The work itself is in the modules it imports.
  */
 
-import { api, el, state } from "./core.js";
+import { abortTurn, api, el, loadSentences, state } from "./core.js";
 import { loadVoices, stopPlayback } from "./audio.js";
-import { onTurn, resolvePending, send, setPhase, setStatus } from "./conversation.js";
+import { fail, onTurn, resolvePending, send, setPhase, setStatus } from "./conversation.js";
 import {
   cardNamed,
   closeAsk,
@@ -87,11 +87,14 @@ function onReset() {
   // Resets the conversation AND the demo balances. With one shared bank,
   // a drained checking account would otherwise outlive the conversation
   // that drained it, and every later transfer would fail for want of funds.
+  // A turn still being waited for is abandoned first: its answer belongs to
+  // the conversation being thrown away.
+  abortTurn();
   api
     .reset()
     .catch(function () {})
     .finally(function () {
-      return api.endSession().finally(function () {
+      return api.endSession().catch(function () {}).finally(function () {
         state.sessionId = null;
         state.balances = {};
         state.lastTotalMs = null;
@@ -105,8 +108,18 @@ function onReset() {
     });
 }
 
+// Whatever no handler caught: logged, and a turn left half-way is ended
+// rather than left spinning.
+window.addEventListener("unhandledrejection", function (event) {
+  console.error("unhandled", event.reason);
+  if (state.phase === "thinking") {
+    fail(event.reason);
+  }
+});
+
 function boot() {
   loadVoices();
+  loadSentences();
   if (window.speechSynthesis) {
     window.speechSynthesis.onvoiceschanged = loadVoices;
   }
