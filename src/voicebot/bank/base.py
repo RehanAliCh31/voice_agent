@@ -20,6 +20,16 @@ class BankError(Exception):
     """
 
 
+class StorageError(Exception):
+    """The database itself failed: unreachable, refused, or broke mid-write.
+
+    Not a BankError. Those are refusals worded for the customer; this is the
+    machinery failing, and its message is for the log, never for reading
+    aloud. Raised in place of a driver's own exceptions, so nothing above the
+    bank has to know which database is underneath.
+    """
+
+
 @dataclass(frozen=True)
 class Account:
     name: str
@@ -555,3 +565,10 @@ class Bank(ABC):
     @abstractmethod
     def reset(self) -> None:
         """Restore the seeded account state, leaving the audit log alone."""
+
+    def close(self) -> None:
+        """Release whatever the bank holds open. Nothing, unless it says so.
+
+        Not abstract: a bank with one in-process connection has nothing to
+        hand back, and a pool of server connections does.
+        """

@@ -21,6 +21,9 @@ transformers==5.20.2
 fastapi==0.159.1
 uvicorn==0.54.0
 python-multipart==0.0.32
+psycopg==3.3.6
+psycopg-binary==3.3.6
+psycopg-pool==3.3.3
 
 # dev
 pytest==9.1.1

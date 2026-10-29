@@ -27,6 +27,7 @@ from voicebot.bank.base import (
     PERIODS,
     Bank,
     BankError,
+    StorageError,
     Transaction,
     account_not_payee_message,
     format_money,
@@ -172,7 +173,7 @@ class ToolExecutor:
             return handler(arguments)
         except (ValueError, KeyError) as exc:
             return _error(str(exc), "Check the tool's parameters and try again.")
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, StorageError) as exc:
             # A CHECK violation from two concurrent writes, say. The customer
             # hears a refusal; they do not meet a 500.
             log.warning("database refused %s: %s", tool_call.name, exc)
@@ -213,7 +214,7 @@ class ToolExecutor:
             return self._handlers()[pending.tool](pending.arguments)
         except (ValueError, KeyError) as exc:
             return _error(str(exc), "The pending action could not be completed.")
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, StorageError) as exc:
             log.warning("database refused %s: %s", pending.tool, exc)
             return _error(
                 "I couldn't complete that against your account just now.",
