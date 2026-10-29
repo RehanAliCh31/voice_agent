@@ -28,7 +28,12 @@ function addTurn(who, text, options) {
     turn.classList.add("turn--notice");
   }
 
-  turn.appendChild(node("p", "turn__text", text));
+  // dir=auto: the browser takes the direction from the first letter, so an
+  // Urdu turn runs right to left and an English one left to right, in the
+  // same conversation.
+  var said = node("p", "turn__text", text);
+  said.dir = "auto";
+  turn.appendChild(said);
 
   if (options.guardHit) {
     var flag = node("div", "turn__flag", "figure read back from your account");
