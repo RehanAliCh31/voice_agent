@@ -19,7 +19,14 @@ from voicebot.assistant.asr_client import (
 )
 from voicebot.assistant.commands import match_command
 from voicebot.assistant.config import AsrEndpoint, load_assistant_config
-from voicebot.assistant.language import LanguageRouter, choose, has_devanagari, urdu_share
+from voicebot.assistant.language import (
+    LanguageRouter,
+    choose,
+    has_devanagari,
+    spoken_language,
+    typed_language,
+    urdu_share,
+)
 
 WHISPER = AsrEndpoint(
     url="http://ur.test/v1/audio/transcriptions",
@@ -152,6 +159,46 @@ def test_script_shares() -> None:
     assert urdu_share("آپ کا ATM") == pytest.approx(4 / 7)  # four Urdu letters, three Latin
     assert urdu_share("123 ...") is None
     assert has_devanagari("आपकी") and not has_devanagari("آپ کی")
+
+
+def test_the_language_of_some_text_is_its_script() -> None:
+    assert spoken_language("میرا بیلنس کیا ہے؟") == "ur"
+    assert spoken_language("What is my balance?") == "en"
+    assert spoken_language("آپ کا ATM") == "ur"  # more Urdu letters than Latin
+    # No letters at all: the conversation's language stands.
+    assert spoken_language("$2,483.50", "ur") == "ur"
+
+
+@pytest.mark.parametrize(
+    ("typed", "language"),
+    [
+        # Urdu in Latin letters, the first two as typed into the page.
+        ("kia ap muje sun skte hain?", "ur"),
+        ("ap theak hain?", "ur"),
+        ("mera checking balance kitna hai?", "ur"),
+        ("savings account ka balance batao", "ur"),
+        ("haan", "ur"),
+        ("میرا بیلنس کیا ہے؟", "ur"),
+        # English, including English words Urdu also has.
+        ("hey jarvis", "en"),
+        ("Is the main branch open?", "en"),
+        ("I want to pay for my Kia", "en"),
+        ("What is my balance?", "en"),
+    ],
+)
+def test_the_language_something_was_typed_in(typed: str, language: str) -> None:
+    assert typed_language(typed) == language
+
+
+@pytest.mark.parametrize("typed", ["$50", "yes", "Sara", "savings please"])
+def test_a_word_or_two_keeps_the_conversations_language(typed: str) -> None:
+    assert typed_language(typed, "ur") == "ur"
+    assert typed_language(typed, "en") == "en"
+
+
+def test_any_urdu_script_makes_it_urdu() -> None:
+    assert typed_language("میرا balance") == "ur"
+    assert typed_language("Thanks, شکریہ") == "ur"
 
 
 def test_english_speech_goes_to_the_english_transcript() -> None:

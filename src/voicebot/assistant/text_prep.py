@@ -160,6 +160,33 @@ def urdu_int(n: int) -> str:
     return " ".join(parts)
 
 
+_UR_VALUES = {word: n for n, word in enumerate(_UR_0_99)}
+_UR_SCALE_VALUES = {name: scale for scale, name in _UR_SCALES}
+# Every word an Urdu number is made of, for anything that has to find one.
+URDU_NUMBER_WORDS = frozenset(_UR_VALUES) | frozenset(_UR_SCALE_VALUES)
+
+
+def urdu_number(words: str) -> int | None:
+    """The number some Urdu words say -- "دو ہزار چار سو تراسی" is 2483.
+
+    None when any of the words is not part of a number.
+    """
+    total = current = 0
+    seen = False
+    for word in words.split():
+        if word in _UR_VALUES:
+            current += _UR_VALUES[word]
+        elif word == "سو":
+            current = (current or 1) * 100
+        elif word in _UR_SCALE_VALUES:
+            total += (current or 1) * _UR_SCALE_VALUES[word]
+            current = 0
+        else:
+            return None
+        seen = True
+    return total + current if seen else None
+
+
 def _digits(text: str, words: Callable[[int], str], separator: str = " ") -> str:
     return separator.join(words(int(d)) for d in text if d.isdigit())
 

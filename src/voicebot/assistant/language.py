@@ -43,6 +43,57 @@ def has_devanagari(text: str) -> bool:
     return bool(_DEVANAGARI.search(text))
 
 
+def spoken_language(text: str, fallback: Language = "en") -> Language:
+    """The language some text is in, by its script: Urdu script is Urdu.
+
+    Text with letters of neither script -- digits alone, say -- keeps the
+    fallback, usually the language the conversation was already in.
+    """
+    share = urdu_share(text)
+    if share is None:
+        return fallback
+    return "ur" if share >= 0.5 else "en"
+
+
+# Urdu as it is typed on a phone, in Latin letters: "kia ap muje sun skte
+# hain?". Nothing in the script says it is Urdu, so it is told by its small
+# words -- the commonest of them, in their usual spellings, less any English
+# has too ("main", "me", "to", "the", "sun", "par").
+_ROMAN_URDU = frozenset("""
+    aap ap apka apki apke apna apni apne mera meri mere mery mujhe muje mjhe mujhy
+    hum hamara hamari hamare tum tumhara uska uski uske iska iski iske yeh ye woh wo
+    ka ki ke ko se mein mai mei tak liye sath saath
+    hai hain hy hn tha thi ho hoon hun hu hua hui raha rahi rahe gaya gayi
+    kar karo karna karni karein karen kardo kro krna karta karti karte
+    sakta sakti sakte skta skti skte chahiye chahta chahti chahte
+    batao btao bataen bataein bataiye bataye dikhao bhejo dena dedo lena
+    kia kya kyun kyu kab kahan kaun kon konsa kaunsa kitna kitni kitne kaise kese kaisy
+    nahi nahin nai nhi haan ji jee theek thik theak acha accha achha bohat bahut bht
+    zyada abhi phir bhi aur lekin magar agar toh tou shukriya meherbani bhai yaar
+    kuch koi wala wali wale paise pese paisay aaj kal haal pata baat
+    """.split())
+_LATIN_WORD = re.compile(r"[a-z]+")
+
+
+def typed_language(text: str, fallback: Language = "en") -> Language:
+    """The language a customer wrote in: by its script, and Urdu in Latin letters too.
+
+    Any Urdu script makes it Urdu -- "میرا balance" is an Urdu question with
+    an English word in it. In Latin letters Urdu's words decide when they make
+    up a third or more of it, so "mera balance kitna hai" is Urdu and "is the
+    main branch open" is not. A word or two of anything else -- "yes",
+    "savings", a name -- says nothing about the language, and `fallback`, the
+    conversation's own, stands.
+    """
+    if spoken_language(text, fallback) == "ur" or _ARABIC.search(text):
+        return "ur"
+    words = _LATIN_WORD.findall(text.lower())
+    urdu = sum(word in _ROMAN_URDU for word in words)
+    if urdu and urdu * 3 >= len(words):
+        return "ur"
+    return fallback if len(words) <= 2 else "en"
+
+
 @dataclass(frozen=True)
 class Decision:
     language: Language

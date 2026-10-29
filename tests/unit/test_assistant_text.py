@@ -18,6 +18,7 @@ from voicebot.assistant.text_prep import (
     strip_foreign_script,
     strip_markup,
     urdu_int,
+    urdu_number,
 )
 
 # --- English numbers -----------------------------------------------------------
@@ -111,6 +112,19 @@ def test_every_urdu_number_below_a_hundred_is_one_word_in_urdu_script() -> None:
         word = urdu_int(n)
         assert " " not in word, n
         assert all("؀" <= c <= "ۿ" for c in word), n
+
+
+def test_urdu_number_words_read_back_as_the_number() -> None:
+    # The guard reads Urdu amounts with this, so it must read whatever the
+    # bot itself would say.
+    for n in [*range(2000), 19_020, 100_000, 1_250_000, 12_345_678, 3_000_000_007]:
+        assert urdu_number(urdu_int(n)) == n, n
+    assert urdu_number("سو") == 100
+
+
+@pytest.mark.parametrize("words", ["", "دو ہزار ڈالر", "سوال"])
+def test_words_that_are_not_a_number_read_as_none(words: str) -> None:
+    assert urdu_number(words) is None
 
 
 @pytest.mark.parametrize(
