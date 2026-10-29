@@ -1,14 +1,15 @@
 # Voice Bot — a speech-to-speech banking assistant
 
-Speak to it, and it speaks back. A voice agent that handles balances,
-transfers, bills, spending and cards — where a language model does the
+Speak to it in English or Urdu, and it speaks back in the same language. A
+voice agent that handles balances, transfers, bills, spending and cards, and
+answers general questions too — where a language model does the
 understanding and the talking, and a database holds every fact it is allowed
 to state.
 
 ```
-your voice -> VAD -> Whisper -> LLM <-> tools -> your browser speaks
-                                         |
-                                     PostgreSQL
+your voice -> VAD -> qwen3-asr + whisper-urdu -> LLM <-> tools -> qwen3-tts / OmniVoice -> your browser plays it
+                       (both, in parallel)             |
+                                                   PostgreSQL
 ```
 
 The model is the brain. It is deliberately **not** the memory and **not** the
@@ -87,28 +88,55 @@ BOT   Done! $50.00 sent to Sarah. Your Checking balance is now $2,433.50.
 
 Transcribed from a real session against the live model.
 
+The same conversation works in Urdu. Each turn, spoken or typed, is answered
+in the language it was asked in and read by that language's voice; the
+figures stay in digits, and the guard checks them exactly as it does in
+English:
+
+```
+YOU   kia ap muje sun skte hain?
+BOT   جی ہاں، میں آپ کو سن سکتا ہوں۔ میں آپ کی کس طرح مدد کر سکتا ہوں؟
+      tools: none
+
+YOU   میرے سیونگز اکاؤنٹ کا بیلنس کیا ہے؟
+BOT   آپ کے سیونگز اکاؤنٹ کا بیلنس $19,020.00 ہے۔
+      tools: list_accounts                          figures: verified
+
+YOU   What's my checking balance?
+BOT   Your checking balance is $2,443.50.
+      tools: none (read from the lookup above)      figures: verified
+```
+
+Urdu typed in Latin letters, as it often is on a phone, is recognised by its
+words and answered in Urdu script, which is what the Urdu voice reads.
+
 ---
 
 ## Measured latency
 
 On the machine this runs on — an Intel i5-6200U, two cores, no CUDA — with the
-model served remotely on another host.
+recognisers, the model and the voices all served on the office network.
+Measured 2026-10-29, in both languages.
 
 | Stage | Time | Where it runs |
 |---|---|---|
-| Whisper `base.en` (3 s of speech) | **2.3 s** | this CPU |
-| LLM, conversational reply | **3.4 – 5.5 s** | remote |
-| LLM, reply after a tool call | **4 – 10 s** | remote, two round trips |
-| Speech out | **~0 s** | the browser |
-| **A whole spoken turn** | **≈ 6 – 12 s** | |
+| Speech recognition, both recognisers at once | **0.4 s** | remote |
+| LLM, conversational reply | **0.7 – 1.5 s** | remote |
+| LLM, reply after a tool call | **1 – 2 s** (3 – 9 s for a long list of bills) | remote, two round trips |
+| Speech out, the whole reply | **2.3 – 5.7 s** | remote |
+| **A whole spoken turn** | **≈ 3.5 – 7 s** | |
 
-Whisper's model loads once at startup and takes 49 s to do it.
+No model is loaded at startup any more, so the service is ready in seconds
+rather than after Whisper's 49.
 
-**This is slower than the version it replaced**, which answered in about 0.6 s
-on a GPU. The LLM buys accuracy and natural conversation; it does not buy
-speed, and it is remote, so faster local hardware does not help it. Speech
-synthesis moved into the browser precisely because it was the one stage that
-could be removed outright.
+**Speech out is now the largest stage.** The browser's own synthesiser cost
+nothing, but it has no Urdu voice, so every reply is read by the office
+voices, and the page plays it once the whole reply is ready. Splitting a reply
+into sentences and voicing them in parallel was measured and is slower (5.0 –
+7.6 s against 3.9 – 5.7 s): the voices answer one request at a time. Playing
+the first sentence while the rest is made is what would cut the wait.
+`tts.engine: browser` and `asr.engine: whisper` bring back the old
+English-only path.
 
 ---
 
@@ -118,7 +146,7 @@ could be removed outright.
 
 ```bash
 python -m venv .venv
-.venv/Scripts/pip install -e ".[dev,serve]" -c constraints.txt
+.venv/Scripts/pip install -e ".[dev,serve,assistant]" -c constraints.txt
 .venv/Scripts/python -m pytest
 ```
 
@@ -126,7 +154,7 @@ python -m venv .venv
 install months from now resolves to the same set rather than to whatever is
 newest.
 
-275 tests in about 15 seconds, plus 16 for the barge-in detector under
+951 tests, plus 16 for the barge-in detector under
 `node --test "tests/js/*.test.js"`. Every external dependency sits behind an
 abstract base class with a fake — including the language model, whose
 `FakeLLMClient` replays scripted replies and tool calls. The whole agent loop,
@@ -142,10 +170,15 @@ VOICEBOT_CONFIG=configs/serve.yaml \
 Open <http://localhost:8000>. The page is served by the same process as the
 API, which is what lets the browser grant it a microphone.
 
-`configs/serve.yaml` points at the model endpoint, selects browser speech and
-keeps the bank in PostgreSQL, which needs setting up once — see
-[The database](#the-database). Without `VOICEBOT_CONFIG` the service starts on
-fakes with an in-memory bank — useful for working on the front end.
+Or `./run.sh`, which checks the model endpoint, the database and the speech
+services before it starts.
+
+`configs/serve.yaml` points at the model endpoint, selects the office
+recognisers and voices listed in
+[`configs/assistant.yaml`](configs/assistant.yaml), and keeps the bank in
+PostgreSQL, which needs setting up once — see [The database](#the-database).
+Without `VOICEBOT_CONFIG` the service starts on fakes with an in-memory bank —
+useful for working on the front end.
 
 Tests that need the real endpoint are marked `live` and deselected by default:
 
@@ -292,8 +325,8 @@ means the model is reaching for figures it was not given.
 | `src/voicebot/bank/migrations/` | The PostgreSQL schema, as numbered SQL files applied in order |
 | `src/voicebot/assistant/` | The hands-free assistant: wake word, VAD, both recognisers, the model, both voices, the state machine |
 | `scripts/` | `migrate_sqlite_to_postgres.py`: copies the SQLite bank across and proves the copy; `voice_turn.py`: a full assistant turn per language |
-| `src/voicebot/asr/` | Whisper engine |
-| `src/voicebot/tts/` | VITS, and the null engine that hands synthesis to the browser |
+| `src/voicebot/asr/` | The office recognisers, English and Urdu; the Whisper engine |
+| `src/voicebot/tts/` | The office voices, English and Urdu; VITS, and the null engine that hands synthesis to the browser |
 | `src/voicebot/pipeline/` | Orchestrator, audio plumbing, per-stage timing |
 | `src/voicebot/api/` | FastAPI app, routes, sessions, published payload shapes |
 | `src/voicebot/api/static/` | The front end: `index.html`, one module per screen, one stylesheet each |
