@@ -48,6 +48,9 @@ def open_bank(database: DatabaseConfig) -> Bank:
             conninfo_from_env(),
             seed_if_empty=database.seed_on_create,
             pool_size=database.pool_size,
+            pool_timeout_s=database.pool_timeout_s,
+            statement_timeout_ms=database.statement_timeout_ms,
+            lock_timeout_ms=database.lock_timeout_ms,
         )
     if database.engine == "sqlite":
         return SqliteBank(path=database.path, seed_if_empty=database.seed_on_create)

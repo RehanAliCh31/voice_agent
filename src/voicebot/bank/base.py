@@ -570,6 +570,10 @@ class Bank(ABC):
     def reset(self) -> None:
         """Restore the seeded account state, leaving the audit log alone."""
 
+    def ping(self) -> None:
+        """Raise if the bank cannot be reached. For readiness checks: cheap, and no writes."""
+        self.accounts()
+
     def close(self) -> None:
         """Release whatever the bank holds open. Nothing, unless it says so.
 

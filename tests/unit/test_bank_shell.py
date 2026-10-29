@@ -56,17 +56,25 @@ def test_open_bank_reaches_postgres_through_the_environment(
 
     opened: dict[str, object] = {}
 
-    def recorder(conninfo: str, seed_if_empty: bool, pool_size: int) -> None:
+    def recorder(conninfo: str, seed_if_empty: bool, pool_size: int, **timeouts: float) -> None:
         opened.update(conninfo=conninfo, seed_if_empty=seed_if_empty, pool_size=pool_size)
+        opened.update(timeouts)
 
     monkeypatch.setattr(postgres_bank, "PostgresBank", recorder)
     monkeypatch.setenv("VOICEBOT_DB_NAME", "branch_office")
 
-    open_bank(DatabaseConfig(engine="postgres", seed_on_create=False, pool_size=3))
+    open_bank(
+        DatabaseConfig(
+            engine="postgres", seed_on_create=False, pool_size=3, statement_timeout_ms=1500
+        )
+    )
 
     assert "dbname=branch_office" in str(opened["conninfo"])
     assert opened["seed_if_empty"] is False
     assert opened["pool_size"] == 3
+    # The waits the config bounds reach the bank.
+    assert opened["statement_timeout_ms"] == 1500
+    assert opened["pool_timeout_s"] == 5.0
 
 
 def test_open_bank_refuses_an_engine_it_does_not_know() -> None:

@@ -136,6 +136,9 @@ class PostgresBank(Bank):
         conninfo: str,
         seed_if_empty: bool = True,
         pool_size: int = 10,
+        pool_timeout_s: float = 5.0,
+        statement_timeout_ms: int = 5000,
+        lock_timeout_ms: int = 3000,
     ) -> None:
         # One plain connection first, so a wrong password or a missing
         # database fails here with the server's own words. A pool that cannot
@@ -148,19 +151,52 @@ class PostgresBank(Bank):
         # Autocommit, with explicit transaction blocks wherever two statements
         # must happen together. A lone read or write commits on its own, the
         # way it does in SQLite, and nothing is ever left half-open.
+        #
+        # Every wait is bounded. A request waits at most `pool_timeout_s` for a
+        # free connection, and the queue for one is capped, so a burst is
+        # refused quickly rather than piling up behind a stalled database. On
+        # the server no statement runs, waits for a lock, or sits idle in a
+        # transaction past its limit. A connection is checked before it is
+        # handed out, so one the server dropped -- after a restart, say -- is
+        # replaced rather than failing the request that drew it.
+        # Added to whatever options the connection string already carries --
+        # a search_path, say -- rather than replacing them.
+        timeouts = " ".join(
+            part
+            for part in (
+                conninfo_to_dict(conninfo).get("options") or "",
+                f"-c statement_timeout={statement_timeout_ms}",
+                f"-c lock_timeout={lock_timeout_ms}",
+                f"-c idle_in_transaction_session_timeout={max(statement_timeout_ms * 2, 10_000)}",
+            )
+            if part
+        )
         self._pool: ConnectionPool = ConnectionPool(
             conninfo,
             min_size=1,
             max_size=pool_size,
-            kwargs={"autocommit": True, "row_factory": dict_row},
+            kwargs={"autocommit": True, "row_factory": dict_row, "options": timeouts},
+            timeout=pool_timeout_s,
+            max_waiting=pool_size * 4,
+            check=ConnectionPool.check_connection,
             open=False,
             name="voicebot-bank",
         )
         try:
             self._pool.open(wait=True, timeout=10)
         except psycopg.Error as exc:
+            self._pool.close()
             raise StorageError(f"could not open a PostgreSQL connection pool: {exc}") from exc
 
+        try:
+            self._prepare(seed_if_empty)
+        except Exception:
+            # Migrations or the seed failed: hand the connections back rather
+            # than leaving them open in a process that is about to stop.
+            self._pool.close()
+            raise
+
+    def _prepare(self, seed_if_empty: bool) -> None:
         with self._connect() as conn:
             for version in migrate(conn):
                 log.info("schema at %s", version)
@@ -690,6 +726,10 @@ class PostgresBank(Bank):
             _seed(conn, datetime.now())
             _print_cards(conn)
         log.info("bank reset to seeded state")
+
+    def ping(self) -> None:
+        with self._connect() as conn:
+            conn.execute("SELECT 1").fetchone()
 
     # --- internals -----------------------------------------------------------
 

@@ -10,11 +10,15 @@ interruption leaves neither.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import secrets
 import sqlite3
+import threading
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any, TypeVar
 
 from voicebot.bank.base import (
     BILL_ACCOUNT,
@@ -35,6 +39,7 @@ from voicebot.bank.base import (
     Handoff,
     Payee,
     Statement,
+    StorageError,
     Transaction,
     account_not_payee_message,
     bad_pin_message,
@@ -54,6 +59,19 @@ from voicebot.utils.logging import get_logger
 log = get_logger("bank.sqlite")
 
 SCHEMA = Path(__file__).parent / "schema.sql"
+T = TypeVar("T")
+
+
+def _held(lock: threading.RLock, method: Callable[..., T]) -> Callable[..., T]:
+    @functools.wraps(method)
+    def held(*args: Any, **kwargs: Any) -> T:
+        with lock:
+            try:
+                return method(*args, **kwargs)
+            except sqlite3.Error as exc:
+                raise StorageError(f"{method.__name__}: {exc}", cause=exc) from exc
+
+    return held
 
 
 class SqliteBank(Bank):
@@ -64,9 +82,12 @@ class SqliteBank(Bank):
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         # check_same_thread=False because the API serves requests on a thread
-        # pool; every write below is wrapped in a transaction, and SQLite
-        # serialises them.
-        self._db = sqlite3.connect(path, check_same_thread=False)
+        # pool. That makes one connection shared by every thread, and a
+        # transaction on it is not one caller's: `with self._db` in one thread
+        # commits or rolls back whatever another thread had under way. So every
+        # public method below holds one lock -- see _serialise -- and waits up
+        # to `timeout` for a database file another process has locked.
+        self._db = sqlite3.connect(path, check_same_thread=False, timeout=5.0)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
         self._db.executescript(SCHEMA.read_text(encoding="utf-8"))
@@ -86,6 +107,26 @@ class SqliteBank(Bank):
             # and the ones that never existed in the old file are still
             # missing. Columns alone were never the whole migration.
             seed_plans(self._db)
+        self._serialise()
+
+    def _serialise(self) -> None:
+        """Make every public method hold the bank's lock, and speak StorageError.
+
+        Bound once, on the instance, so the methods below stay as they were
+        written. A driver error becomes StorageError, the same as the
+        PostgreSQL bank raises, so every caller handles both banks alike.
+        """
+        self._lock = threading.RLock()
+        for name in dir(type(self)):
+            if name.startswith("_") or not callable(getattr(type(self), name, None)):
+                continue
+            method = getattr(self, name)
+            if not callable(method) or isinstance(getattr(type(self), name), property):
+                continue
+            setattr(self, name, _held(self._lock, method))
+
+    def ping(self) -> None:
+        self._db.execute("SELECT 1").fetchone()
 
     # --- reads ---------------------------------------------------------------
 

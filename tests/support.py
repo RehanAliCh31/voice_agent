@@ -74,7 +74,8 @@ def fresh_postgres_bank(**kwargs: Any) -> Iterator[Bank]:
     schema = f"test_{uuid.uuid4().hex[:16]}"
     with psycopg.connect(_test_conninfo(), autocommit=True) as conn:
         conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
-    bank = PostgresBank(_test_conninfo(options=f"-c search_path={schema}"), pool_size=4, **kwargs)
+    kwargs.setdefault("pool_size", 4)
+    bank = PostgresBank(_test_conninfo(options=f"-c search_path={schema}"), **kwargs)
     try:
         yield bank
     finally:
