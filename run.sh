@@ -2,7 +2,8 @@
 #
 # Start the voice bot.
 #
-#   ./run.sh           the real engines: Whisper, the model endpoint, browser speech
+#   ./run.sh           the real engines: the office recognisers and voices, in
+#                      English and Urdu, and the model endpoint
 #   ./run.sh --fake    no model, no endpoint, no downloads -- for front-end work
 #   ./run.sh --test    run the test suite instead of the server
 #
@@ -29,19 +30,24 @@ say "Checking the environment"
 if [ ! -x "$PYTHON" ]; then
     die "No virtual environment. Create one first:
         py -3.12 -m venv .venv
-        .venv/Scripts/python -m pip install -e \".[dev,serve]\""
+        .venv/Scripts/python -m pip install -e \".[dev,serve,assistant]\" -c constraints.txt"
 fi
 ok "python $("$PYTHON" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')"
 
+# httpx and scipy are the assistant extra's: the office recognisers and voices
+# are reached with one, and the page's audio is resampled with the other.
 MISSING=$("$PYTHON" - <<'PY'
 import importlib.util
-needed = {"fastapi": "serve", "uvicorn": "serve", "torch": "core", "transformers": "core"}
+needed = {
+    "fastapi": "serve", "uvicorn": "serve", "torch": "core", "transformers": "core",
+    "httpx": "assistant", "scipy": "assistant",
+}
 print(" ".join(n for n in needed if importlib.util.find_spec(n) is None))
 PY
 )
 if [ -n "$MISSING" ]; then
     die "Missing packages:$MISSING
-        .venv/Scripts/python -m pip install -e \".[dev,serve]\""
+        .venv/Scripts/python -m pip install -e \".[dev,serve,assistant]\" -c constraints.txt"
 fi
 ok "dependencies installed"
 
@@ -141,14 +147,52 @@ PY
         Check VOICEBOT_DB_* in .env, and that PostgreSQL is running.
         To use the SQLite file instead, set database.engine: sqlite in $CONFIG." ;;
     esac
+
+    # The office recognisers and voices, when the config uses them. Not a
+    # reason to refuse to start: with them down the bot can still be typed to,
+    # and still shows its replies. But it can neither hear nor speak, which is
+    # better known now than found on the first question.
+    say "Checking the speech services"
+    SPEECH=$("$PYTHON" - "$CONFIG" 2>/dev/null <<'PY' || echo "error||"
+import sys
+
+import httpx
+
+from voicebot.assistant.config import load_assistant_config
+from voicebot.assistant.health import check_service, services
+from voicebot.config import load_config
+
+config = load_config(sys.argv[1])
+used = False
+with httpx.Client(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
+    for kind, engine in (("ASR", config.asr), ("TTS", config.tts)):
+        if engine.engine != "endpoints":
+            continue
+        used = True
+        for name, url, model in services(load_assistant_config(engine.endpoints)):
+            if name.endswith(kind):
+                check = check_service(name, url, model, client)
+                print(f"{'ok' if check.ok else 'down'}|{name}|{check.url}")
+if not used:
+    print("none||")
+PY
+)
+    while IFS='|' read -r state name where; do
+        case "$state" in
+            ok) ok "$name at $where" ;;
+            down) warn "$name is not answering at $where" ;;
+            none) ok "none used: $CONFIG names no office recogniser or voice" ;;
+            *) warn "could not check them; see configs/assistant.yaml" ;;
+        esac
+    done <<< "$SPEECH"
     export VOICEBOT_CONFIG="$CONFIG"
 fi
 
 # --- go ----------------------------------------------------------------------
 
 say "Starting on http://localhost:$PORT"
-[ "$FAKE" = "yes" ] || printf '  Whisper loads on the first run and takes about 50 seconds.\n'
 printf '  Open the address in Chrome, then press the microphone and speak.\n'
+[ "$FAKE" = "yes" ] || printf '  English or Urdu: the bot answers in the language it is asked in.\n'
 printf '  Ctrl+C to stop.\n\n'
 
 exec "$PYTHON" -m uvicorn voicebot.api.app:app --port "$PORT"
