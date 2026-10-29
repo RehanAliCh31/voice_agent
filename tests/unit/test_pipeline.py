@@ -14,7 +14,7 @@ import pytest
 from voicebot.agent.executor import ToolExecutor
 from voicebot.agent.loop import Agent, Conversation
 from voicebot.asr.base import FakeASREngine
-from voicebot.bank.sqlite_bank import SqliteBank
+from voicebot.bank.base import Bank
 from voicebot.llm.base import FakeLLMClient, Reply, ToolCall
 from voicebot.pipeline.orchestrator import VoicePipeline
 from voicebot.schemas import AudioBuffer
@@ -33,10 +33,10 @@ def _silence(seconds: float = 1.0, rate: int = 16_000) -> AudioBuffer:
 
 
 def _pipeline(
-    replies: list[Reply], heard: str = "what is my balance", speak: bool = True
+    bank: Bank, replies: list[Reply], heard: str = "what is my balance", speak: bool = True
 ) -> tuple[VoicePipeline, FakeLLMClient]:
     client = FakeLLMClient(replies)
-    agent = Agent(client, ToolExecutor(SqliteBank()))
+    agent = Agent(client, ToolExecutor(bank))
     pipeline = VoicePipeline(
         asr=FakeASREngine(fixed_text=heard), agent=agent, tts=FakeTTSEngine(), speak=speak
     )
@@ -46,8 +46,8 @@ def _pipeline(
 # --- a whole turn ------------------------------------------------------------
 
 
-def test_a_spoken_turn_runs_end_to_end() -> None:
-    pipeline, _ = _pipeline([Reply(text="Hello there.")])
+def test_a_spoken_turn_runs_end_to_end(bank: Bank) -> None:
+    pipeline, _ = _pipeline(bank, [Reply(text="Hello there.")])
     result = pipeline.converse(_speech(), Conversation("s1"))
 
     assert result.text == "what is my balance"
@@ -55,14 +55,14 @@ def test_a_spoken_turn_runs_end_to_end() -> None:
     assert len(result.audio.samples) > 0
 
 
-def test_a_typed_turn_takes_the_same_path() -> None:
-    pipeline, _ = _pipeline([Reply(text="Hello there.")])
+def test_a_typed_turn_takes_the_same_path(bank: Bank) -> None:
+    pipeline, _ = _pipeline(bank, [Reply(text="Hello there.")])
     result = pipeline.respond_to_text("hello", Conversation("s1"))
     assert result.agent.text == "Hello there."
 
 
-def test_latency_names_the_stages_that_exist() -> None:
-    pipeline, _ = _pipeline([Reply(text="ok")])
+def test_latency_names_the_stages_that_exist(bank: Bank) -> None:
+    pipeline, _ = _pipeline(bank, [Reply(text="ok")])
     stages = set(pipeline.converse(_speech(), Conversation("s1")).latency.stages)
 
     assert stages == {"vad", "asr", "agent", "tts"}
@@ -74,9 +74,9 @@ def test_latency_names_the_stages_that_exist() -> None:
 # --- nothing is sent to the model that should not be ------------------------
 
 
-def test_silence_never_reaches_the_model() -> None:
+def test_silence_never_reaches_the_model(bank: Bank) -> None:
     # FakeLLMClient with an empty script raises if it is called at all.
-    pipeline, client = _pipeline([])
+    pipeline, client = _pipeline(bank, [])
     result = pipeline.converse(_silence(), Conversation("s1"))
 
     assert result.text == ""
@@ -85,20 +85,20 @@ def test_silence_never_reaches_the_model() -> None:
 
 
 @pytest.mark.parametrize("heard", ["", "   ", "...", ".", "?!"])
-def test_an_empty_transcript_never_reaches_the_model(heard: str) -> None:
+def test_an_empty_transcript_never_reaches_the_model(bank: Bank, heard: str) -> None:
     # Whisper returns punctuation-only strings on room tone. Classifying that
     # is a round trip spent to learn nothing.
-    pipeline, client = _pipeline([], heard=heard)
+    pipeline, client = _pipeline(bank, [], heard=heard)
     result = pipeline.converse(_speech(), Conversation("s1"))
 
     assert result.text == ""
     assert client.calls == []
 
 
-def test_whisper_text_reaches_the_model_unmodified() -> None:
+def test_whisper_text_reaches_the_model_unmodified(bank: Bank) -> None:
     # Casing and punctuation are signal to an LLM. v1 stripped both for a
     # model trained on lowercased text; doing that now is deliberate damage.
-    pipeline, client = _pipeline([Reply(text="ok")], heard="Transfer $50 to Sarah.")
+    pipeline, client = _pipeline(bank, [Reply(text="ok")], heard="Transfer $50 to Sarah.")
     pipeline.converse(_speech(), Conversation("s1"))
 
     assert client.calls[0][0][-1]["content"] == "Transfer $50 to Sarah."
@@ -116,16 +116,16 @@ def test_the_browser_engine_declares_that_the_page_speaks() -> None:
     assert FakeTTSEngine().speaks_client_side is False
 
 
-def test_speak_false_skips_synthesis() -> None:
-    pipeline, _ = _pipeline([Reply(text="ok")], speak=False)
+def test_speak_false_skips_synthesis(bank: Bank) -> None:
+    pipeline, _ = _pipeline(bank, [Reply(text="ok")], speak=False)
     assert len(pipeline.converse(_speech(), Conversation("s1")).audio.samples) == 0
 
 
 # --- state carries across turns ----------------------------------------------
 
 
-def test_the_conversation_accumulates_across_turns() -> None:
-    pipeline, client = _pipeline([Reply(text="one"), Reply(text="two")])
+def test_the_conversation_accumulates_across_turns(bank: Bank) -> None:
+    pipeline, client = _pipeline(bank, [Reply(text="one"), Reply(text="two")])
     conversation = Conversation("s1")
 
     pipeline.respond_to_text("first", conversation)
@@ -135,7 +135,7 @@ def test_the_conversation_accumulates_across_turns() -> None:
     assert len(client.calls[1][0]) > len(client.calls[0][0])
 
 
-def test_a_tool_call_inside_a_spoken_turn_is_reported() -> None:
+def test_a_tool_call_inside_a_spoken_turn_is_reported(bank: Bank) -> None:
     client = FakeLLMClient(
         [
             Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "savings"}),)),
@@ -144,7 +144,7 @@ def test_a_tool_call_inside_a_spoken_turn_is_reported() -> None:
     )
     pipeline = VoicePipeline(
         asr=FakeASREngine(fixed_text="what is my savings balance"),
-        agent=Agent(client, ToolExecutor(SqliteBank())),
+        agent=Agent(client, ToolExecutor(bank)),
         tts=FakeTTSEngine(),
     )
     result = pipeline.converse(_speech(), Conversation("s1"))

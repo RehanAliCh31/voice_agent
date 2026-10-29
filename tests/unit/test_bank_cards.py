@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from tests import support
 from voicebot.bank.base import PIN_TRIES, BankError
 from voicebot.bank.sqlite_bank import DEMO_PIN, SqliteBank
 
@@ -123,7 +124,7 @@ def test_a_card_is_valid_between_two_dates(bank: SqliteBank) -> None:
 
 def test_the_bank_holds_no_security_code(bank: SqliteBank) -> None:
     """Asserted rather than assumed: it must not creep back in."""
-    columns = {row["name"] for row in bank._db.execute("PRAGMA table_info(cards)")}
+    columns = support.columns(bank, "cards")
     assert not columns & {"cvv", "cvc", "security_code", "pin"}
 
 
@@ -172,8 +173,8 @@ def test_a_wrong_pin_does_not(bank: SqliteBank) -> None:
 
 
 def test_the_pin_is_not_stored_in_the_clear(bank: SqliteBank) -> None:
-    row = bank._db.execute("SELECT * FROM cards WHERE last4 = '4417'").fetchone()
-    stored = " ".join(str(value) for value in tuple(row))
+    row = support.rows(bank, "SELECT * FROM cards WHERE last4 = '4417'")[0]
+    stored = " ".join(str(value) for value in row.values())
 
     assert "1234" not in stored
     assert row["pin_hash"] and row["pin_salt"]
@@ -181,7 +182,7 @@ def test_the_pin_is_not_stored_in_the_clear(bank: SqliteBank) -> None:
 
 def test_two_cards_with_the_same_pin_do_not_look_alike(bank: SqliteBank) -> None:
     """Salted per card, so one hash says nothing about another."""
-    rows = bank._db.execute("SELECT pin_hash, pin_salt FROM cards").fetchall()
+    rows = support.rows(bank, "SELECT pin_hash, pin_salt FROM cards")
     assert len({r["pin_salt"] for r in rows}) == len(rows)
     assert len({r["pin_hash"] for r in rows}) == len(rows)
 

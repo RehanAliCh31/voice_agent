@@ -16,7 +16,9 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from tests import support
 from voicebot.api.app import STATIC_DIR, create_app
+from voicebot.api.sessions import InMemorySessionStore
 from voicebot.bank.sqlite_bank import DEMO_PIN
 from voicebot.config import AppConfig
 from voicebot.llm.base import FakeLLMClient, Reply, ToolCall
@@ -41,7 +43,16 @@ def _wav(seconds: float = 1.0, rate: int = 16_000, silent: bool = False) -> byte
 def client() -> Iterator[TestClient]:
     # The context manager is what runs the lifespan, which loads the engines.
     with TestClient(create_app()) as test_client:
-        yield test_client
+        if not support.TESTING_POSTGRES:
+            yield test_client
+            return
+        # The same swap `scripted` makes for the model: every route reaches
+        # the bank through `services.bank` or a session made from it.
+        with support.fresh_postgres_bank() as bank:
+            services = test_client.app.state.services
+            services.bank = bank
+            services.sessions = InMemorySessionStore(bank=bank)
+            yield test_client
 
 
 def scripted(app_client: TestClient, replies: list[Reply]) -> FakeLLMClient:
@@ -411,7 +422,7 @@ def test_a_turn_with_no_tools_logs_null_rather_than_an_empty_array(
     client.post("/v1/chat", json={"text": "hello"})
 
     bank = client.app.state.services.bank
-    row = bank._db.execute("SELECT tool_calls FROM turns ORDER BY id DESC LIMIT 1").fetchone()
+    row = support.rows(bank, "SELECT tool_calls FROM turns ORDER BY id DESC LIMIT 1")[0]
     assert row["tool_calls"] is None
 
 
@@ -856,7 +867,7 @@ def test_the_reason_reaches_the_audit_log(client: TestClient) -> None:
     )
 
     bank = client.app.state.services.bank
-    rows = bank._db.execute("SELECT user_text, bot_text FROM turns").fetchall()
+    rows = support.rows(bank, "SELECT user_text, bot_text FROM turns")
     assert any("taxi" in (row["user_text"] or "") for row in rows)
 
 
@@ -974,9 +985,7 @@ def test_a_pin_never_reaches_the_audit_log(client: TestClient) -> None:
 
     bank = client.app.state.services.bank
     written = " ".join(
-        str(value)
-        for row in bank._db.execute("SELECT * FROM turns").fetchall()
-        for value in tuple(row)
+        str(value) for row in support.rows(bank, "SELECT * FROM turns") for value in row.values()
     )
     assert "1234" not in written and "8765" not in written
 

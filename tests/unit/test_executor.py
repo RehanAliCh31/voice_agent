@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from tests import support
 from voicebot.agent.executor import ToolExecutor
 from voicebot.bank.sqlite_bank import SqliteBank
 from voicebot.llm.base import ToolCall
@@ -289,8 +290,8 @@ def test_the_assistant_has_no_way_to_create_money() -> None:
     assert not {"deposit", "add_money", "credit", "top_up"} & names
 
 
-def test_deposit_is_not_reachable_through_the_executor() -> None:
-    out = ToolExecutor(SqliteBank()).execute(call("deposit", amount_cents=100_000))
+def test_deposit_is_not_reachable_through_the_executor(bank: SqliteBank) -> None:
+    out = ToolExecutor(bank).execute(call("deposit", amount_cents=100_000))
     assert "error" in out.result
 
 
@@ -966,7 +967,7 @@ def test_what_moves_no_money_needs_no_pin(
 
 def test_an_account_with_no_card_cannot_be_debited(bank: SqliteBank) -> None:
     """A PIN that cannot be taken must not become a PIN that is skipped."""
-    bank._db.execute("DELETE FROM cards WHERE account = 'checking'")
+    support.execute(bank, "DELETE FROM cards WHERE account = 'checking'")
     executor = ToolExecutor(bank)
     before = bank.balance("checking")
     executor.execute(call("pay_bill", bill="internet"))

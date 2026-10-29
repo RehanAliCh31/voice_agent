@@ -11,6 +11,7 @@ from datetime import datetime
 
 import pytest
 
+from tests import support
 from voicebot.bank.base import PERIODS, BankError, format_money, period_range
 from voicebot.bank.sqlite_bank import SqliteBank
 
@@ -117,9 +118,7 @@ def test_a_deposit_writes_a_ledger_row(bank: SqliteBank) -> None:
 
 def test_a_deposit_appears_in_the_ledger_as_money_in(bank: SqliteBank) -> None:
     bank.deposit(50_000, "checking", source="manual top-up")
-    row = bank._db.execute(
-        "SELECT merchant, cents FROM transactions ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    row = support.rows(bank, "SELECT merchant, cents FROM transactions ORDER BY id DESC LIMIT 1")[0]
     assert row["cents"] == 50_000
     assert row["merchant"] == "manual top-up"
 
