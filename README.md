@@ -155,6 +155,106 @@ Tests that need the real endpoint are marked `live` and deselected by default:
 
 ---
 
+## The hands-free assistant — English and Urdu
+
+The same bank assistant, as a Siri-style desktop agent. It idles listening
+only for **"Hey Jarvis"**, sending nothing anywhere; once woken it listens,
+hears where you stop, works out whether you spoke English or Urdu, and
+answers in that language with that language's voice. Follow-ups need no wake
+word; silence puts it back to sleep.
+
+```
+mic -> wake word -> VAD -> qwen3-asr + whisper-urdu -> LLM (streamed) -> pieces -> voice -> speaker
+       (offline)   (offline)    (in parallel)                              qwen3-tts / OmniVoice
+```
+
+It does not use the bank's tools: it answers as the general bank assistant
+its prompt describes, and never asks for or repeats a PIN, password, OTP,
+card or account number.
+
+### Set it up (Windows)
+
+```bash
+.venv/Scripts/pip install -e ".[dev,assistant]" -c constraints.txt
+.venv/Scripts/python -m voicebot.assistant setup      # the wake word and VAD models, 6 MB, hash-checked
+.venv/Scripts/python -m voicebot.assistant check      # the config, the models, all five endpoints
+.venv/Scripts/python -m voicebot.assistant devices    # microphones and speakers
+```
+
+Every endpoint, model name, voice and threshold is in
+[`configs/assistant.yaml`](configs/assistant.yaml); none is in code. Choose a
+microphone or speaker there (`audio.input_device`, `audio.output_device`: an
+index from `devices`, or any part of a name), or for one run with `--input` /
+`--output`.
+
+### Run it
+
+```bash
+.venv/Scripts/python -m voicebot.assistant run                       # language auto, laptop speakers
+.venv/Scripts/python -m voicebot.assistant run --echo headphones     # talk over it to interrupt
+.venv/Scripts/python -m voicebot.assistant run --lang ur --debug     # Urdu only, transcripts shown
+.venv/Scripts/python -m voicebot.assistant say "آپ کا کارڈ بلاک ہے۔" --lang ur   # hear a voice
+```
+
+The console shows `Idle`, `Listening`, `Thinking`, `Speaking`, and after each
+turn where the time went. Transcripts appear only with `--debug`, and
+microphone audio is never written to disk unless `debug.save_audio` is on.
+
+**Speakers or headphones.** On speakers the assistant's own voice comes back
+through the microphone, so in `speakers` mode (the default, and the safe one)
+it does not listen while it talks — say "Hey Jarvis" to interrupt it. In
+`headphones` mode speaking over it stops it at once and what you said becomes
+the next question; on speakers that mode would let it interrupt itself.
+
+### How it decides the language
+
+Both recognisers hear every utterance at once (0.3-0.4 s for both, for a
+short question). Whisper,
+not told a language, names the one it heard; Urdu script in its transcript
+and Hindi script from qwen3-asr say the same. English is answered from
+qwen3-asr's transcript, Urdu from whisper-urdu's. Every turn is decided
+afresh, so you can switch language mid-conversation; `session.language` fixes
+it to `en` or `ur` instead.
+
+### Measured
+
+First audio about **2 s** after the end of speech in English and **3.7 s** in
+Urdu, where 2.5 s of that is the Urdu voice itself. Full numbers, how they
+were chosen, and a manual test checklist are in
+[`docs/assistant/testing.md`](docs/assistant/testing.md); what each endpoint
+was measured to do is in [`docs/assistant/endpoints.md`](docs/assistant/endpoints.md).
+
+### The wake word
+
+"Hey Jarvis" is openWakeWord's pre-trained model, run directly on
+onnxruntime (the openwakeword package itself cannot install on Linux with
+Python 3.12). Its licence is **CC BY-NC-SA 4.0, non-commercial only** — fine
+for development, not for a paying client. For a phrase of your own:
+
+* **openWakeWord**: train one with its Google Colab notebook, from synthetic
+  speech, in under an hour; put the `.onnx` in `models/openwakeword/` and set
+  `wake_word.model`. English-sounding phrases work best; an Urdu phrase can be
+  tried with phonetic spelling, with no promise about its accuracy.
+* **Porcupine**: a custom phrase in minutes and the most accurate option, but
+  it needs a Picovoice account and AccessKey, a paid licence for commercial
+  use, and offers no Urdu.
+
+### Troubleshooting
+
+* **`check` says an endpoint is DOWN.** All five are on the office office
+  network: connect to it, or to the VPN.
+* **Urdu comes out as gibberish.** Urdu copied from a PDF or a terminal can
+  paste with its letters reversed. Type it fresh; the assistant never
+  reverses, reshapes or "fixes" Urdu, so what it is given is what it says.
+* **It never wakes.** Check the microphone with `devices` and `--input`; speak
+  at a normal distance; lower `wake_word.threshold` (0.5) a little.
+* **It wakes on its own.** Raise `wake_word.threshold`.
+* **It cuts you off, or waits too long after you stop.** `vad.end_silence_ms`
+  (800) is how much silence ends a question.
+* **Model files missing or damaged.** `python -m voicebot.assistant setup`.
+
+---
+
 ## The API
 
 | Endpoint | Purpose |
@@ -190,7 +290,8 @@ means the model is reaching for figures it was not given.
 | `src/voicebot/agent/` | The LLM ⇄ tool loop, the executor that owns the confirmation gate, the numeric guard |
 | `src/voicebot/bank/` | The bank in PostgreSQL and in SQLite, the ledger, the audit log, the seed data |
 | `src/voicebot/bank/migrations/` | The PostgreSQL schema, as numbered SQL files applied in order |
-| `scripts/` | `migrate_sqlite_to_postgres.py`: copies the SQLite bank across and proves the copy |
+| `src/voicebot/assistant/` | The hands-free assistant: wake word, VAD, both recognisers, the model, both voices, the state machine |
+| `scripts/` | `migrate_sqlite_to_postgres.py`: copies the SQLite bank across and proves the copy; `voice_turn.py`: a full assistant turn per language |
 | `src/voicebot/asr/` | Whisper engine |
 | `src/voicebot/tts/` | VITS, and the null engine that hands synthesis to the browser |
 | `src/voicebot/pipeline/` | Orchestrator, audio plumbing, per-stage timing |
@@ -200,6 +301,7 @@ means the model is reaching for figures it was not given.
 | `tests/` | Unit and integration tests |
 | `docs/design/` | The design documents and implementation plans |
 | `docs/migration/` | The move from SQLite to PostgreSQL: what changed, how it was verified, how to undo it |
+| `docs/assistant/` | What each endpoint was measured to do, the assistant's latency, its manual test checklist, the report |
 | `docs/experiments.md` | v1's method, results and the measurement bugs that changed them |
 | `docs/model_card.md` | v1's trained model: what it was, and what it was not for |
 
@@ -456,6 +558,8 @@ commercial use — they are not all permissive:
 |---|---|
 | `openai/whisper-*` | MIT |
 | `facebook/mms-tts-eng` *(optional, non-default)* | **CC BY-NC 4.0 — non-commercial** |
+| openWakeWord's pre-trained "Hey Jarvis" *(the assistant)* | **CC BY-NC-SA 4.0 — non-commercial** |
+| Silero VAD *(the assistant)* | MIT |
 
 VITS is no longer the default voice; the browser's own synthesiser is. If you
 switch it back on with `tts.engine: vits`, that licence applies again.
