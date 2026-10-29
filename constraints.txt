@@ -25,6 +25,11 @@ psycopg==3.3.6
 psycopg-binary==3.3.6
 psycopg-pool==3.3.3
 
+# assistant (httpx is pinned under dev)
+sounddevice==0.5.6
+onnxruntime==1.31.1
+scipy==1.18.1
+
 # dev
 pytest==9.1.1
 pytest-cov==7.0.0

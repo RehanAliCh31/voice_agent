@@ -39,6 +39,15 @@ serve = [
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
 ]
+# The hands-free assistant: the microphone and speaker, and onnxruntime for
+# the wake word and voice activity models. Not the openwakeword package: on
+# Linux it needs tflite-runtime, which has no build for Python 3.12.
+assistant = [
+    "sounddevice>=0.5",
+    "onnxruntime>=1.18",
+    "scipy>=1.11",
+    "httpx>=0.27",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -68,6 +77,9 @@ src = ["src"]
 # Pinned explicitly: relying on ruff's default selection means a ruff
 # upgrade can fail the lint with no code change.
 select = ["E", "F", "I", "UP", "RUF"]
+# Urdu's full stop, comma and question mark, its digits, and a typographic
+# apostrophe: the assistant's text handling exists to deal with exactly these.
+allowed-confusables = ["۔", "،", "؟", "۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹", "’", "‘"]
 
 [tool.coverage.run]
 source = ["voicebot"]

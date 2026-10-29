@@ -44,5 +44,12 @@ results/**/*.json
 .env
 kaggle.json
 
+# The assistant's model files (fetched by `python -m voicebot.assistant
+# setup`), what its integration script writes, and microphone audio, which
+# is only ever saved with debug.save_audio on.
+models/
+test-output/
+debug_audio/
+
 # Scratch workspace for plan execution
 .superpowers/
