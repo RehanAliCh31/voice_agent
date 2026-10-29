@@ -23,6 +23,19 @@ jobs:
     name: lint, types and tests
     runs-on: ubuntu-latest
 
+    # A real PostgreSQL for the length of the job. The suite runs on SQLite
+    # and then on this, and coverage is measured across the two: each bank's
+    # code runs only in its own pass, so either alone reads low.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -40,16 +53,29 @@ jobs:
             -e ".[dev,serve]" -c constraints.txt
 
       - name: Lint
-        run: ruff check src tests
+        run: ruff check src tests scripts
 
       - name: Format
-        run: black --check src tests
+        run: black --check src tests scripts
 
       - name: Types
-        run: mypy src
+        run: mypy src scripts
 
-      - name: Tests
-        run: pytest --cov=voicebot --cov-report=term-missing --cov-fail-under=90
+      - name: Tests on SQLite
+        run: pytest --cov=voicebot --cov-report=
+
+      - name: Tests on PostgreSQL, and coverage across both
+        # The tests make a database of their own on the server, and a schema
+        # per test inside that.
+        env:
+          VOICEBOT_TEST_DATABASE: postgres
+          VOICEBOT_DB_HOST: localhost
+          VOICEBOT_DB_PORT: "5432"
+          VOICEBOT_DB_USER: postgres
+          # The password of a container that exists only for this job and is
+          # thrown away with it -- not a secret anywhere else.
+          VOICEBOT_DB_PASSWORD: postgres
+        run: pytest --cov=voicebot --cov-append --cov-report=term-missing --cov-fail-under=90
 
   javascript:
     name: the barge-in detector
