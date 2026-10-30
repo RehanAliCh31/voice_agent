@@ -16,7 +16,7 @@ from voicebot.agent.loop import Agent, Conversation
 from voicebot.asr.base import ASREngine, ASRUnavailable, FakeASREngine
 from voicebot.bank.base import Bank
 from voicebot.llm.base import FakeLLMClient, Reply, ToolCall
-from voicebot.llm.prompts import LANGUAGE_NOTE, NOT_CAUGHT, in_language
+from voicebot.llm.prompts import NOT_CAUGHT, in_language, language_note
 from voicebot.messages import say
 from voicebot.pipeline.orchestrator import VoicePipeline
 from voicebot.schemas import AudioBuffer, Transcript
@@ -36,7 +36,7 @@ def _silence(seconds: float = 1.0, rate: int = 16_000) -> AudioBuffer:
 
 def sent(said: str, language: str = "en") -> str:
     """The customer's words as the model is sent them: with the language to answer in."""
-    return f"{said}\n\n({LANGUAGE_NOTE[language]})"
+    return f"{said}\n\n({language_note(language)})"
 
 
 def _pipeline(

@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from voicebot import profile
 from voicebot.agent.executor import ToolExecutor
 from voicebot.agent.loop import Agent, Conversation, announces_action, asked_for_a_person
 from voicebot.assistant.language import spoken_language
@@ -18,15 +19,16 @@ from voicebot.bank.sqlite_bank import SqliteBank
 from voicebot.llm.base import FakeLLMClient, LLMClient, LLMUnavailable, Reply, ToolCall
 from voicebot.llm.prompts import (
     HANDED_OVER,
-    LANGUAGE_NOTE,
     PIN_NEEDED,
-    SYSTEM_PROMPT,
     UNAVAILABLE,
     UNVERIFIED,
     in_language,
+    language_note,
+    system_prompt,
 )
 from voicebot.llm.tools import TOOL_SCHEMAS
 from voicebot.messages import say
+from voicebot.profile import AgentProfile
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
 TO_ALI = {"amount_cents": 40_000, "payee": "ali", "from_account": "checking"}
@@ -78,7 +80,7 @@ def test_the_system_prompt_is_sent_once_and_first(executor: ToolExecutor) -> Non
     agent.handle("again", conversation)
 
     sent = client.calls[1][0]
-    assert sent[0] == {"role": "system", "content": SYSTEM_PROMPT}
+    assert sent[0] == {"role": "system", "content": system_prompt()}
     assert sum(1 for m in sent if m["role"] == "system") == 1
 
 
@@ -269,7 +271,7 @@ def test_the_turn_index_advances(executor: ToolExecutor) -> None:
 
 def test_trim_keeps_the_system_prompt_and_bounds_the_history() -> None:
     conversation = Conversation("s1")
-    conversation.messages.append({"role": "system", "content": SYSTEM_PROMPT})
+    conversation.messages.append({"role": "system", "content": system_prompt()})
     for i in range(60):
         conversation.append_user(f"turn {i}")
 
@@ -1116,15 +1118,15 @@ def test_each_turn_tells_the_model_the_language_to_answer_in(executor: ToolExecu
     # Measured: without the note a spoken Urdu question was answered in Urdu
     # written in Latin letters, and English after two Urdu turns in Urdu.
     first, second = client.calls[0][0], client.calls[1][0]
-    assert first[-1]["content"] == f"آپ کیسے ہیں\n\n({LANGUAGE_NOTE['ur']})"
-    assert second[-1]["content"] == f"how are you?\n\n({LANGUAGE_NOTE['en']})"
+    assert first[-1]["content"] == f"آپ کیسے ہیں\n\n({language_note('ur')})"
+    assert second[-1]["content"] == f"how are you?\n\n({language_note('en')})"
     # Only the latest message carries one, and only in what is sent: the
     # history keeps the customer's words as they were said.
     assert second[1]["content"] == "آپ کیسے ہیں"
     said = [m["content"] for m in conversation.messages if m["role"] == "user"]
     assert said == ["آپ کیسے ہیں", "how are you?"]
     # The system prompt is the same on every turn.
-    assert first[0] == second[0] == {"role": "system", "content": SYSTEM_PROMPT}
+    assert first[0] == second[0] == {"role": "system", "content": system_prompt()}
 
 
 def test_the_note_stays_on_the_customers_message_through_a_tool_round(
@@ -1140,7 +1142,86 @@ def test_the_note_stays_on_the_customers_message_through_a_tool_round(
 
     after_the_tool = client.calls[1][0]
     assert after_the_tool[-1]["role"] == "tool"
-    assert after_the_tool[1]["content"].endswith(f"({LANGUAGE_NOTE['ur']})")
+    assert after_the_tool[1]["content"].endswith(f"({language_note('ur')})")
+
+
+# --- a reply in the wrong language, or the wrong gender ----------------------
+
+
+def test_a_reply_in_the_wrong_script_is_asked_for_again_once(executor: ToolExecutor) -> None:
+    # Measured before the note: an Urdu question answered in Latin letters.
+    client = FakeLLMClient(
+        [Reply(text="Aap ka balance theek hai."), Reply(text="آپ کا بیلنس ٹھیک ہے۔")]
+    )
+    conversation = in_urdu()
+
+    out = Agent(client, executor).handle("میرا بیلنس", conversation)
+
+    assert out.text == "آپ کا بیلنس ٹھیک ہے۔" and out.fallback is None
+    # Asked again with the stricter note, for words only.
+    assert client.calls[1][0][-1]["content"].endswith(f"({language_note('ur', retry=True)})")
+    assert client.choices[1] == "none"
+    # The slip never reached the history.
+    replies = [m["content"] for m in conversation.messages if m["role"] == "assistant"]
+    assert replies == ["آپ کا بیلنس ٹھیک ہے۔"]
+
+
+def test_an_english_reply_with_urdu_in_it_is_asked_for_again(executor: ToolExecutor) -> None:
+    client = FakeLLMClient([Reply(text="Thank you, شکریہ!"), Reply(text="Thank you!")])
+    out = Agent(client, executor).handle("thanks", Conversation("s1"))
+    assert out.text == "Thank you!"
+
+
+def test_a_second_slip_is_not_spoken(executor: ToolExecutor) -> None:
+    client = FakeLLMClient(
+        [Reply(text="Aap ka balance theek hai."), Reply(text="Balance theek hai.")]
+    )
+    conversation = in_urdu()
+
+    out = Agent(client, executor).handle("میرا بیلنس", conversation)
+
+    assert out.fallback == "reply_failed"
+    assert out.text == say("reply_failed", "ur")
+    assert out.suppressed == "Aap ka balance theek hai."
+    # What the customer was told is what the history says they were told.
+    assert conversation.messages[-1] == {"role": "assistant", "content": out.text}
+
+
+def test_the_model_failing_on_the_retry_is_not_a_crash(executor: ToolExecutor) -> None:
+    class SlipThenDown(FakeLLMClient):
+        def complete(self, messages, tools, tool_choice="auto"):  # type: ignore[no-untyped-def]
+            if self.calls:
+                raise LLMUnavailable("down")
+            return super().complete(messages, tools, tool_choice)
+
+    out = Agent(SlipThenDown([Reply(text="Aap theek hain?")]), executor).handle(
+        "آپ کیسے ہیں", in_urdu()
+    )
+    assert out.fallback == "reply_failed"
+
+
+def test_the_bot_speaks_of_itself_in_its_own_gender(executor: ToolExecutor) -> None:
+    # The profile is female; the model wrote the masculine forms.
+    client = FakeLLMClient([Reply(text="میں آپ کی مدد کر سکتا ہوں۔ میں سمجھ نہیں سکا۔")])
+    conversation = in_urdu()
+
+    out = Agent(client, executor).handle("کیا آپ مدد کر سکتے ہیں", conversation)
+
+    assert out.text == "میں آپ کی مدد کر سکتی ہوں۔ میں سمجھ نہیں سکی۔"
+    assert conversation.messages[-1]["content"] == out.text  # the history agrees
+    assert len(client.calls) == 1  # put right in place: no second round for it
+
+
+def test_a_male_bot_speaks_of_itself_as_a_man(executor: ToolExecutor) -> None:
+    previous = profile.use(AgentProfile(gender="male", names={"en": "Omar", "ur": "عمر"}))
+    try:
+        client = FakeLLMClient([Reply(text="میں آپ کی مدد کر سکتی ہوں۔")])
+        out = Agent(client, executor).handle("میرا بیلنس", in_urdu())
+        assert out.text == "میں آپ کی مدد کر سکتا ہوں۔"
+        assert "you are a man" in client.calls[0][0][0]["content"]
+        assert "Omar" in client.calls[0][0][0]["content"]
+    finally:
+        profile.use(previous)
 
 
 @pytest.mark.parametrize(

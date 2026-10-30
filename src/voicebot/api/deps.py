@@ -18,6 +18,7 @@ from pathlib import Path
 
 from fastapi import HTTPException, Request
 
+from voicebot import profile
 from voicebot.agent.loop import Agent
 from voicebot.api.audit import AuditWriter, TurnRecord
 from voicebot.api.limits import ConversationLimits
@@ -324,6 +325,18 @@ def build_services(config: AppConfig | None = None) -> Services:
     _check_engine("llm", config.llm.engine, {"openai", "fake"})
     _check_engine("tts", config.tts.engine, {"vits", "browser", "endpoints", "fake"})
     _check_engine("database", config.database.engine, {"sqlite", "postgres"})
+
+    # Who the bot is -- its gender, its name, its voices -- comes from the
+    # voices' file, the one place it is set. Without the office voices the
+    # default profile stands.
+    if "endpoints" in (config.tts.engine, config.asr.engine):
+        from voicebot.assistant.config import load_assistant_config
+
+        endpoints = (
+            config.tts.endpoints if config.tts.engine == "endpoints" else config.asr.endpoints
+        )
+        profile.use(load_assistant_config(endpoints).profile())
+    log.info("the agent is %s, %s", profile.current().name("en"), profile.current().gender)
 
     asr: ASREngine
     if config.asr.engine == "whisper":

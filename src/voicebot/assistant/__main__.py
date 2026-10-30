@@ -20,6 +20,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+from voicebot import profile
 from voicebot.assistant import health, models
 from voicebot.assistant.config import AssistantConfig, Language, load_assistant_config
 from voicebot.errors import InternalError
@@ -42,6 +43,8 @@ STATUS_LABEL = {
 def _config(args: argparse.Namespace) -> AssistantConfig:
     load_env_file()
     config = load_assistant_config(args.config)
+    # Who the bot is, for every sentence it says from here on.
+    profile.use(config.profile())
     session = config.session
     if getattr(args, "lang", None):
         session.language = args.lang
@@ -128,13 +131,9 @@ def cmd_devices(args: argparse.Namespace) -> int:
 
 
 def _voices(config: AssistantConfig) -> dict[Language, Any]:
-    from voicebot.assistant.tts_client import TtsClient
+    from voicebot.assistant.tts_client import build_voices
 
-    tts = config.tts
-    return {
-        "en": TtsClient(tts.en, "en", tts.timeout_s, tts.retries, tts.trim_silence),
-        "ur": TtsClient(tts.ur, "ur", tts.timeout_s, tts.retries, tts.trim_silence),
-    }
+    return dict(build_voices(config))
 
 
 def cmd_say(args: argparse.Namespace) -> int:

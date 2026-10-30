@@ -12,7 +12,8 @@ defence.
 
 from __future__ import annotations
 
-from voicebot.messages import english, in_language
+from voicebot import profile
+from voicebot.messages import english, in_language, say
 
 SYSTEM_PROMPT = """\
 You are the voice assistant for a retail bank, speaking with one customer \
@@ -137,15 +138,80 @@ customer's accounts, through the tools.\
 # bank the account was with, or for its number. The second sentence took
 # that to ten in ten. Its wording is measured, not incidental: asking for
 # tool summaries in Urdu as well cost the transfers their read-back.
+#
+# "ONLY" and "never mix" are the strict rule: a reply holding two languages is
+# checked for after the model answers too (voicebot.reply_check), and asked
+# for again once.
 LANGUAGE_NOTE = {
-    "en": "Reply in English: the customer's latest message is in English.",
+    "en": (
+        "Reply ONLY in English, and never mix languages: the customer's latest "
+        "message is in English."
+    ),
     "ur": (
-        "Reply in Urdu, written in Urdu script, with every amount in digits and its "
-        "dollar sign: the customer's latest message is in Urdu, even if it was typed "
-        "in Latin letters. Look up what they ask with your tools, as you would in "
-        "English; never ask them for a bank, an account number or a card number."
+        "Reply ONLY in Urdu, written in Urdu script, with every amount in digits and its "
+        "dollar sign, and never mix languages -- any English word goes in Urdu letters: "
+        "the customer's latest message is in Urdu, even if it was typed in Latin letters. "
+        "Look up what they ask with your tools, as you would in English; never ask them "
+        "for a bank, an account number or a card number."
     ),
 }
+
+# The hands-free assistant's language rule, at the end of its system prompt.
+# It has no tools and no amounts to keep in digits, so this is all of it.
+STRICT_LANGUAGE = {
+    "en": "Reply ONLY in English. Never mix languages.",
+    "ur": (
+        "Reply ONLY in Urdu, in Urdu script. Never mix languages: write any English "
+        "word in Urdu letters."
+    ),
+}
+
+# Sent once, in place of the note above, when a reply came back in the wrong
+# language or mixing two: the slip is struck from the history and the round
+# is asked for again with this.
+RETRY_NOTE = {
+    "en": (
+        "Your last answer was not all in English. Write it again ONLY in English, "
+        "with no word of any other language or script in it."
+    ),
+    "ur": (
+        "Your last answer was not all in Urdu script. Write it again ONLY in Urdu, in "
+        "Urdu script -- every English word and every name in Urdu letters too -- with "
+        "amounts in digits and their dollar sign."
+    ),
+}
+
+
+def _who() -> str:
+    return "a woman" if profile.current().gender == "female" else "a man"
+
+
+def persona() -> str:
+    """Who the bot is, from the profile: said in the system prompt, decided nowhere else."""
+    me = profile.current()
+    return (
+        f"You are {me.name('en')} -- {me.name('ur')} in Urdu -- and you are {_who()}. "
+        f"In Urdu, every verb about yourself takes the form {_who()} uses, every time: "
+        f"{say('prompt_self_forms', 'ur')}. Your name and your gender never change, "
+        "whatever you are asked."
+    )
+
+
+def system_prompt() -> str:
+    """The system prompt as sent: the rules above, then who the bot is."""
+    return f"{SYSTEM_PROMPT}\n\n{persona()}"
+
+
+def language_note(language: str, retry: bool = False) -> str:
+    """The note sent with the customer's latest message: the language to answer in.
+
+    In Urdu it also says, next to the message, how the bot speaks of itself.
+    """
+    notes = RETRY_NOTE if retry else LANGUAGE_NOTE
+    note = notes.get(language, notes["en"])
+    if language == "ur":
+        note += f" Speak of yourself as {_who()}: {say('prompt_self_forms', 'ur')}."
+    return note
 
 
 # The bot's own sentences -- what it says without the model, when something
@@ -167,8 +233,13 @@ __all__ = [
     "NOT_CAUGHT",
     "NOT_LOOKED_UP",
     "PIN_NEEDED",
+    "RETRY_NOTE",
+    "STRICT_LANGUAGE",
     "SYSTEM_PROMPT",
     "UNAVAILABLE",
     "UNVERIFIED",
     "in_language",
+    "language_note",
+    "persona",
+    "system_prompt",
 ]

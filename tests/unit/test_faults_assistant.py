@@ -48,6 +48,7 @@ from voicebot.assistant.orchestrator import FRAME_FAILURE_LIMIT, State, _Event
 from voicebot.assistant.player import RATE, Player
 from voicebot.assistant.tts_client import Speech, TtsError
 from voicebot.errors import ErrorCode, current_call_id
+from voicebot.messages import say
 from voicebot.utils.observability import error_counts, event_counts
 
 
@@ -284,7 +285,7 @@ def test_a_reply_cut_off_partway_fails_the_turn_and_the_apology_follows_it(
     (turn,) = h.o.turns
     assert turn.outcome == "failed" and turn.reply == "Your balance is fine."
     # What had been said, then the apology; never the half sentence.
-    assert h.voices["en"].said == ["Your balance is fine.", config.session.phrases.fallback.en]
+    assert h.voices["en"].said == ["Your balance is fine.", say("trouble", "en")]
     assert len(h.o.memory) == 0 and h.o.state is State.IDLE
 
 
@@ -296,7 +297,7 @@ def test_a_reply_with_nothing_to_say_fails_the_turn_with_an_apology(
     h.feed([frame(wake=True)])
     h.say()
     assert h.o.turns[0].outcome == "failed" and h.o.state is State.IDLE
-    assert h.voices["en"].said == [config.session.phrases.fallback.en]
+    assert h.voices["en"].said == [say("trouble", "en")]
 
 
 def test_a_reply_of_nothing_but_reasoning_fails_the_turn(config: AssistantConfig) -> None:
@@ -308,7 +309,7 @@ def test_a_reply_of_nothing_but_reasoning_fails_the_turn(config: AssistantConfig
     h.feed([frame(wake=True)])
     h.say()
     assert h.o.turns[0].outcome == "failed"
-    assert h.voices["en"].said == [config.session.phrases.fallback.en]
+    assert h.voices["en"].said == [say("trouble", "en")]
 
 
 # --- the conversation, when the voice or the speaker fails -------------------------

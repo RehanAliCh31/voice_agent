@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import httpx
 import numpy as np
 
-from voicebot.assistant.config import TtsEndpoint
+from voicebot.assistant.config import LANGUAGES, AssistantConfig, Language, TtsEndpoint
 from voicebot.assistant.http_errors import from_status, from_transport
 from voicebot.errors import ProviderUnavailable
 from voicebot.utils.logging import get_logger
@@ -158,3 +158,60 @@ class TtsClient:
 
     def close(self) -> None:
         self._client.close()
+
+
+class BackedUpVoice:
+    """A voice, and a backup of the same gender tried when it fails.
+
+    The backup has its own breaker, so a main voice that keeps failing is
+    skipped straight to it. Both genders were checked against the agent's at
+    startup (AgentConfig), so the backup can never change who is speaking.
+    """
+
+    def __init__(self, main: TtsClient, backup: TtsClient) -> None:
+        self.main = main
+        self.backup = backup
+        self.endpoint = main.endpoint
+        self.name = main.name
+
+    def synthesize(self, text: str) -> Speech:
+        try:
+            return self.main.synthesize(text)
+        except TtsError as exc:
+            log.warning(
+                "the %s voice failed (%s); trying its backup, %s",
+                self.name,
+                exc.code.value,
+                self.backup.endpoint.label or self.backup.endpoint.voice or self.backup.name,
+            )
+            return self.backup.synthesize(text)
+
+    def close(self) -> None:
+        self.main.close()
+        self.backup.close()
+
+
+def build_voices(config: AssistantConfig) -> dict[Language, TtsClient | BackedUpVoice]:
+    """The agent's voice in each language, with its backup when it has one.
+
+    The one place voices are made, for the assistant and the web bot alike,
+    so nothing can pick a voice the profile did not.
+    """
+    tts = config.tts
+    voices: dict[Language, TtsClient | BackedUpVoice] = {}
+    for language in LANGUAGES:
+        main = TtsClient(
+            tts.voice(language), language, tts.timeout_s, tts.retries, tts.trim_silence
+        )
+        endpoint = tts.backup(language)
+        voices[language] = (
+            main
+            if endpoint is None
+            else BackedUpVoice(
+                main,
+                TtsClient(
+                    endpoint, f"{language}-backup", tts.timeout_s, tts.retries, tts.trim_silence
+                ),
+            )
+        )
+    return voices

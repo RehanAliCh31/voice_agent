@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from voicebot import profile
 from voicebot.agent.executor import ToolExecutor, ToolOutcome
 from voicebot.agent.guard import (
     allowed_values,
@@ -29,13 +30,14 @@ from voicebot.errors import ProviderTimeout, ToolError
 from voicebot.llm.base import ContextOverflow, LLMClient, LLMUnavailable, Reply, ToolCall
 from voicebot.llm.prompts import (
     HANDED_OVER,
-    LANGUAGE_NOTE,
     NOTHING_SAID,
-    SYSTEM_PROMPT,
     in_language,
+    language_note,
+    system_prompt,
 )
 from voicebot.llm.tools import TOOL_SCHEMAS
 from voicebot.messages import say
+from voicebot.reply_check import in_own_gender, language_problems, latin_words
 from voicebot.utils.logging import get_logger
 from voicebot.utils.observability import report
 from voicebot.utils.resilience import checkpoint, current_deadline, deadline_context
@@ -272,7 +274,7 @@ class Conversation:
         self.messages = system + rest[starts[-max_turns] :]
 
 
-def with_language_note(conversation: Conversation) -> list[dict[str, Any]]:
+def with_language_note(conversation: Conversation, retry: bool = False) -> list[dict[str, Any]]:
     """The history as the model is sent it: the customer's latest message
     carries the language to answer in.
 
@@ -280,12 +282,14 @@ def with_language_note(conversation: Conversation) -> list[dict[str, Any]]:
     the end of the system prompt it was ignored as often as followed, and a
     system message nearer the reply is refused by the server ("System message
     must be at the beginning"). Only this copy carries it: the history keeps
-    the customer's words exactly as they were said.
+    the customer's words exactly as they were said. `retry` sends the
+    stricter note used to ask again for a reply that came back in the wrong
+    language.
     """
     messages = list(conversation.messages)
     for index in range(len(messages) - 1, -1, -1):
         if messages[index].get("role") == "user":
-            note = LANGUAGE_NOTE.get(conversation.language, LANGUAGE_NOTE["en"])
+            note = language_note(conversation.language, retry=retry)
             said = messages[index].get("content") or ""
             messages[index] = {**messages[index], "content": f"{said}\n\n({note})"}
             break
@@ -447,7 +451,7 @@ class Agent:
 
     def _ensure_system(self, conversation: Conversation) -> None:
         if not conversation.messages or conversation.messages[0].get("role") != "system":
-            conversation.messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+            conversation.messages.insert(0, {"role": "system", "content": system_prompt()})
 
     def _run(
         self,
@@ -579,6 +583,19 @@ class Agent:
                 "not_looked_up", conversation, calls, outcomes, rounds, suppressed=spoken
             )
 
+        language_checked = self._in_language(spoken, conversation, outcomes)
+        if language_checked is None:
+            return self._fallback(
+                "reply_failed",
+                conversation,
+                calls,
+                outcomes,
+                rounds,
+                suppressed=spoken,
+                record=True,
+            )
+        spoken = language_checked
+
         sourced = _sourced(outcomes)
         allowed = self._allowed(conversation, sourced)
         checked, hit = guard(
@@ -618,6 +635,53 @@ class Agent:
                 else None
             ),
         )
+
+    def _in_language(
+        self, spoken: str, conversation: Conversation, outcomes: list[ToolOutcome]
+    ) -> str | None:
+        """The reply in the conversation's language and the bot's own gender, or None.
+
+        The language is the customer's, decided from what they said; the
+        reply is held to it. One that slips -- an Urdu answer in Latin
+        letters, English words in Urdu, Urdu script in an English answer --
+        is struck from the history and asked for again, once, with a
+        stricter note. A second slip is not spoken at all: None, and the
+        caller says one of the bot's own sentences instead. Names from the
+        bank's records may stay in English letters. In Urdu, the bot's
+        first-person verbs are then put in its own gender.
+        """
+        language = conversation.language
+        tool_text = [m.get("content") for m in conversation.messages if m.get("role") == "tool"]
+        allowed = latin_words([*(o.result for o in outcomes), *tool_text])
+        problems = language_problems(spoken, language, allowed)
+        if problems:
+            log.warning(
+                "the reply was not all in %s (%s); asking once more", language, "; ".join(problems)
+            )
+            log.debug("the reply was: %r", spoken)
+            if conversation.messages and conversation.messages[-1].get("role") == "assistant":
+                conversation.messages.pop()
+            try:
+                reply = self.client.complete(
+                    with_language_note(conversation, retry=True), list(TOOL_SCHEMAS), "none"
+                )
+            except LLMUnavailable:
+                return None  # reported by the client, with its code
+            again = (reply.text or "").strip()
+            if reply.tool_calls or not again or language_problems(again, language, allowed):
+                log.warning("the reply was still not all in %s; not speaking it", language)
+                return None
+            conversation.append_assistant(Reply(text=again))
+            spoken = again
+        if language != "ur":
+            return spoken
+        fixed, changed = in_own_gender(spoken, profile.current().gender)
+        if changed:
+            log.info("put %d of the bot's own verbs back into its gender", changed)
+            last = conversation.messages[-1] if conversation.messages else {}
+            if last.get("role") == "assistant" and (last.get("content") or "").strip() == spoken:
+                conversation.messages[-1] = {**last, "content": fixed}
+        return fixed
 
     def _unavailable(
         self,

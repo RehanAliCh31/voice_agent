@@ -150,7 +150,7 @@ class VoicePipeline:
 
         checkpoint("speaking")
         with tracker.stage("tts"):
-            audio = self._speak(result.text)
+            audio = self._speak(result.text, conversation.language)
 
         turn = TurnResult(
             transcript=transcript,
@@ -174,7 +174,7 @@ class VoicePipeline:
 
         checkpoint("speaking")
         with tracker.stage("tts"):
-            audio = self._speak(result.text)
+            audio = self._speak(result.text, conversation.language)
 
         turn = TurnResult(
             transcript=transcript,
@@ -207,11 +207,16 @@ class VoicePipeline:
             )
             return AgentResult(text=say("internal", conversation.language), fallback="internal")
 
-    def _speak(self, text: str) -> AudioBuffer:
+    def _speak(self, text: str, language: str | None = None) -> AudioBuffer:
+        """`text` in the voice of `language` -- the customer's, never the reply's own script.
+
+        Without a language (a sentence of the bot's own, already in the right
+        one) the engine goes by the text's script.
+        """
         if not self.speak:
             return AudioBuffer(samples=SILENCE, sample_rate=16_000)
         try:
-            return self.tts.synthesize(text)
+            return self.tts.synthesize(text, voice=language if language in ("en", "ur") else None)
         except Exception as exc:  # an engine that raises is treated as silence
             # An engine that raises rather than returning silence is treated
             # as silence: the reply is on the page, and the page speaks it.

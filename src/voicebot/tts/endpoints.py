@@ -20,7 +20,7 @@ import numpy as np
 from voicebot.assistant.config import AssistantConfig, Language
 from voicebot.assistant.language import spoken_language
 from voicebot.assistant.text_prep import prepare_for_speech
-from voicebot.assistant.tts_client import TtsClient, TtsError
+from voicebot.assistant.tts_client import BackedUpVoice, TtsClient, TtsError, build_voices
 from voicebot.messages import messages, say
 from voicebot.schemas import AudioBuffer
 from voicebot.tts.base import TTSEngine
@@ -43,7 +43,7 @@ WARM_KEYS = ("unavailable", "tool_failed", "speech_unavailable", "internal")
 class EndpointsTTSEngine(TTSEngine):
     speaks_client_side = False
 
-    def __init__(self, voices: Mapping[Language, TtsClient]) -> None:
+    def __init__(self, voices: Mapping[Language, TtsClient | BackedUpVoice]) -> None:
         self.voices = voices
         # Audio for the bot's own fallback sentences, kept from the last time
         # each was spoken, so an apology is still heard when the voice that
@@ -58,13 +58,7 @@ class EndpointsTTSEngine(TTSEngine):
 
     @classmethod
     def from_config(cls, config: AssistantConfig) -> EndpointsTTSEngine:
-        tts = config.tts
-        return cls(
-            {
-                "en": TtsClient(tts.en, "en", tts.timeout_s, tts.retries, tts.trim_silence),
-                "ur": TtsClient(tts.ur, "ur", tts.timeout_s, tts.retries, tts.trim_silence),
-            }
-        )
+        return cls(build_voices(config))
 
     def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
         """`voice` may name the language; otherwise the text's script decides."""

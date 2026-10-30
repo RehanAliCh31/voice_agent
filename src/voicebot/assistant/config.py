@@ -19,6 +19,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from voicebot.profile import AgentProfile, Gender
+
 Language = Literal["en", "ur"]
 LANGUAGES: tuple[Language, ...] = ("en", "ur")
 
@@ -89,16 +91,101 @@ class TtsEndpoint(_Strict):
     # English synthesises at 0.6x real time, Urdu with ~1.1 s per request.
     first_chunk_words: int = 8
     chunk_growth: float = 0.0
+    # Whose voice this is. Checked against the agent's gender at startup, so
+    # a female agent can never be given a male voice, or a male backup.
+    gender: Gender | None = None
+    # Shown in a voice's listing and the samples; not sent to the server.
+    label: str = ""
+
+    def identity(self) -> str:
+        """What makes two voices the same voice: a recording of one is one of the other."""
+        extra = ",".join(f"{k}={self.extra[k]!r}" for k in sorted(self.extra) if k != "ref_audio")
+        ref = self.extra.get("ref_audio")
+        if isinstance(ref, str):
+            import hashlib
+
+            extra += f",ref_audio={hashlib.sha1(ref.encode()).hexdigest()[:12]}"
+        return f"{self.url}|{self.model}|{self.voice or ''}|{extra}"
 
 
 class TtsConfig(_Strict):
+    # Filled from `agent.voices` for the agent's gender when the file has an
+    # `agent:` section; written here only by a file without one.
     en: TtsEndpoint
     ur: TtsEndpoint
+    # Tried when the voice above fails, before a kept recording. Same gender.
+    backup_en: TtsEndpoint | None = None
+    backup_ur: TtsEndpoint | None = None
     timeout_s: float = 20.0
     retries: int = 1
     # Both voices start with up to 0.4 s of silence. Cut, the first word
     # arrives that much sooner.
     trim_silence: bool = True
+
+    def voice(self, language: Language) -> TtsEndpoint:
+        return self.ur if language == "ur" else self.en
+
+    def backup(self, language: Language) -> TtsEndpoint | None:
+        return self.backup_ur if language == "ur" else self.backup_en
+
+
+# --- who the bot is -------------------------------------------------------------
+
+
+class Voices(_Strict):
+    en: TtsEndpoint
+    ur: TtsEndpoint
+
+
+class BackupVoices(_Strict):
+    en: TtsEndpoint | None = None
+    ur: TtsEndpoint | None = None
+
+
+class AgentConfig(_Strict):
+    """The bot's profile: its gender, its name, and its voice in each language.
+
+    `gender` is the one switch. The voices, the name, every fixed sentence
+    and how the model is told to speak of itself all follow it. Each voice
+    says whose it is, and a voice of the other gender -- main or backup --
+    stops the service at startup rather than reaching a caller.
+    """
+
+    gender: Gender
+    names: dict[Gender, Bilingual]
+    voices: dict[Gender, Voices]
+    backup_voices: dict[Gender, BackupVoices] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> AgentConfig:
+        problems = []
+        if self.gender not in self.voices:
+            problems.append(f"agent.voices has no {self.gender} voices for a {self.gender} agent")
+        if self.gender not in self.names:
+            problems.append(f"agent.names has no name for a {self.gender} agent")
+        for gender, voices in self.voices.items():
+            for language in LANGUAGES:
+                voice: TtsEndpoint = getattr(voices, language)
+                if voice.gender != gender:
+                    problems.append(
+                        f"agent.voices.{gender}.{language} is "
+                        f"{voice.gender or 'of no stated gender'}, not {gender}"
+                    )
+        for gender, backups in self.backup_voices.items():
+            for language in LANGUAGES:
+                backup: TtsEndpoint | None = getattr(backups, language)
+                if backup is not None and backup.gender != gender:
+                    problems.append(
+                        f"agent.backup_voices.{gender}.{language} is "
+                        f"{backup.gender or 'of no stated gender'}, not {gender}"
+                    )
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
+
+    def profile(self) -> AgentProfile:
+        names = self.names[self.gender]
+        return AgentProfile(gender=self.gender, names={"en": names.en, "ur": names.ur})
 
 
 class LlmConfig(_Strict):
@@ -166,13 +253,6 @@ class VadConfig(_Strict):
 # --- the conversation ---------------------------------------------------------
 
 
-class Phrases(_Strict):
-    """What the assistant says when it has nothing of its own to say."""
-
-    fallback: Bilingual
-    goodbye: Bilingual
-
-
 class Commands(_Strict):
     """Words that end the conversation, matched only when said on their own."""
 
@@ -193,7 +273,6 @@ class SessionConfig(_Strict):
     barge_in_min_speech_ms: int = 300
     # Words after the wake phrase are kept, but the phrase itself is not.
     post_wake_ignore_ms: int = 0
-    phrases: Phrases
     commands: Commands
 
 
@@ -212,6 +291,40 @@ class AssistantConfig(_Strict):
     vad: VadConfig = Field(default_factory=VadConfig)
     session: SessionConfig
     debug: DebugConfig = Field(default_factory=DebugConfig)
+    # Who the bot is. Without it the default profile stands -- female -- and
+    # tts.en and tts.ur must be given directly.
+    agent: AgentConfig | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _voices_from_the_agent(cls, raw: Any) -> Any:
+        """The agent's voices, for its gender, become tts.en and tts.ur.
+
+        One place says which voice the bot has, so tts.en and tts.ur may not
+        also be written by hand: two places would sooner or later disagree.
+        """
+        if not isinstance(raw, dict) or not isinstance(raw.get("agent"), dict):
+            return raw
+        agent, tts = raw["agent"], dict(raw.get("tts") or {})
+        written = [key for key in ("en", "ur", "backup_en", "backup_ur") if key in tts]
+        if written:
+            raise ValueError(
+                f"tts.{', tts.'.join(written)} cannot be set when there is an agent: "
+                "its voices are set in agent.voices and agent.backup_voices"
+            )
+        gender = agent.get("gender")
+        voices = (agent.get("voices") or {}).get(gender) or {}
+        backups = (agent.get("backup_voices") or {}).get(gender) or {}
+        for language in LANGUAGES:
+            if language in voices:
+                tts[language] = voices[language]
+            if backups.get(language) is not None:
+                tts[f"backup_{language}"] = backups[language]
+        return {**raw, "tts": tts}
+
+    def profile(self) -> AgentProfile:
+        """The bot's profile: from `agent:`, or the default without one."""
+        return self.agent.profile() if self.agent else AgentProfile()
 
 
 def config_path(path: str | Path | None = None) -> Path:

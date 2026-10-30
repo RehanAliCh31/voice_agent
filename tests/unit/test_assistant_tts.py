@@ -10,8 +10,15 @@ import httpx
 import numpy as np
 import pytest
 
-from voicebot.assistant.config import TtsEndpoint
-from voicebot.assistant.tts_client import TtsClient, TtsError, parse_wav, trim_silence
+from voicebot.assistant.config import TtsEndpoint, load_assistant_config
+from voicebot.assistant.tts_client import (
+    BackedUpVoice,
+    TtsClient,
+    TtsError,
+    build_voices,
+    parse_wav,
+    trim_silence,
+)
 
 
 def _wav(samples: np.ndarray, rate: int = 24000, channels: int = 1, width: int = 2) -> bytes:
@@ -151,3 +158,50 @@ def test_a_timeout_then_success_is_a_success() -> None:
         TtsEndpoint(url="http://t/x", model="m"), "en", 5, 1, client=_client(handler)
     ).synthesize("Hi")
     assert len(calls) == 2
+
+
+def test_a_voice_that_fails_hands_over_to_its_backup() -> None:
+    def down(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "overloaded"})
+
+    def up(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["voice"] == "assistant-ur"
+        return httpx.Response(200, content=_wav(np.full(2400, 4000, np.int16)))
+
+    main = TtsClient(
+        TtsEndpoint(url="http://a/x", model="m", voice="assistant-pk", gender="female"),
+        "ur-main-test",
+        5,
+        0,
+        client=_client(down),
+    )
+    backup = TtsClient(
+        TtsEndpoint(url="http://b/x", model="m", voice="assistant-ur", gender="female"),
+        "ur-backup-test",
+        5,
+        0,
+        client=_client(up),
+    )
+    speech = BackedUpVoice(main, backup).synthesize("آپ کا کارڈ")
+    assert speech.sample_rate == 24000
+
+
+def test_both_voices_failing_is_still_reported_as_the_voice_failing() -> None:
+    def down(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "overloaded"})
+
+    def voice(name: str) -> TtsClient:
+        return TtsClient(TtsEndpoint(url="http://a/x", model="m"), name, 5, 0, client=_client(down))
+
+    with pytest.raises(TtsError):
+        BackedUpVoice(voice("en-main-test"), voice("en-backup-test")).synthesize("Hi")
+
+
+def test_the_voices_built_for_the_agent_are_its_own_and_backed_up() -> None:
+    config = load_assistant_config()
+    voices = build_voices(config)
+    for language in ("en", "ur"):
+        voice = voices[language]  # type: ignore[index]
+        assert isinstance(voice, BackedUpVoice)  # both have a backup in the shipped config
+        assert voice.main.endpoint.gender == voice.backup.endpoint.gender == config.profile().gender
+        voice.close()

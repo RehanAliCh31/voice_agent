@@ -116,13 +116,11 @@ class Decision:
 # words or more has at least one; English written out in Urdu letters has
 # none. Left out: words English speech also turns into ("تو" for "to", "اس"
 # for "is", "دس" for "this").
-_URDU_GRAMMAR = frozenset(
-    """
+_URDU_GRAMMAR = frozenset("""
     ہے ہیں ہوں ہو تھا تھی تھے گا گی گے کا کی کے کو سے نے میں پر بھی اور یا
     کیا کیوں کب کہاں کون کتنا کتنی کتنے کیسے مجھے میرا میری میرے مرے ہمارا
     آپ ہم یہ وہ نہیں جی ہاں کر کریں کرنا کرنی کرو دیں دے دو لیے ساتھ ہی
-    """.split()
-)
+    """.split())
 # English words as whisper-urdu writes them when it takes English speech for
 # Urdu, measured: "کین یو شو مائی ٹرانزیکشنز", "فریز دہ کارڈ".
 _ENGLISH_IN_URDU_LETTERS = frozenset(

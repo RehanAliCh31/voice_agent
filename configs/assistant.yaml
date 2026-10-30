@@ -32,22 +32,78 @@ asr:
     en: ["i", "okay", "ok", "you", "thank you", "thanks for watching", "so", "uh", "um", "hmm"]
     ur: ["ملتے ہیں", "ملتی ہے", "شکریہ", "thank you", "you"]
 
+# Who the bot is, for the web bot and the hands-free assistant alike. `gender`
+# is the one switch: the voice in both languages, the name, every fixed
+# sentence (src/voicebot/messages.yaml) and how the model is told to speak of
+# itself in Urdu all follow it. Every voice says whose it is, and one of the
+# other gender, main or backup, stops startup. The model never chooses.
+#
 # Nothing is heard until the first piece of a reply is synthesised, so it is
 # cut short (first_chunk_words), and for English the next pieces grow by
-# chunk_growth so each is ready before the last one ends. Urdu's voice costs
+# chunk_growth so each is ready before the last one ends. OmniVoice costs
 # ~1.1 s per request whatever its length, so it goes to whole sentences.
+# What each voice is, and where it came from: LANGUAGE_VOICE_CONFIG.md.
+agent:
+  gender: female
+  names:
+    female: {en: Layla, ur: لیلیٰ}
+    male: {en: Omar, ur: عمر}
+  voices:
+    female:
+      en:
+        url: http://localhost:8094/v1/audio/speech
+        model: qwen3-tts             # the server lists itself as Qwen3-TTS-12Hz-0.6B-Base; both names work
+        gender: female
+        label: qwen3-tts, its one built-in voice
+        first_chunk_words: 5
+        chunk_growth: 1.6
+      ur:
+        url: http://localhost:8091/v1/audio/speech
+        model: k2-fsa/OmniVoice
+        voice: assistant-pk          # FLEURS ur_pk reference, CC-BY-4.0: attribution required
+        gender: female
+        label: OmniVoice assistant-pk
+        first_chunk_words: 8
+        chunk_growth: 0
+    male:
+      en:
+        url: http://localhost:8091/v1/audio/speech
+        model: k2-fsa/OmniVoice      # qwen3-tts has no male voice
+        voice: urdu_male5
+        gender: male
+        label: OmniVoice urdu_male5, in English
+        first_chunk_words: 8
+        chunk_growth: 0
+      ur:
+        url: http://localhost:8091/v1/audio/speech
+        model: k2-fsa/OmniVoice
+        voice: urdu_male5
+        gender: male
+        label: OmniVoice urdu_male5
+        first_chunk_words: 8
+        chunk_growth: 0
+  # Tried when the main voice fails, before a kept recording. The English
+  # backup is on the other server, so it survives the main one going down.
+  # There is no second male voice on a second server to back the male ones.
+  backup_voices:
+    female:
+      en:
+        url: http://localhost:8091/v1/audio/speech
+        model: k2-fsa/OmniVoice
+        voice: assistant-en
+        gender: female
+        label: OmniVoice assistant-en
+        first_chunk_words: 8
+      ur:
+        url: http://localhost:8091/v1/audio/speech
+        model: k2-fsa/OmniVoice
+        voice: assistant-ur
+        gender: female
+        label: OmniVoice assistant-ur
+        first_chunk_words: 8
+
+# tts.en and tts.ur come from agent.voices above.
 tts:
-  en:
-    url: http://localhost:8094/v1/audio/speech
-    model: qwen3-tts                 # the server lists itself as Qwen3-TTS-12Hz-0.6B-Base; both names work
-    first_chunk_words: 5
-    chunk_growth: 1.6
-  ur:
-    url: http://localhost:8091/v1/audio/speech
-    model: k2-fsa/OmniVoice
-    voice: assistant-pk
-    first_chunk_words: 8
-    chunk_growth: 0
   # A long Urdu reply took 5.7 s whole; the assistant asks for a sentence
   # at a time. Past 12 s the voice is down and the fallback plays instead.
   timeout_s: 12
@@ -120,13 +176,6 @@ session:
   echo_tail_ms: 300
   barge_in_min_speech_ms: 300
   post_wake_ignore_ms: 0
-  phrases:
-    fallback:
-      en: Sorry, I'm having trouble right now. Please try again in a moment.
-      ur: معذرت، اس وقت مجھے کچھ دشواری ہو رہی ہے۔ براہِ کرم تھوڑی دیر بعد دوبارہ کوشش کریں۔
-    goodbye:
-      en: Goodbye, and have a good day.
-      ur: اللہ حافظ۔
   commands:
     stop:
       en: ["stop", "cancel", "never mind", "nevermind", "be quiet", "quiet", "shut up", "stop it"]
