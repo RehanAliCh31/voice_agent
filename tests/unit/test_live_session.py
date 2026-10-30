@@ -200,6 +200,32 @@ def test_speaking_over_the_bot_stops_it_and_it_answers_the_new_question() -> Non
         session.close()
 
 
+def test_a_reply_let_go_of_is_not_said_to_have_ended() -> None:
+    services = services_for(
+        [("what is my balance", "en"), ("actually my savings", "en")],
+        [
+            Reply(text="Which account would you like. Checking or savings. Or both."),
+            Reply(text="Your savings are fine."),
+        ],
+    )
+    services.tts.slow = {"Checking or savings.": 1.0}  # still being made when interrupted
+    page = Page(auto_finish=False)
+    session = open_session(services, page)
+    try:
+        _speaking(page, session, services)
+        first = page.of("reply")[0]["audio_id"]
+        speak(session, tone(1000), quiet(700))
+        assert page.wait(lambda p: bool(p.of("discard_audio")))
+        assert page.wait(lambda p: len(p.of("reply")) == 2)
+        time.sleep(1.2)  # the piece being made is finished -- and dropped
+        # Nothing more of it went out, and the page was not told it had ended.
+        assert [e["piece"] for e in page.of("audio") if e["audio_id"] == first] == [0]
+        assert not [e for e in page.of("audio_end") if e["audio_id"] == first]
+        assert "Or both." not in [text for text, _ in services.tts.said]
+    finally:
+        session.close()
+
+
 def test_a_mm_hmm_does_not_interrupt() -> None:
     services = services_for(
         [("what is my balance", "en"), ("mm hmm", "en")],

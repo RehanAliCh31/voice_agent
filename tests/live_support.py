@@ -78,6 +78,7 @@ class PiecesVoice(FakeTTSEngine):
     def __init__(self) -> None:
         super().__init__(sample_rate=16_000, seconds_per_char=0.03)
         self.said: list[tuple[str, str | None]] = []
+        self.slow: dict[str, float] = {}  # pieces that take this long to make
         self._lock = threading.Lock()
 
     def pieces(self, text: str, voice: str | None = None) -> list[str]:
@@ -87,6 +88,8 @@ class PiecesVoice(FakeTTSEngine):
     def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
         with self._lock:
             self.said.append((text, voice))
+        if text in self.slow:
+            time.sleep(self.slow[text])
         return super().synthesize(text, voice)
 
 

@@ -810,11 +810,13 @@ class LiveSession:
         for number in range(1, rest.count + 1):
             audio = rest.wait(number, timeout=45.0)
             with self._lock:
+                if rest.cancelled:
+                    # Let go of -- the page has been told to discard it -- even
+                    # if this piece was made just before: no more of it goes out.
+                    return
                 if self._playing is not playing and not playing.paused:
                     return
                 if audio is None:
-                    if rest.cancelled:
-                        return  # let go of: the page has been told to discard it
                     self._send({"type": "audio_failed", "audio_id": playing.audio_id})
                     self._all_sent(playing)
                     return
