@@ -4,16 +4,21 @@ Neither recogniser can be told the language in advance in auto mode, so both
 hear every utterance at once (0.5-0.6 s for both, measured, against 0.3 and
 0.6 s apart) and the evidence is weighed:
 
-* whisper-urdu names the language it heard when not told one ("en" or "ur",
-  correct on every clip measured), and writes Urdu in Urdu script and
-  English in English;
-* qwen3-asr, told English, writes Urdu speech as Hindi in Devanagari script
-  -- a strong sign on its own that the speech was not English.
+* whisper-urdu names the language it heard when not told one, "en" or "ur".
+  Right on Urdu, but it called 12 of 30 English clips Urdu (most spoken with
+  a Pakistani accent), writing the English out in Urdu letters -- "کین یو شو
+  مائی ٹرانزیکشنز" -- which no Urdu sentence looks like: Urdu's small grammar
+  words are missing;
+* qwen3-asr, told English, writes Urdu speech as Hindi in Devanagari script,
+  or as Roman Urdu -- strong signs that the speech was not English -- or now
+  and then translates it into English, which is a weak sign of anything.
 
-English goes to qwen3-asr's transcript, the English specialist; Urdu to
-whisper-urdu's. Mixed speech goes to the language that dominates it, which
-is what Whisper reports. Each turn is weighed afresh, so the customer can
-switch language mid-conversation; the session's language is the tie-break.
+Each sign is counted for one language or the other, and the larger count
+wins; whisper's verdict settles a tie. English goes to qwen3-asr's
+transcript, the English specialist; Urdu to whisper-urdu's. Mixed speech goes
+to the language its grammar is in. Each turn is weighed afresh, so the
+customer can switch language mid-conversation; the session's language is
+used only when neither recogniser heard anything.
 """
 
 from __future__ import annotations
@@ -106,35 +111,103 @@ class Decision:
     heard: dict[str, Transcript] = field(default_factory=dict)
 
 
+# The small words Urdu grammar cannot do without: postpositions, the verb "to
+# be", pronouns, question words, particles. A real Urdu sentence of three
+# words or more has at least one; English written out in Urdu letters has
+# none. Left out: words English speech also turns into ("تو" for "to", "اس"
+# for "is", "دس" for "this").
+_URDU_GRAMMAR = frozenset(
+    """
+    ہے ہیں ہوں ہو تھا تھی تھے گا گی گے کا کی کے کو سے نے میں پر بھی اور یا
+    کیا کیوں کب کہاں کون کتنا کتنی کتنے کیسے مجھے میرا میری میرے مرے ہمارا
+    آپ ہم یہ وہ نہیں جی ہاں کر کریں کرنا کرنی کرو دیں دے دو لیے ساتھ ہی
+    """.split()
+)
+# English words as whisper-urdu writes them when it takes English speech for
+# Urdu, measured: "کین یو شو مائی ٹرانزیکشنز", "فریز دہ کارڈ".
+_ENGLISH_IN_URDU_LETTERS = frozenset(
+    "دہ مائی یو ٹو فور فار فر ای ایز آف اینڈ اٹ دیٹ وٹ واٹ ہاؤ پلیز کین ڈو یور".split()
+)
+_WORD = re.compile(r"[^\W\d_]+")
+
+
+def _weigh(en_text: str, ur: Transcript) -> tuple[int, int, str]:
+    """Evidence for English and for Urdu from both transcripts, and what it was."""
+    english = urdu = 0
+    notes = []
+    if ur.language == "ur":
+        urdu += 1
+        notes.append("whisper said Urdu")
+    elif ur.language == "en":
+        english += 1
+        notes.append("whisper said English")
+    share = urdu_share(ur.text)
+    if share is not None and share < 0.5:
+        english += 2
+        notes.append("whisper wrote English letters")
+    elif share is not None:
+        words = [w for w in _WORD.findall(ur.text) if _ARABIC.search(w)]
+        grammar = sum(w in _URDU_GRAMMAR for w in words)
+        spelled = sum(w in _ENGLISH_IN_URDU_LETTERS for w in words)
+        urdu += min(grammar, 3)
+        english += min(spelled, 3)
+        if not grammar and len(words) >= 3:
+            english += 1
+        notes.append(f"{grammar} Urdu grammar words, {spelled} English in Urdu letters")
+    if has_devanagari(en_text):
+        urdu += 2
+        notes.append("qwen3-asr wrote Hindi script")
+    else:
+        latin = _LATIN_WORD.findall(en_text.lower())
+        roman = sum(word in _ROMAN_URDU for word in latin)
+        if roman >= 2 and roman * 3 >= len(latin):
+            urdu += 1
+            notes.append("qwen3-asr wrote Roman Urdu")
+        elif not roman and len(latin) >= 3:
+            # Weak: told English, qwen3-asr sometimes translates Urdu speech
+            # into fluent English ("I need to talk to someone").
+            english += 1
+            notes.append("qwen3-asr wrote English")
+    return english, urdu, "; ".join(notes)
+
+
 def choose(en: Transcript | None, ur: Transcript | None, fallback: Language) -> Decision:
-    """The language and transcript, from whatever the recognisers returned."""
+    """The language and transcript, from whatever the recognisers returned.
+
+    whisper-urdu's own verdict is not enough by itself. It called English
+    spoken with a Pakistani accent -- and some spoken without one -- Urdu, 12
+    of 30 English clips measured, and then wrote the English out in Urdu
+    letters or in English ones. So when both recognisers heard something,
+    the evidence of both transcripts is weighed, and whisper's verdict
+    settles a tie.
+    """
     heard = {t.endpoint: t for t in (en, ur) if t is not None}
     en_text = en.text if en else ""
     ur_text = ur.text if ur else ""
     share = urdu_share(ur_text) if ur_text else None
+    language: Language
 
-    if ur_text and (ur.language == "ur" if ur else False):
-        return Decision("ur", ur_text, f"whisper heard Urdu ({_pct(share)} Urdu script)", heard)
-    if ur_text and share is not None and share >= 0.5:
-        return Decision("ur", ur_text, f"{_pct(share)} of whisper's letters are Urdu script", heard)
+    if en_text and ur_text and ur is not None:
+        english, urdu, why = _weigh(en_text, ur)
+        if english > urdu:
+            return Decision("en", en_text, f"English, {english} to {urdu}: {why}", heard)
+        if urdu > english:
+            return Decision("ur", ur_text, f"Urdu, {urdu} to {english}: {why}", heard)
+        if ur.language in ("en", "ur"):
+            language = "ur" if ur.language == "ur" else "en"
+        else:
+            language = "ur" if (share or 0) >= 0.5 else "en"
+        text = ur_text if language == "ur" else en_text
+        return Decision(language, text, f"even, {urdu} each, so whisper's verdict: {why}", heard)
     if has_devanagari(en_text):
-        if ur_text:
-            return Decision(
-                "ur", ur_text, "qwen3-asr wrote Hindi script: the speech was Urdu", heard
-            )
         return Decision("ur", en_text, "qwen3-asr wrote Hindi script; no Urdu transcript", heard)
     if en_text:
-        why = "whisper heard English" if ur and ur.language == "en" else "English transcript"
-        return Decision("en", en_text, why, heard)
+        return Decision("en", en_text, "only qwen3-asr heard anything: English transcript", heard)
     if ur_text:
         # qwen3-asr heard nothing, or failed; whisper's text is all there is.
-        language: Language = "ur" if (share or 0) >= 0.5 else "en"
+        language = "ur" if (share or 0) >= 0.5 else "en"
         return Decision(language, ur_text, "only whisper heard anything", heard)
     return Decision(fallback, "", "neither recogniser heard anything", heard)
-
-
-def _pct(share: float | None) -> str:
-    return "no" if share is None else f"{share:.0%}"
 
 
 class LanguageRouter:

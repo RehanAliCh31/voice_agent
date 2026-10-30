@@ -246,6 +246,65 @@ def test_when_nobody_heard_anything_the_session_language_stands() -> None:
     assert (decision.language, decision.text) == ("ur", "")
 
 
+# What the two recognisers returned for the same clip, measured by
+# scripts/benchmark.py: (qwen3-asr's text, whisper's text, whisper's verdict).
+ENGLISH_THAT_WHISPER_CALLED_URDU = [
+    # In Urdu letters, with English's small words spelled out.
+    ("Can you show my transactions for last week?", "کین یو شو مائی ٹرانزیکشنز فور لاسٹ ویک"),
+    ("Freeze the card ending 4417.", "فریز دہ کارڈ انڈنگ 4417"),
+    ("Pay forty dollars for the internet bill.", "پی فورٹی دالرز فر دہ انترنیٹ بل"),
+    ("Add Fatima Khan as a new pay.", "این عید فاطمہ کان ایز ای نیو پی"),
+    ("Send the payment to Ayesha Siddiqui.", "سیند ای پیمنٹ ٹو عیشہ صدیقی"),
+    ("Please check my balance. Shukria.", "پلیز چیک مائی بیلنس شکریہ"),
+    # In Urdu letters, with none of Urdu's small words at all.
+    ("Send two hundred and fifty dollars to Sarah.", "سینٹ 250 دولار تو سارا۔"),
+    ("Transfer fifty dollars to Ali Raza.", "ٹرانسفیر ففتی دولار تو علی رازہ۔"),
+    ("Is Osman Tarik on my list of pays?", "اس عثمان تاریخ عنمائل اسٹاپپیس"),
+    # In English letters: called Urdu, written as English.
+    ("Did Bilal Ahmed send me any money?", "Did Bilal Ahmed send me any money?"),
+]
+
+URDU_WITH_QWEN_GUESSING = [
+    # qwen3-asr translated the Urdu into fluent English.
+    ("I need to talk to someone.", "مجھے کسی انسان سے بات کرنی ہے۔"),
+    ("I have saved my savings account balance.", "مرے سیونگز ایکاونٹ کا بیلنس کیا ہے۔"),
+    ("My reference number is seven three nine two.", "میرا ریفرنس نمبر 7392 ہے۔"),
+    ("Thank you. For today, just enough.", "شکریہ آج کے لیے بس اتنا ہی"),
+    ("Fatma Khan will create a new household.", "فاطمہ خان کو نیا وصول کنندہ بنا دیں۔"),
+    # Roman Urdu, and Hindi script.
+    ("Kya Balal Ahmed ne, mujhe koi paise beje", "کیا بلال احمد نے مجھے کوئی پیسے بھیجے"),
+    ("क्या मेरा बिजली का बलदा हो गया है?", "کیا میرا بجلی کا بل ادا ہو گیا ہے؟"),
+    # Code-switched: English nouns, Urdu grammar.
+    ("Please, Mary, last transaction, batay.", "پلیز میری لاسٹ ٹرانزیکشن بتائیں"),
+    ("My checking account balance is high.", "میرا چیکنگ اکاؤنٹ بالنس کیا ہے۔"),
+]
+
+
+@pytest.mark.parametrize(("qwen", "whisper"), ENGLISH_THAT_WHISPER_CALLED_URDU)
+def test_english_whisper_called_urdu_is_english(qwen: str, whisper: str) -> None:
+    decision = choose(Transcript(qwen, "en", 300), Transcript(whisper, "ur", 300, "ur"), "ur")
+    assert (decision.language, decision.text) == ("en", qwen), decision.reason
+
+
+@pytest.mark.parametrize(("qwen", "whisper"), URDU_WITH_QWEN_GUESSING)
+def test_urdu_stays_urdu_whatever_qwen_wrote(qwen: str, whisper: str) -> None:
+    decision = choose(Transcript(qwen, "en", 300), Transcript(whisper, "ur", 300, "ur"), "en")
+    assert (decision.language, decision.text) == ("ur", whisper), decision.reason
+
+
+def test_with_nothing_else_to_go_on_whispers_verdict_decides() -> None:
+    # One word each, no grammar either way: the verdict is the only sign.
+    for verdict in ("en", "ur"):
+        decision = choose(Transcript("Okay.", "en", 1), Transcript("اوکے", "ur", 1, verdict), "en")
+        assert decision.language == verdict
+
+
+def test_an_even_count_with_no_verdict_goes_by_script() -> None:
+    decision = choose(Transcript("Okay.", "en", 1), Transcript("اوکے", "ur", 1), "en")
+    assert (decision.language, decision.text) == ("ur", "اوکے")
+    assert "even" in decision.reason
+
+
 class _Fake:
     def __init__(self, result: Transcript | Exception) -> None:
         self.result = result
