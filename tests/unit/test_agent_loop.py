@@ -1359,13 +1359,22 @@ def test_trying_to_look_in_urdu_is_a_promise_and_the_lookup_is_made(
     assert out.text == "آپ کے کریڈٹ کارڈ کا بل $215.00 ہے۔"
 
 
+# Measured: "I'm connecting you to a manager; your reference is 7254" -- nothing called.
+INVENTED = "شکایت کے لیے میں آپ کو ایک مینیجر سے جوڑتی ہوں۔ آپ کا حوالہ نمبر 7254 ہے۔"
+
+
 def test_a_reference_no_case_was_opened_for_is_never_said(executor: ToolExecutor) -> None:
-    # Measured: "I'm connecting you to a manager; your reference is 7254" -- nothing called.
-    invented = "شکایت کے لیے میں آپ کو ایک مینیجر سے جوڑتی ہوں۔ آپ کا حوالہ نمبر 7254 ہے۔"
-    client = FakeLLMClient([Reply(text=invented), Reply(text=invented)])
-    out = Agent(client, executor).handle("شکایت کے لیے کس سے بات کروں؟", in_urdu())
+    client = FakeLLMClient([Reply(text=INVENTED), Reply(text=INVENTED)])
+    out = Agent(client, executor).handle("میرا مسئلہ حل نہیں ہوا", in_urdu())
     assert client.choices[1] == "required"  # it was made to open the case
     assert "7254" not in out.text and out.fallback == "not_looked_up"
+
+
+def test_asked_whom_to_complain_to_a_real_case_is_opened(executor: ToolExecutor) -> None:
+    client = FakeLLMClient([Reply(text=INVENTED), Reply(text=INVENTED)])
+    out = Agent(client, executor).handle("شکایت کے لیے کس سے بات کروں؟", in_urdu())
+    assert "7254" not in out.text
+    assert out.handed_off is not None and out.handed_off in out.text
 
 
 def test_a_reference_read_back_from_an_earlier_turn_is_not_an_invention(
@@ -1378,3 +1387,18 @@ def test_a_reference_read_back_from_an_earlier_turn_is_not_an_invention(
     client = FakeLLMClient([Reply(text="Your reference is H-7392.")])
     out = Agent(client, executor).handle("what was my reference?", conversation)
     assert out.text == "Your reference is H-7392." and len(client.calls) == 1
+
+
+def test_a_phone_number_no_tool_gave_is_never_said(executor: ToolExecutor) -> None:
+    # Measured: told not to invent a reference, the model invented a helpline.
+    made_up = "You can call our customer service on 1-800-555-0123."
+    client = FakeLLMClient([Reply(text=made_up), Reply(text=made_up)])
+    out = Agent(client, executor).handle("how do I complain?", Conversation("s1"))
+    assert "555" not in out.text and out.fallback == "not_looked_up"
+
+
+@pytest.mark.parametrize(
+    "said", ["شکایت کے لیے کس سے بات کروں؟", "Who can I talk to about a complaint?"]
+)
+def test_asking_whom_to_talk_to_is_asking_for_a_person(said: str) -> None:
+    assert asked_for_a_person(said)

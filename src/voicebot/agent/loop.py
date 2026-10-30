@@ -98,15 +98,24 @@ _REFERENCE = re.compile(
 
 
 _DIGITS = re.compile(r"\d{3,}")
+# A phone number: groups of digits with dashes or spaces ("1-800-555-0123",
+# "+92 21 111 222 333"), or seven or more in a row. Amounts are written with
+# a currency sign, commas or a decimal point, so they never look like one.
+_PHONE = re.compile(r"\+?\d{1,4}(?:[-\s]\d{2,4}){2,}|(?<![\d,.$])\d{7,}(?![\d,.])")
+_DATE = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}-\d{1,2}-\d{4}")
 
 
 def invents_a_reference(text: str | None, messages: Sequence[dict[str, Any]]) -> bool:
-    """True when a reply names a case or reference number no tool has given.
+    """True when a reply names a case reference, or a phone number, no tool has given.
 
-    A reference read back from an earlier turn -- "what was my reference?" --
-    is in that turn's tool result, and is not an invention.
+    The bank's tools are the only source of either; a model asked whom to
+    call makes one up. A reference read back from an earlier turn -- "what
+    was my reference?" -- is in that turn's tool result, and is not an
+    invention.
     """
-    stated = [_DIGITS.findall(m.group(0)) for m in _REFERENCE.finditer(text or "")]
+    phones = [m for m in _PHONE.finditer(text or "") if not _DATE.fullmatch(m.group(0))]
+    found = [*_REFERENCE.finditer(text or ""), *phones]
+    stated = [_DIGITS.findall(m.group(0)) for m in found]
     if not stated:
         return False
     given = " ".join(str(m.get("content") or "") for m in messages if m.get("role") == "tool")
@@ -169,7 +178,9 @@ _WANTS_A_PERSON = re.compile(
     r"(?:human|person|someone|somebody|agent|representative|advis[eo]r|operator|staff)"
     r"|real\s+(?:human|person)"
     r"|customer\s+(?:service|support)"
-    r"|human\s+being",
+    r"|human\s+being"
+    # "Who can I talk to about a complaint?" -- a person, whoever it is.
+    r"|\bwho\s+(?:can|could|should|do|shall)\s+i\s+(?:talk|speak)\s+to\b",
     re.IGNORECASE,
 )
 
@@ -180,6 +191,9 @@ _WANTS_A_PERSON = re.compile(
 _WANTS_A_PERSON_UR = re.compile(
     r"(?:انسان|نمائندے|نمائندہ|ایجنٹ|بندے|شخص|آپریٹر|عملے)\s+سے\s+(?:\S+\s+){0,2}?بات"
     r"|کسٹمر\s+(?:سروس|سپورٹ|کیئر)"
+    # "شکایت کے لیے کس سے بات کروں؟" -- whom do I talk to: measured, the model
+    # answered it with a reference, then a phone number, it had made up.
+    r"|کس\s+سے\s+بات\s+(?:کروں|کر\s+سکتا|کر\s+سکتی|کریں|ہو\s+سکتی)"
 )
 
 # And as Urdu is typed, in Latin letters: "kisi insaan se baat karni hai",
