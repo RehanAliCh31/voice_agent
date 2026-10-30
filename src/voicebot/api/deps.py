@@ -130,7 +130,7 @@ class Services:
                     result = work(session, pipeline)
                 except (Cancelled, HTTPException):
                     raise
-                except Exception as exc:
+                except Exception as exc:  # any bug: the caller still hears a sentence
                     # The pipeline has a net of its own; this is the one under it.
                     log.error("the turn failed: %s", type(exc).__name__, exc_info=exc)
                     report(InternalError(f"the turn failed: {type(exc).__name__}", cause=exc))

@@ -190,7 +190,7 @@ class PostgresBank(Bank):
 
         try:
             self._prepare(seed_if_empty)
-        except Exception:
+        except Exception:  # whatever failed, the pool is closed, then it goes up
             # Migrations or the seed failed: hand the connections back rather
             # than leaving them open in a process that is about to stop.
             self._pool.close()

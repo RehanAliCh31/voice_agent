@@ -198,7 +198,7 @@ class VoicePipeline:
             return work()
         except Cancelled:
             raise
-        except Exception as exc:
+        except Exception as exc:  # a bug, not a provider failure: said as internal
             log.error("the turn failed unexpectedly: %s", type(exc).__name__, exc_info=exc)
             report(
                 InternalError(
@@ -212,7 +212,7 @@ class VoicePipeline:
             return AudioBuffer(samples=SILENCE, sample_rate=16_000)
         try:
             return self.tts.synthesize(text)
-        except Exception as exc:
+        except Exception as exc:  # an engine that raises is treated as silence
             # An engine that raises rather than returning silence is treated
             # as silence: the reply is on the page, and the page speaks it.
             report(

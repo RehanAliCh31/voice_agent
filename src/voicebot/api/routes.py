@@ -79,7 +79,7 @@ def _read_audio(data: bytes) -> AudioBuffer:
         )
     try:
         return decode_wav(data)
-    except Exception as exc:
+    except Exception as exc:  # any decoder failure is the same refusal
         # The decoder's own words ("file does not start with RIFF id") are
         # for the log, not for the page.
         log.warning("an upload could not be decoded: %s", type(exc).__name__)
