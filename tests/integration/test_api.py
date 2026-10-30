@@ -10,6 +10,8 @@ a confirmation, and that the page is still served.
 from __future__ import annotations
 
 import re
+import threading
+import time
 from collections.abc import Iterator
 
 import numpy as np
@@ -1263,3 +1265,71 @@ def test_the_page_can_keep_the_bots_recordings_of_its_failure_sentences(
     _speaking(client, _PiecesVoice(), "x")
     kept = client.get("/v1/messages/voice_unavailable/audio?language=ur")
     assert kept.status_code == 200 and kept.content[:4] == b"RIFF"
+
+
+# --- callers in two languages at once; a caller who hangs up ------------------------
+
+
+class _AnswersInTheirLanguage(FakeLLMClient):
+    """Answers in whatever language the note beside the customer's words asks for."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+
+    def complete(self, messages, tools, tool_choice="auto"):  # type: ignore[no-untyped-def]
+        time.sleep(0.05)  # long enough for the two callers' turns to overlap
+        note = messages[-1]["content"]
+        urdu = "Reply ONLY in Urdu" in note
+        return Reply(
+            text="آپ کا بیلنس ٹھیک ہے۔ اور کچھ؟" if urdu else "Your balance is fine. Anything else?"
+        )
+
+
+class _RecordingVoice(_PiecesVoice):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lock = threading.Lock()
+        self.voices: list[tuple[str, str | None]] = []
+
+    def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
+        with self.lock:
+            self.voices.append((text, voice))
+        return super().synthesize(text, voice)
+
+
+def test_callers_in_two_languages_at_once_each_hear_their_own(client: TestClient) -> None:
+    services: Services = client.app.state.services  # type: ignore[attr-defined]
+    voice = _RecordingVoice()
+    services.tts = voice
+    services.llm = _AnswersInTheirLanguage()
+    said = {"en": "what is my balance", "ur": "میرا بیلنس کیا ہے"}
+    turns: dict[str, dict] = {}
+
+    def call(language: str) -> None:
+        turns[language] = client.post("/v1/chat", json={"text": said[language]}).json()
+
+    threads = [threading.Thread(target=call, args=(lang,)) for lang in ("en", "ur", "en", "ur")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+
+    assert turns["en"]["reply"].startswith("Your balance")
+    assert turns["ur"]["reply"].startswith("آپ کا بیلنس")
+    # Every piece in the voice of its own caller's language.
+    for text, language in voice.voices:
+        assert language == ("ur" if any("؀" <= c <= "ۿ" for c in text) else "en"), text
+
+
+def test_a_caller_who_hangs_up_stops_the_rest_of_the_reply(client: TestClient) -> None:
+    _speaking(client, _PiecesVoice(), "One. Two. Three.")
+    turn = client.post("/v1/chat", json={"text": "hello"}).json()
+    services: Services = client.app.state.services  # type: ignore[attr-defined]
+    speaking = services.sessions.find(turn["session_id"]).speaking  # type: ignore[union-attr]
+    assert speaking is not None
+
+    assert client.delete(f"/v1/session/{turn['session_id']}").status_code in (200, 204)
+
+    assert speaking.wait(1, timeout=1) is None  # nothing more is made, or given out
+    base = f"/v1/sessions/{turn['session_id']}/audio/{turn['audio_id']}"
+    assert client.get(f"{base}/1").status_code == 404

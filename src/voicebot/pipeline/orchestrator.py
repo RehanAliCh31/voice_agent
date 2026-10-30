@@ -164,7 +164,7 @@ class VoicePipeline:
             latency=tracker.breakdown(),
             rest=rest,
         )
-        self._log(turn)
+        self._log(turn, conversation.language)
         return turn
 
     def resolve_pending(self, confirmed: bool, conversation: Conversation) -> TurnResult:
@@ -189,7 +189,7 @@ class VoicePipeline:
             latency=tracker.breakdown(),
             rest=rest,
         )
-        self._log(turn)
+        self._log(turn, conversation.language)
         return turn
 
     def _safely(self, work: Callable[[], AgentResult], conversation: Conversation) -> AgentResult:
@@ -318,18 +318,23 @@ class VoicePipeline:
             result.rest.cancel()
         return dataclasses.replace(result, agent=agent, audio=self._speak(agent.text), rest=None)
 
-    def _log(self, result: TurnResult) -> None:
+    def _log(self, result: TurnResult, language: str) -> None:
         slowest = result.latency.slowest()
         # What was said is the customer's, and is logged only at DEBUG. At
         # INFO a turn is its shape: how much was said, in which language,
-        # what was done, how long it took, and whether it ended in a fallback.
+        # what was done, how long it took to the first sound (the turn's
+        # total: it answers with the first piece), how many pieces followed,
+        # and whether it ended in a fallback.
         log.info(
-            "turn chars=%d tools=%s guard_hit=%s fallback=%s total=%.0fms slowest=%s",
+            "turn language=%s chars=%d tools=%s guard_hit=%s fallback=%s first_audio=%.0fms "
+            "pieces_after=%d slowest=%s",
+            language,
             len(result.text),
             [call.name for call in result.agent.tool_calls] or "none",
             result.agent.guard_hit,
             result.agent.fallback or "-",
             result.latency.total_ms,
+            result.rest.count if result.rest is not None else 0,
             f"{slowest[0]} {slowest[1]:.0f}ms" if slowest else "n/a",
         )
         log.debug("heard=%r replied=%r", result.text, result.agent.text)
