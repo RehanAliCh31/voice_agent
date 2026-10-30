@@ -325,3 +325,26 @@ def test_a_reply_is_cut_short_first_then_into_sentences() -> None:
     pieces = engine.pieces("Your savings balance is $19,020.00. Anything else today?", "en")
     assert pieces[0] == "Your savings balance is"  # the voice's first_chunk_words: 4
     assert " ".join(pieces) == "Your savings balance is $19,020.00. Anything else today?"
+
+
+def test_recording_the_bots_sentences_waits_while_a_caller_is_answered() -> None:
+    voices = {"en": _Voice(), "ur": _Voice()}
+    engine = EndpointsTTSEngine(voices)  # type: ignore[arg-type]
+    busy = iter([True, True, False] + [False] * 10)
+    asked: list[bool] = []
+
+    def turn_running() -> bool:
+        running = next(busy)
+        asked.append(running)
+        return running
+
+    assert engine.warm(("unavailable",), busy=turn_running) == 2
+    # It asked, waited through two answers in progress, then recorded.
+    assert asked[:3] == [True, True, False]
+    assert len(voices["en"].said) == 1
+
+
+def test_a_caller_who_never_finishes_does_not_stop_the_recordings_for_ever() -> None:
+    voices = {"en": _Voice(), "ur": _Voice()}
+    engine = EndpointsTTSEngine(voices)  # type: ignore[arg-type]
+    assert engine.warm(("unavailable",), busy=lambda: True, give_way_s=0.5) == 2

@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import hashlib
 import threading
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import numpy as np
@@ -147,17 +148,31 @@ class EndpointsTTSEngine(TTSEngine):
         with self._lock:
             return self._fallbacks.get((language, say(key, language)))
 
-    def warm(self, keys: tuple[str, ...] | None = None) -> int:
+    def warm(
+        self,
+        keys: tuple[str, ...] | None = None,
+        busy: Callable[[], bool] | None = None,
+        give_way_s: float = 60.0,
+    ) -> int:
         """Record the bot's own sentences now, the most needed first. Returns how many are kept.
 
         Run once, in the background, after startup; sentences already kept
         from an earlier run are not recorded again. A voice that is down now
         simply leaves them to be kept the first time they are spoken.
+
+        Each voice makes one clip at a time, so a recording made while a
+        caller waits for an answer delays the answer. While `busy` says a
+        turn is running, the next recording waits -- up to `give_way_s` --
+        and the caller goes first.
         """
         wanted = list(keys) if keys is not None else self._all_keys()
         for key in wanted:
             for language in ("en", "ur"):
                 if self.kept(key, language) is None:
+                    waited = 0.0
+                    while busy is not None and busy() and waited < give_way_s:
+                        time.sleep(0.25)
+                        waited += 0.25
                     self.synthesize(say(key, language), voice=language)
         kept = sum(self.kept(k, lang) is not None for k in wanted for lang in ("en", "ur"))
         log.info("%d of %d recordings of the bot's own sentences kept", kept, 2 * len(wanted))

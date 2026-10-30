@@ -234,12 +234,15 @@ class Services:
         return database_ok and not self.draining, checks
 
     def warm(self) -> None:
-        """Record the fallback sentences in the background, after startup."""
+        """Record the bot's own sentences in the background, after startup.
+
+        Callers go first: a recording waits while any turn is running.
+        """
         warm = getattr(self.tts, "warm", None)
         if not callable(warm):
             return
         try:
-            warm()
+            warm(busy=lambda: self.in_flight > 0)
         except Exception as exc:  # a voice that is down now is asked again on first use
             log.warning("could not record the fallback sentences yet: %s", type(exc).__name__)
 
