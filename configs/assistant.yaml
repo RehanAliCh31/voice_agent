@@ -39,9 +39,12 @@ asr:
 # other gender, main or backup, stops startup. The model never chooses.
 #
 # Nothing is heard until the first piece of a reply is synthesised, so it is
-# cut short (first_chunk_words), and for English the next pieces grow by
-# chunk_growth so each is ready before the last one ends. OmniVoice costs
-# ~1.1 s per request whatever its length, so it goes to whole sentences.
+# cut short (first_chunk_words), and the next pieces grow by chunk_growth so
+# each is ready before the last one ends. Measured: OmniVoice costs ~2 s per
+# request plus ~0.1 s a word, and a word lasts ~0.42 s; so a first piece of 8
+# words (3.4 s of speech) covers the making of a second of up to ~13 words,
+# where 5 words (2.1 s) left a silence after it in 19 Urdu turns of 20.
+# qwen3-tts costs ~0.2 s a word, half real time: 5 words is enough.
 # What each voice is, and where it came from: LANGUAGE_VOICE_CONFIG.md.
 agent:
   gender: female
@@ -64,7 +67,7 @@ agent:
         gender: female
         label: OmniVoice assistant-pk
         first_chunk_words: 8
-        chunk_growth: 0
+        chunk_growth: 1.6
     male:
       en:
         url: http://localhost:8091/v1/audio/speech
@@ -73,7 +76,7 @@ agent:
         gender: male
         label: OmniVoice urdu_male5, in English
         first_chunk_words: 8
-        chunk_growth: 0
+        chunk_growth: 1.6
       ur:
         url: http://localhost:8091/v1/audio/speech
         model: k2-fsa/OmniVoice
@@ -81,7 +84,7 @@ agent:
         gender: male
         label: OmniVoice urdu_male5
         first_chunk_words: 8
-        chunk_growth: 0
+        chunk_growth: 1.6
   # Tried when the main voice fails, before a kept recording. The English
   # backup is on the other server, so it survives the main one going down.
   # There is no second male voice on a second server to back the male ones.
@@ -94,6 +97,7 @@ agent:
         gender: female
         label: OmniVoice assistant-en
         first_chunk_words: 8
+        chunk_growth: 1.6
       ur:
         url: http://localhost:8091/v1/audio/speech
         model: k2-fsa/OmniVoice
@@ -101,6 +105,7 @@ agent:
         gender: female
         label: OmniVoice assistant-ur
         first_chunk_words: 8
+        chunk_growth: 1.6
 
 # tts.en and tts.ur come from agent.voices above.
 tts:
