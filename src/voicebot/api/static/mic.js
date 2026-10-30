@@ -95,6 +95,13 @@ function onLiveState(name) {
   if (state.vad) {
     state.vad.enabled = false; // the service decides barge-in now
   }
+  if (name === "user_speaking" || name === "agent_speaking") {
+    // A reply to a button (Yes, Cancel, the keypad) plays through the page's
+    // own player, which the live session does not know of. The caller being
+    // heard, or the session speaking, stops it: the bot never talks over the
+    // caller, or over itself.
+    stopPlayback();
+  }
   var shown = LIVE_STATUS[name];
   if (!shown) {
     return;
