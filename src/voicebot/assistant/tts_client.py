@@ -12,8 +12,10 @@ cut: the first word then reaches the speaker that much sooner.
 
 from __future__ import annotations
 
+import base64
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 import numpy as np
@@ -119,6 +121,7 @@ class TtsClient:
         self.timeout_s = timeout_s
         self.policy = RetryPolicy(attempts=max(0, retries) + 1)
         self._client = client or httpx.Client(timeout=httpx.Timeout(timeout_s, connect=5.0))
+        self._reference_url: str | None = None
 
     def synthesize(self, text: str) -> Speech:
         body: dict[str, object] = {
@@ -128,6 +131,9 @@ class TtsClient:
         }
         if self.endpoint.voice:
             body["voice"] = self.endpoint.voice
+        if self.endpoint.reference:
+            body["ref_audio"] = self._reference()
+            body["ref_text"] = self.endpoint.reference_text
         body.update(self.endpoint.extra)
         what = f"the {self.name} voice"
 
@@ -164,6 +170,13 @@ class TtsClient:
             circuit=breaker(f"tts-{self.name}"),
             error_type=TtsError,
         )
+
+    def _reference(self) -> str:
+        """The reference recording as a data URL, read from disk once."""
+        if self._reference_url is None:
+            data = Path(self.endpoint.reference or "").read_bytes()
+            self._reference_url = "data:audio/wav;base64," + base64.b64encode(data).decode()
+        return self._reference_url
 
     def close(self) -> None:
         self._client.close()

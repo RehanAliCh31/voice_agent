@@ -342,7 +342,17 @@ def build_services(config: AppConfig | None = None) -> Services:
         endpoints = (
             config.tts.endpoints if config.tts.engine == "endpoints" else config.asr.endpoints
         )
-        profile.use(load_assistant_config(endpoints).profile())
+        voices = load_assistant_config(endpoints)
+        profile.use(voices.profile())
+        if config.tts.engine == "endpoints":
+            from voicebot.assistant.health import missing_voices
+
+            # A voice its server does not have could only fail in front of a
+            # caller, and its backup is not the voice chosen. Refused here,
+            # at startup, by name.
+            missing = missing_voices(voices)
+            if missing:
+                raise RuntimeError("the service cannot start:\n  - " + "\n  - ".join(missing))
     log.info("the agent is %s, %s", profile.current().name("en"), profile.current().gender)
 
     asr: ASREngine

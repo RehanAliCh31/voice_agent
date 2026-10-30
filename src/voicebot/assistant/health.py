@@ -94,3 +94,52 @@ def report(checks: list[Check]) -> str:
             "\n  check this machine is connected to it (or to the VPN)."
         )
     return "\n".join(lines)
+
+
+def missing_voices(config: AssistantConfig, client: httpx.Client | None = None) -> list[str]:
+    """The agent's voices, main and backup, that their server says it does not have.
+
+    A server that lists its voices (OmniVoice: GET /v1/audio/voices) is
+    asked; a voice it does not list could only ever fail, in front of a
+    caller, so the service refuses to start instead. A server that lists
+    none (qwen3-tts) or cannot be reached right now is not held against the
+    configuration: the voices' own fallbacks deal with a server that is down.
+    """
+    wanted = [
+        (language, endpoint)
+        for language in ("en", "ur")
+        for endpoint in (config.tts.voice(language), config.tts.backup(language))  # type: ignore[arg-type]
+        if endpoint is not None and endpoint.voice
+    ]
+    listed: dict[str, set[str] | None] = {}
+    own = client is None
+    http = client or httpx.Client(timeout=httpx.Timeout(5.0, connect=3.0))
+    try:
+        for _, endpoint in wanted:
+            base = _base(endpoint.url)
+            if base not in listed:
+                listed[base] = _voices_on(base, http)
+    finally:
+        if own:
+            http.close()
+    return [
+        f"{language}: {endpoint.voice} is not on {_base(endpoint.url)}"
+        for language, endpoint in wanted
+        if listed[_base(endpoint.url)] is not None
+        and endpoint.voice not in listed[_base(endpoint.url)]  # type: ignore[operator]
+    ]
+
+
+def _voices_on(base: str, client: httpx.Client) -> set[str] | None:
+    """The voices a server lists; None when it lists none or cannot be asked."""
+    try:
+        answer = client.get(f"{base}/v1/audio/voices")
+        if answer.status_code != 200:
+            return None
+        body = answer.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    names = body.get("voices") if isinstance(body, dict) else None
+    if not isinstance(names, list):
+        return None
+    return {name for name in names if isinstance(name, str)}

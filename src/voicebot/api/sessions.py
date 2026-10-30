@@ -146,7 +146,9 @@ class InMemorySessionStore(SessionStore):
 
     def drop(self, session_id: str) -> None:
         with self._lock:
-            self._entries.pop(session_id, None)
+            entry = self._entries.pop(session_id, None)
+        if entry is not None:
+            _hang_up(entry.session)
 
     def __len__(self) -> int:
         with self._lock:
@@ -159,7 +161,7 @@ class InMemorySessionStore(SessionStore):
         cutoff = time.monotonic() - self.ttl_seconds
         stale = [key for key, entry in self._entries.items() if entry.touched < cutoff]
         for key in stale:
-            del self._entries[key]
+            _hang_up(self._entries.pop(key).session)
         if stale:
             log.info("evicted %d expired session(s)", len(stale))
 
@@ -170,5 +172,12 @@ class InMemorySessionStore(SessionStore):
             return
         oldest = sorted(self._entries, key=lambda key: self._entries[key].touched)[:excess]
         for key in oldest:
-            del self._entries[key]
+            _hang_up(self._entries.pop(key).session)
         log.warning("session cap reached, evicted %d least recent", excess)
+
+
+def _hang_up(session: Session) -> None:
+    """The caller has gone: what was left of their last reply is not made."""
+    if session.speaking is not None:
+        session.speaking.cancel()
+        session.speaking = None

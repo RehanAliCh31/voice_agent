@@ -110,7 +110,13 @@ def cmd_check(args: argparse.Namespace) -> int:
     print("\nEndpoints:")
     checks = health.check_all(config)
     print(health.report(checks))
-    return 0 if all(f.verified for f in files) and all(c.ok for c in checks) else 1
+    agent = config.profile()
+    print(f"\nAgent: {agent.name('en')}, {agent.gender}")
+    missing = health.missing_voices(config)
+    for line in missing:
+        print(f"  MISSING voice {line}")
+    ok = all(f.verified for f in files) and all(c.ok for c in checks) and not missing
+    return 0 if ok else 1
 
 
 def cmd_devices(args: argparse.Namespace) -> int:

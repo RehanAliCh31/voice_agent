@@ -205,3 +205,31 @@ def test_the_voices_built_for_the_agent_are_its_own_and_backed_up() -> None:
         assert isinstance(voice, BackedUpVoice)  # both have a backup in the shipped config
         assert voice.main.endpoint.gender == voice.backup.endpoint.gender == config.profile().gender
         voice.close()
+
+
+def test_a_voice_cloned_from_a_reference_sends_it_with_every_request(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    reference = tmp_path / "arabic-female.wav"
+    reference.write_bytes(_wav(np.full(240, 4000, np.int16)))
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, content=_wav(np.full(2400, 4000, np.int16)))
+
+    endpoint = TtsEndpoint(
+        url="http://t/x", model="OmniVoice", reference=str(reference), reference_text="مرحباً"
+    )
+    TtsClient(endpoint, "en", 5, 0, client=_client(handler)).synthesize("Hello")
+    assert seen[0]["ref_audio"].startswith("data:audio/wav;base64,")
+    assert seen[0]["ref_text"] == "مرحباً" and "voice" not in seen[0]
+
+
+def test_a_different_reference_is_a_different_voice(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    one, two = tmp_path / "one.wav", tmp_path / "two.wav"
+    one.write_bytes(_wav(np.full(240, 4000, np.int16)))
+    two.write_bytes(_wav(np.full(240, 2000, np.int16)))
+    same = {"url": "http://t/x", "model": "m", "reference_text": "x"}
+    assert (
+        TtsEndpoint(**same, reference=str(one)).identity()
+        != TtsEndpoint(**same, reference=str(two)).identity()
+    )

@@ -131,3 +131,22 @@ def test_voices_are_set_in_one_place_only(tmp_path: Path) -> None:
     path = _with(tmp_path, "tts:\n", "tts:\n  en: {url: http://x.test, model: m}\n")
     with pytest.raises(ValueError, match=r"tts\.en cannot be set when there is an agent"):
         load_assistant_config(path)
+
+
+def test_a_reference_voice_needs_its_file_and_its_words(tmp_path: Path) -> None:
+    missing = _with(
+        tmp_path,
+        "voice: urdu_male5\n        gender: male",
+        "reference: voice_samples/references/no-such.wav\n"
+        "        reference_text: x\n        gender: male",
+    )
+    with pytest.raises(ValueError, match=r"no file at voice_samples/references/no-such\.wav"):
+        load_assistant_config(missing)
+    (tmp_path / "ref.wav").write_bytes(b"RIFF")
+    wordless = _with(
+        tmp_path,
+        "voice: urdu_male5\n        gender: male",
+        f"reference: {(tmp_path / 'ref.wav').as_posix()}\n        gender: male",
+    )
+    with pytest.raises(ValueError, match="a reference needs its reference_text"):
+        load_assistant_config(wordless)

@@ -91,6 +91,11 @@ class TtsEndpoint(_Strict):
     # English synthesises at 0.6x real time, Urdu with ~1.1 s per request.
     first_chunk_words: int = 8
     chunk_growth: float = 0.0
+    # A recording to clone the voice from, sent inline with every request
+    # (OmniVoice's ref_audio and ref_text), so nothing has to be uploaded to
+    # the server: a path to a WAV, and exactly what it says.
+    reference: str | None = None
+    reference_text: str | None = None
     # Whose voice this is. Checked against the agent's gender at startup, so
     # a female agent can never be given a male voice, or a male backup.
     gender: Gender | None = None
@@ -99,12 +104,18 @@ class TtsEndpoint(_Strict):
 
     def identity(self) -> str:
         """What makes two voices the same voice: a recording of one is one of the other."""
+        import hashlib
+
         extra = ",".join(f"{k}={self.extra[k]!r}" for k in sorted(self.extra) if k != "ref_audio")
         ref = self.extra.get("ref_audio")
         if isinstance(ref, str):
-            import hashlib
-
             extra += f",ref_audio={hashlib.sha1(ref.encode()).hexdigest()[:12]}"
+        if self.reference:
+            try:
+                digest = hashlib.sha1(Path(self.reference).read_bytes()).hexdigest()[:12]
+            except OSError:
+                digest = self.reference
+            extra += f",reference={digest}"
         return f"{self.url}|{self.model}|{self.voice or ''}|{extra}"
 
 
@@ -166,6 +177,14 @@ class AgentConfig(_Strict):
         for gender, voices in self.voices.items():
             for language in LANGUAGES:
                 voice: TtsEndpoint = getattr(voices, language)
+                if voice.reference and not Path(voice.reference).is_file():
+                    problems.append(
+                        f"agent.voices.{gender}.{language}.reference: no file at {voice.reference}"
+                    )
+                if voice.reference and not voice.reference_text:
+                    problems.append(
+                        f"agent.voices.{gender}.{language}: a reference needs its reference_text"
+                    )
                 if voice.gender != gender:
                     problems.append(
                         f"agent.voices.{gender}.{language} is "
