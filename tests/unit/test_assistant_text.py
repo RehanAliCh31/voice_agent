@@ -76,6 +76,15 @@ def test_english_ordinals(n: int, words: str) -> None:
         ("on the 22nd", "on the twenty-second"),
         ("expires 12/28", "expires twelve twenty-eight"),
         ("2.05 litres", "two point zero five litres"),
+        # A date: day first, as written in Pakistan, or year first.
+        ("due 12/10/2026", "due the twelfth of October, two thousand twenty-six"),
+        ("paid on 2026-10-27", "paid on the twenty-seventh of October, two thousand twenty-six"),
+        # A reference is read out to be written down.
+        ("your reference is H-7392", "your reference is H, seven three nine two"),
+        (
+            "call +92 300 1234567",
+            "call plus nine two, three zero zero, one two three four five six seven",
+        ),
     ],
 )
 def test_english_numbers_become_words(text: str, spoken: str) -> None:
@@ -140,6 +149,18 @@ def test_words_that_are_not_a_number_read_as_none(words: str) -> None:
         ("وقت 10:30 ہے", "وقت دس بج کر تیس منٹ ہے"),
         ("وقت 4:00 ہے", "وقت چار بجے ہے"),
         ("کال 0300-1234567", "کال صفر تین صفر صفر، ایک دو تین چار پانچ چھ سات"),
+        # A card's last digits one at a time, as in English -- but "the last
+        # ten transactions" is ten.
+        ("کارڈ جس کے آخری ہندسے 4417 ہیں", "کارڈ جس کے آخری ہندسے چار چار ایک سات ہیں"),
+        ("کارڈ جس کے آخر میں 4417 ہے", "کارڈ جس کے آخر میں چار چار ایک سات ہے"),
+        ("4417 والا کارڈ", "چار چار ایک سات والا کارڈ"),
+        ("آخری 10 ٹرانزیکشنز", "آخری دس ٹرانزیکشنز"),
+        # Dates, references, a time already followed by "بجے", a "+".
+        ("تاریخ 12/10/2026 ہے", "تاریخ بارہ اکتوبر دو ہزار چھبیس ہے"),
+        ("ادائیگی 2026-10-27 کو", "ادائیگی ستائیس اکتوبر دو ہزار چھبیس کو"),
+        ("ریفرنس H-7392 ہے", "ریفرنس H، سات تین نو دو ہے"),
+        ("صبح 10:30 بجے", "صبح دس بج کر تیس منٹ"),
+        ("کال +92 300 1234567", "کال پلس نو دو، تین صفر صفر، ایک دو تین چار پانچ چھ سات"),
     ],
 )
 def test_urdu_numbers_become_words(text: str, spoken: str) -> None:

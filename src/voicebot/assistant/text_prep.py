@@ -187,6 +187,12 @@ def urdu_number(words: str) -> int | None:
     return total + current if seen else None
 
 
+_EN_MONTHS = (
+    "January February March April May June July August September October November December"
+).split()
+_UR_MONTHS = "جنوری فروری مارچ اپریل مئی جون جولائی اگست ستمبر اکتوبر نومبر دسمبر".split()
+
+
 def _digits(text: str, words: Callable[[int], str], separator: str = " ") -> str:
     return separator.join(words(int(d)) for d in text if d.isdigit())
 
@@ -236,6 +242,20 @@ class _Numbers:
             return f"{urdu_int(hours)} بجے"
         return f"{urdu_int(hours)} بج کر {urdu_int(minutes)} منٹ"
 
+    def _date(self, day: int, month: int, year: int, written: str) -> str:
+        """A date as it is said: "the twelfth of October, two thousand twenty-six",
+        "بارہ اکتوبر دو ہزار چھبیس". Anything that is not a real date is left as written."""
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            return written
+        if self.language == "en":
+            return f"the {english_ordinal(day)} of {_EN_MONTHS[month - 1]}, {english_int(year)}"
+        return f"{urdu_int(day)} {_UR_MONTHS[month - 1]} {urdu_int(year)}"
+
+    def _code(self, match: re.Match[str]) -> str:
+        """A reference like H-7392: its letters, then its digits one at a time."""
+        pause = ", " if self.language == "en" else "، "
+        return f"{' '.join(match.group(1))}{pause}{_digits(match.group(2), self.words)}"
+
     def apply(self, text: str) -> str:
         en = self.language == "en"
         number = rf"(?P<whole>{_GROUPED}|\d+)(?:\.(?P<fraction>\d{{1,2}}))?"
@@ -255,7 +275,24 @@ class _Numbers:
             + (" percent" if en else " فیصد"),
             text,
         )
-        text = re.sub(r"\b(\d{1,2}):(\d{2})\b", self._time, text)
+        # Dates before anything else reads their parts as numbers: day, month
+        # and year, written day first as in Pakistan, or year first (ISO).
+        text = re.sub(
+            r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b",
+            lambda m: self._date(int(m.group(3)), int(m.group(2)), int(m.group(1)), m.group(0)),
+            text,
+        )
+        text = re.sub(
+            r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b",
+            lambda m: self._date(int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(0)),
+            text,
+        )
+        # A reference (H-7392, D-1043) is read out to be written down.
+        text = re.sub(r"\b([A-Z]{1,3})-(\d{3,})\b", self._code, text)
+        # In Urdu, "بجے" after a time is part of what _time says already.
+        time = r"\b(\d{1,2}):(\d{2})\b" + ("" if en else r"(?:\s*بجے)?")
+        text = re.sub(time, self._time, text)
+        text = re.sub(r"\+(?=\s?\d)", "plus " if en else "پلس ", text)
         # Phone, card and account numbers are read a digit at a time: in
         # groups when written in groups, and wherever seven or more digits run
         # together, or a number follows "ending in".
@@ -270,6 +307,20 @@ class _Numbers:
             lambda m: _digits(m.group(0), self.words),
             text,
         )
+        if not en:
+            # A card's last digits, read one at a time as in English: "آخری
+            # ہندسے 4417", "آخر میں 4417", "4417 والا کارڈ". Not after "آخری"
+            # alone: "آخری 10 ٹرانزیکشنز" is ten transactions.
+            text = re.sub(
+                r"((?:آخر\s+میں|ختم\s+ہونے\s+والے|ہندسے|ہندسوں)[^\d۔؟!]{0,25}?)(\d{2,6})\b",
+                lambda m: f"{m.group(1)}{_digits(m.group(2), self.words)}",
+                text,
+            )
+            text = re.sub(
+                r"\b(\d{2,6})(?=\s+(?:والا|والے|والی)\s+کارڈ)",
+                lambda m: _digits(m.group(1), self.words),
+                text,
+            )
         if en:
             text = re.sub(
                 r"(?i)\b(ending(?: in| with)?|last (?:four|4)(?: digits)?(?: are| of)?)"
