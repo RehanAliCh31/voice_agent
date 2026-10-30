@@ -43,6 +43,18 @@ def _base(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
+def _model_ids(body: object) -> list[str]:
+    """The ids in a /v1/models answer; none, from an answer of any other shape.
+
+    A server that answers its health check but lists its models oddly is
+    still up, and is reported as listing none rather than taken for down.
+    """
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, list):
+        return []
+    return [m["id"] for m in data if isinstance(m, dict) and isinstance(m.get("id"), str)]
+
+
 def check_service(name: str, url: str, model: str, client: httpx.Client) -> Check:
     base = _base(url)
     start = time.perf_counter()
@@ -52,11 +64,7 @@ def check_service(name: str, url: str, model: str, client: httpx.Client) -> Chec
         if health.status_code != 200:
             return Check(name, base, False, latency, f"/health answered {health.status_code}")
         listed = client.get(f"{base}/v1/models")
-        models = (
-            [m.get("id") for m in listed.json().get("data", [])]
-            if listed.status_code == 200
-            else []
-        )
+        models = _model_ids(listed.json()) if listed.status_code == 200 else []
     except (httpx.HTTPError, ValueError) as exc:
         return Check(name, base, False, None, f"unreachable: {type(exc).__name__}: {exc}")
     if model in models:
@@ -68,8 +76,10 @@ def check_service(name: str, url: str, model: str, client: httpx.Client) -> Chec
 
 
 def check_all(config: AssistantConfig, client: httpx.Client | None = None) -> list[Check]:
-    client = client or httpx.Client(timeout=httpx.Timeout(5.0, connect=3.0))
-    return [check_service(name, url, model, client) for name, url, model in services(config)]
+    if client is not None:
+        return [check_service(name, url, model, client) for name, url, model in services(config)]
+    with httpx.Client(timeout=httpx.Timeout(5.0, connect=3.0)) as own:
+        return [check_service(name, url, model, own) for name, url, model in services(config)]
 
 
 def report(checks: list[Check]) -> str:

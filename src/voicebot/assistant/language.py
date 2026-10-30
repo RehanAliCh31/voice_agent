@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import contextvars
 import re
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from collections.abc import Callable
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 
@@ -147,6 +149,19 @@ class LanguageRouter:
         self.en = en
         self.ur = ur
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="asr")
+        self._jobs: set[Future[Transcript]] = set()
+        self._jobs_lock = threading.Lock()
+
+    def cancel_pending(self) -> int:
+        """Drop the jobs still queued for a recogniser, for a turn that was interrupted.
+
+        A job already running cannot be stopped -- its client's own timeout
+        ends it -- but one still waiting would otherwise hold up the next
+        turn's. Returns how many were dropped.
+        """
+        with self._jobs_lock:
+            jobs = list(self._jobs)
+        return sum(job.cancel() for job in jobs)
 
     def transcribe(self, wav: bytes, session_language: Language) -> Decision:
         """Raises AsrError only when no recogniser could be used at all."""
@@ -161,24 +176,31 @@ class LanguageRouter:
         # Each job runs in the caller's context, so its log lines carry the
         # caller's call id.
         jobs = {
-            "en": self._pool.submit(contextvars.copy_context().run, self.en.transcribe, wav, "en"),
-            "ur": self._pool.submit(contextvars.copy_context().run, self.ur.transcribe, wav, None),
+            "en": self._submit(self.en.transcribe, wav, "en"),
+            "ur": self._submit(self.ur.transcribe, wav, None),
         }
         results: dict[str, Transcript | None] = {}
         errors = []
-        for name, job in jobs.items():
-            try:
-                # The clients bound their own requests; this bounds the wait
-                # for them too, so a recogniser that hangs past its timeout
-                # cannot hold the turn.
-                results[name] = job.result(timeout=self._wait_s(name))
-            except AsrError as exc:
-                results[name] = None
-                errors.append(str(exc))
-            except FutureTimeout:
-                job.cancel()
-                results[name] = None
-                errors.append(f"the {name} recogniser did not finish in time")
+        try:
+            for name, job in jobs.items():
+                try:
+                    # The clients bound their own requests; this bounds the
+                    # wait for them too, so a recogniser that hangs past its
+                    # timeout cannot hold the turn.
+                    results[name] = job.result(timeout=self._wait_s(name))
+                except AsrError as exc:
+                    results[name] = None
+                    errors.append(str(exc))
+                except FutureTimeout:
+                    job.cancel()
+                    results[name] = None
+                    errors.append(f"the {name} recogniser did not finish in time")
+                except CancelledError:
+                    results[name] = None
+                    errors.append(f"the {name} recogniser's job was cancelled")
+        finally:
+            with self._jobs_lock:
+                self._jobs.difference_update(jobs.values())
         if all(t is None for t in results.values()):
             raise AsrError("; ".join(errors))
         for error in errors:
@@ -186,6 +208,17 @@ class LanguageRouter:
         decision = choose(results["en"], results["ur"], session_language)
         log.info("language %s: %s", decision.language, decision.reason)
         return decision
+
+    def _submit(
+        self,
+        transcribe: Callable[[bytes, str | None], Transcript],
+        wav: bytes,
+        language: str | None,
+    ) -> Future[Transcript]:
+        job = self._pool.submit(contextvars.copy_context().run, transcribe, wav, language)
+        with self._jobs_lock:
+            self._jobs.add(job)
+        return job
 
     def _wait_s(self, name: str) -> float:
         client = self.en if name == "en" else self.ur

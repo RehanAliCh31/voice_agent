@@ -24,12 +24,23 @@ def from_transport(
 
 
 def from_status(
-    response: httpx.Response, what: str, error_type: type[VoicebotError]
+    response: httpx.Response,
+    what: str,
+    error_type: type[VoicebotError],
+    message: str | None = None,
 ) -> VoicebotError:
-    """An answer with an error status. Its body goes to DEBUG only: it can hold speech."""
-    log.debug("%s answered %d: %s", what, response.status_code, response.text[:200])
+    """An answer with an error status. Its body goes to DEBUG only: it can hold speech.
+
+    `message` replaces the usual "<what> answered <status>", for a caller
+    whose logs have long said it another way.
+    """
+    try:
+        body = response.text[:200]
+    except httpx.StreamError:  # a streamed answer whose body could not be read
+        body = "(not read)"
+    log.debug("%s answered %d: %s", what, response.status_code, body)
     return error_type(
-        f"{what} answered {response.status_code}",
+        message or f"{what} answered {response.status_code}",
         code=code_for_status(response.status_code),
         retry_after=retry_after_seconds(response.headers.get("Retry-After")),
     )

@@ -17,11 +17,17 @@ import argparse
 import logging
 import sys
 import threading
+from collections.abc import Callable
 from typing import Any
 
 from voicebot.assistant import health, models
 from voicebot.assistant.config import AssistantConfig, Language, load_assistant_config
+from voicebot.errors import InternalError
 from voicebot.utils.env import load_env_file
+from voicebot.utils.logging import get_logger
+from voicebot.utils.observability import report
+
+log = get_logger("assistant.cli")
 
 STATUS_LABEL = {
     "idle": "Idle",
@@ -48,9 +54,38 @@ def _config(args: argparse.Namespace) -> AssistantConfig:
     return config
 
 
+def _log_thread_crash(args: threading.ExceptHookArgs) -> None:
+    """A thread that died of an exception: logged like everything else, and counted.
+
+    Python's own hook prints the traceback to stderr, outside the log, with
+    no call id; and a thread that dies there leaves no count behind.
+    """
+    if args.exc_type is SystemExit:
+        return
+    name = args.thread.name if args.thread is not None else "a thread"
+    log.error("%s died: %s", name, args.exc_type.__name__, exc_info=args.exc_value)
+    report(
+        InternalError(
+            f"{name} died: {args.exc_type.__name__}", component="assistant", cause=args.exc_value
+        )
+    )
+
+
+def _close_quietly(what: str, close: Callable[[], None]) -> None:
+    """Close one thing on the way out, so one that fails cannot keep the rest open."""
+    try:
+        close()
+    except Exception as exc:  # the process is ending; say so, and close the next thing
+        log.warning("could not close %s: %s", what, exc)
+
+
 def cmd_setup(args: argparse.Namespace) -> int:
     config = _config(args)
-    files = models.download(config)
+    try:
+        files = models.download(config)
+    except (models.ModelDownloadError, OSError) as exc:
+        print(f"  Could not set up the models: {exc}")
+        return 1
     for f in files:
         print(f"  {'OK  ' if f.verified else 'FAIL'} {f.path}")
     return 0 if all(f.verified for f in files) else 1
@@ -76,11 +111,16 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def cmd_devices(args: argparse.Namespace) -> int:
-    from voicebot.assistant.audio_io import list_devices, sounddevice
+    from voicebot.assistant.audio_io import AudioDeviceError, list_devices, sounddevice
 
-    sd = sounddevice()
-    default_in, default_out = sd.default.device
-    for d in list_devices(sd):
+    try:
+        sd = sounddevice()
+        default_in, default_out = sd.default.device
+        devices = list_devices(sd)
+    except AudioDeviceError as exc:
+        print(f"  Could not list the sound devices: {exc}")
+        return 1
+    for d in devices:
         kinds = ("in " if d.inputs else "   ") + ("out" if d.outputs else "   ")
         mark = " (default)" if d.index in (default_in, default_out) else ""
         print(f"  [{d.index:>2}] {kinds}  {d.host_api:<22} {d.name}{mark}")
@@ -98,17 +138,32 @@ def _voices(config: AssistantConfig) -> dict[Language, Any]:
 
 
 def cmd_say(args: argparse.Namespace) -> int:
+    from voicebot.assistant.audio_io import AudioDeviceError
     from voicebot.assistant.player import Player
     from voicebot.assistant.text_prep import prepare_for_speech
+    from voicebot.assistant.tts_client import TtsError
 
     config = _config(args)
-    speech = _voices(config)[args.lang].synthesize(prepare_for_speech(args.text, args.lang))
-    print(f"  synthesised {speech.duration_s:.2f} s in {speech.latency_ms} ms; playing")
+    voices = _voices(config)
     player = Player(config.audio.output_device)
-    player.start()
-    player.enqueue(speech.samples, speech.sample_rate)
-    player.wait(speech.duration_s + 5)
-    player.close()
+    try:
+        speech = voices[args.lang].synthesize(prepare_for_speech(args.text, args.lang))
+        print(f"  synthesised {speech.duration_s:.2f} s in {speech.latency_ms} ms; playing")
+        player.start()
+        player.enqueue(speech.samples, speech.sample_rate)
+        if not player.wait(speech.duration_s + 5):
+            print("  the speaker did not finish playing it")
+            return 1
+    except TtsError as exc:
+        print(f"  Could not synthesise it: {exc}")
+        return 1
+    except AudioDeviceError as exc:
+        print(f"  Could not play it: {exc}")
+        return 1
+    finally:
+        _close_quietly("the speaker", player.close)
+        for name, voice in voices.items():
+            _close_quietly(f"the {name} voice", voice.close)
     return 0
 
 
@@ -134,38 +189,47 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("Run: python -m voicebot.assistant setup")
         return 1
 
-    asr = config.asr
-    router = LanguageRouter(
-        config.session.language,
-        AsrClient(asr.en, "en", asr.timeout_s, asr.retries),
-        AsrClient(asr.ur, "ur", asr.timeout_s, asr.retries),
-    )
-
     def show(state: State, message: str) -> None:
         print(f"[{STATUS_LABEL[state.value]:<12}] {message}", flush=True)
 
-    orchestrator: Orchestrator
-    player = Player(
-        config.audio.output_device, on_start=lambda tag: orchestrator.audio_started(tag)
-    )
-    orchestrator = Orchestrator(
-        config=config,
-        wake=WakeWord(config.wake_word),
-        vad=SileroVad(config.vad.model_path),
-        router=router,
-        llm=ChatClient(config.llm),
-        voices=_voices(config),
-        player=player,
-        status=show,
-    )
-    threading.Thread(target=orchestrator.prepare_phrases, name="phrases", daemon=True).start()
-    microphone = Microphone(config.audio.input_device, config.audio.queue_frames)
+    asr = config.asr
     stop = threading.Event()
-    print(
-        f'\nWake word "{config.wake_word.phrase}", language {config.session.language}, '
-        f"echo mode {config.session.echo_mode}. Ctrl+C to quit.\n"
-    )
+    microphone: Microphone | None = None
+    # Everything opened, in the order it is closed: the speaker first, so
+    # nothing more is heard, then every client's connections.
+    opened: list[tuple[str, Callable[[], None]]] = []
     try:
+        orchestrator: Orchestrator
+        player = Player(
+            config.audio.output_device, on_start=lambda tag: orchestrator.audio_started(tag)
+        )
+        opened.append(("the speaker", player.close))
+        router = LanguageRouter(
+            config.session.language,
+            AsrClient(asr.en, "en", asr.timeout_s, asr.retries),
+            AsrClient(asr.ur, "ur", asr.timeout_s, asr.retries),
+        )
+        opened.append(("the recognisers", router.close))
+        llm = ChatClient(config.llm)
+        opened.append(("the language model client", llm.close))
+        voices = _voices(config)
+        opened += [(f"the {name} voice", voice.close) for name, voice in voices.items()]
+        orchestrator = Orchestrator(
+            config=config,
+            wake=WakeWord(config.wake_word),
+            vad=SileroVad(config.vad.model_path),
+            router=router,
+            llm=llm,
+            voices=voices,
+            player=player,
+            status=show,
+        )
+        threading.Thread(target=orchestrator.prepare_phrases, name="phrases", daemon=True).start()
+        microphone = Microphone(config.audio.input_device, config.audio.queue_frames)
+        print(
+            f'\nWake word "{config.wake_word.phrase}", language {config.session.language}, '
+            f"echo mode {config.session.echo_mode}. Ctrl+C to quit.\n"
+        )
         player.start()
         orchestrator.run(microphone, stop)
     except AudioDeviceError as exc:
@@ -178,9 +242,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         stop.set()
         print("\nStopped.")
     finally:
-        player.close()
-        router.close()
-        if microphone.dropped:
+        for what, close in opened:
+            _close_quietly(what, close)
+        if microphone is not None and microphone.dropped:
             print(f"(the microphone ran ahead and {microphone.dropped} frames were dropped)")
     return 0
 
@@ -214,7 +278,17 @@ def main(argv: list[str] | None = None) -> int:
         "say": cmd_say,
         "run": cmd_run,
     }
-    return handler[args.command](args)
+    previous_hook = threading.excepthook
+    threading.excepthook = _log_thread_crash
+    try:
+        return handler[args.command](args)
+    except KeyboardInterrupt:
+        # Ctrl+C before anything was running -- during the endpoint check or
+        # while the models load: nothing to tidy beyond what has closed itself.
+        print("\nStopped.")
+        return 130
+    finally:
+        threading.excepthook = previous_hook
 
 
 if __name__ == "__main__":

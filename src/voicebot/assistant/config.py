@@ -108,6 +108,10 @@ class LlmConfig(_Strict):
     max_tokens: int = 150
     temperature: float = 0.4
     timeout_s: float = 20.0
+    # The whole reply, retries included. `timeout_s` bounds each wait for the
+    # next piece; a server that keeps sending a word every few seconds would
+    # pass that for ever, so the reply as a whole is bounded too.
+    total_timeout_s: float = Field(default=30.0, gt=0)
     retries: int = 1
     stream: bool = True
     # Asked for explicitly, so a change of default on the server cannot

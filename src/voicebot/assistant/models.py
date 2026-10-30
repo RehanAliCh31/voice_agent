@@ -14,9 +14,15 @@ or arrived damaged is refused rather than run.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import http.client
 import io
 import json
+import os
+import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -72,33 +78,98 @@ def status(config: AssistantConfig) -> list[ModelFile]:
     return out
 
 
+class ModelDownloadError(RuntimeError):
+    """A model file could not be fetched, or was not the file it should be."""
+
+
+# One more try after a pause: a release download that fails once on an
+# office network usually works the second time, and a third rarely does.
+RETRY_PAUSE_S = 2.0
+
+
 def _fetch(url: str, timeout: float = 60.0) -> bytes:
     with urllib.request.urlopen(url, timeout=timeout) as response:
         return bytes(response.read())
 
 
+def _worth_retrying(exc: Exception) -> bool:
+    """A dropped or timed-out download is; a 404 or a 403 will only say so again."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500 or exc.code == 429
+    return True
+
+
+def _download(url: str, timeout: float = 60.0) -> bytes:
+    """`_fetch`, tried once more after a pause if the network let it down."""
+    try:
+        return _fetch(url, timeout)
+    except (OSError, http.client.HTTPException) as exc:  # URLError, timeouts, cut-off bodies
+        if not _worth_retrying(exc):
+            raise ModelDownloadError(f"could not download {url}: {exc}") from exc
+        log.warning("downloading %s failed (%s); trying again", url, exc)
+    time.sleep(RETRY_PAUSE_S)
+    try:
+        return _fetch(url, timeout)
+    except (OSError, http.client.HTTPException) as exc:
+        raise ModelDownloadError(f"could not download {url}: {exc}") from exc
+
+
 def _save(path: Path, data: bytes) -> None:
+    """Write `data` under `path` whole or not at all.
+
+    Written to a temporary file beside it and moved into place, so a write
+    that is interrupted never leaves half a model under the real name -- one
+    that `status` would then report as merely damaged, and `run` refuse.
+    """
     expected = SHA256.get(path.name)
     if expected is not None and _sha256(data) != expected:
-        raise RuntimeError(f"{path.name} does not match its pinned SHA-256; refusing to use it")
+        raise ModelDownloadError(
+            f"{path.name} does not match its pinned SHA-256; refusing to use it"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
+    handle, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".part", dir=path.parent)
+    try:
+        with os.fdopen(handle, "wb") as out:
+            out.write(data)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
     log.info("saved %s (%.1f MB)", path, len(data) / 1e6)
 
 
+def _silero_onnx() -> bytes:
+    """The Silero VAD model, out of the wheel PyPI publishes, checked against PyPI's hash."""
+    try:
+        meta = json.loads(_download(f"https://pypi.org/pypi/silero-vad/{SILERO_VERSION}/json", 15))
+        wheel = next(f for f in meta["urls"] if f["filename"].endswith(".whl"))
+        url, digest = wheel["url"], wheel["digests"]["sha256"]
+    except (ValueError, TypeError, KeyError, StopIteration) as exc:
+        raise ModelDownloadError(f"PyPI's description of silero-vad was unreadable: {exc}") from exc
+    data = _download(url)
+    if _sha256(data) != digest:
+        raise ModelDownloadError("the Silero VAD release does not match the hash PyPI publishes")
+    try:
+        return zipfile.ZipFile(io.BytesIO(data)).read(SILERO_MEMBER)
+    except (zipfile.BadZipFile, KeyError) as exc:
+        raise ModelDownloadError(f"the Silero VAD release has no {SILERO_MEMBER}") from exc
+
+
 def download(config: AssistantConfig) -> list[ModelFile]:
-    """Fetch whatever is missing or fails its check. Safe to run again."""
+    """Fetch whatever is missing or fails its check. Safe to run again.
+
+    Raises ModelDownloadError for a file that could not be fetched or was
+    not the one pinned, and OSError if it could not be written.
+    """
     current = {m.path: m for m in status(config)}
     folder = Path(config.wake_word.models_dir)
     for name in ("melspectrogram.onnx", "embedding_model.onnx", f"{config.wake_word.model}.onnx"):
         if not current[folder / name].verified:
-            _save(folder / name, _fetch(f"{OPENWAKEWORD_RELEASE}/{name}"))
+            _save(folder / name, _download(f"{OPENWAKEWORD_RELEASE}/{name}"))
     vad = Path(config.vad.model_path)
     if not current[vad].verified:
-        meta = json.loads(_fetch(f"https://pypi.org/pypi/silero-vad/{SILERO_VERSION}/json", 15))
-        wheel = next(f for f in meta["urls"] if f["filename"].endswith(".whl"))
-        data = _fetch(wheel["url"])
-        if _sha256(data) != wheel["digests"]["sha256"]:
-            raise RuntimeError("the Silero VAD release does not match the hash PyPI publishes")
-        _save(vad, zipfile.ZipFile(io.BytesIO(data)).read(SILERO_MEMBER))
+        _save(vad, _silero_onnx())
     return status(config)

@@ -62,6 +62,11 @@ llm:
   temperature: 0.4
   # Per read: the longest the stream may go quiet, first token included.
   timeout_s: 12
+  # The whole reply, retries included: past this it is cut off and the
+  # fallback phrase is said, however steadily words were still arriving.
+  total_timeout_s: 30
+  # A timeout, a dropped connection, a 429 or a 5xx before the first word is
+  # retried once with backoff; a 4xx never, and nothing after the first word.
   retries: 1
   stream: true
   disable_thinking: true
