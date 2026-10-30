@@ -196,3 +196,19 @@ prompt_self_forms:
   ur:
     female: "میں مدد کر سکتی ہوں؛ میں دیکھ رہی ہوں؛ میں چیک کروں گی؛ میں سمجھ نہیں سکی"
     male: "میں مدد کر سکتا ہوں؛ میں دیکھ رہا ہوں؛ میں چیک کروں گا؛ میں سمجھ نہیں سکا"
+
+# The guard stopped a figure the model made up, and reads the bank's own
+# instead: {figures} is one figure, or several joined, always in digits.
+figure_one:
+  en: "The figure I have is {figures}."
+  ur: "میرے پاس موجود رقم {figures} ہے۔"
+figure_many:
+  en: "The figures I have are {figures}."
+  ur: "میرے پاس موجود رقمیں {figures} ہیں۔"
+
+# An action is armed but the model could not read it back. In English the
+# bank's own summary is said; in Urdu that summary, which is in English, is
+# on the screen beside the Yes button, and this points to it.
+readback_on_screen:
+  en: "Please check the details on your screen, and confirm if they are right."
+  ur: "براہِ کرم اپنی اسکرین پر تفصیل دیکھ لیں، اور درست ہو تو تصدیق کر دیں۔"

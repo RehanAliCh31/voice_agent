@@ -311,3 +311,18 @@ def test_a_flag_that_is_neither_is_refused_with_a_hint(bank: SqliteBank) -> None
         ToolCall("c1", "freeze_card", {"last4": "4417", "report_fraud": "maybe"})
     )
     assert "true or false" in out.result["error"]
+
+
+def test_in_urdu_the_read_back_points_to_the_screen_rather_than_speak_english(
+    bank: SqliteBank,
+) -> None:
+    client = FakeLLMClient([Reply(tool_calls=(ToolCall("c1", "transfer_money", TRANSFER),))])
+    executor = ToolExecutor(bank)
+    conversation = Conversation("s1")
+    conversation.language = "ur"
+
+    out = Agent(client, executor, max_tool_rounds=1).handle("سارہ کو پچاس بھیج دیں", conversation)
+
+    # Still armed for the Yes button; the English summary is on the screen.
+    assert executor.pending is not None
+    assert out.text == say("readback_on_screen", "ur")

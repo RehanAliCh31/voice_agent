@@ -26,7 +26,12 @@ PATH = Path(__file__).with_name("messages.yaml")
 PROMPT_PREFIX = "prompt_"
 
 # Messages that carry a value, and the one value each must carry.
-_FIELDS: dict[str, set[str]] = {"handed_over": {"reference"}, "escalated": {"reference"}}
+_FIELDS: dict[str, set[str]] = {
+    "handed_over": {"reference"},
+    "escalated": {"reference"},
+    "figure_one": {"figures"},
+    "figure_many": {"figures"},
+}
 
 # key -> language -> gender -> sentence. A sentence the same for both genders
 # appears under both.

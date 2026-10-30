@@ -568,7 +568,9 @@ class Agent:
             # model could read it back. The bank's own summary is the
             # read-back, and it is the sentence the Yes button acts on.
             log.warning("no words after arming %s; reading back its summary", pending.tool)
-            return self._result(f"{pending.summary}?", calls, outcomes, rounds, hit=False)
+            return self._result(
+                _readback(pending, conversation), calls, outcomes, rounds, hit=False
+            )
         if not spoken:
             # No words and no rounds left: say something rather than nothing.
             return self._fallback("nothing_said", conversation, calls, outcomes, rounds)
@@ -705,7 +707,9 @@ class Agent:
         if pending is not None and "needs_confirmation" in statuses:
             # Armed this turn: its read-back is the bank's summary, and the
             # Yes button can still act on it without the model.
-            return self._result(f"{pending.summary}?", calls, outcomes, rounds, hit=False)
+            return self._result(
+                _readback(pending, conversation), calls, outcomes, rounds, hit=False
+            )
         return self._fallback("unavailable", conversation, calls, outcomes, rounds)
 
     def _fallback(
@@ -853,6 +857,18 @@ class Agent:
             pin_request=_pin_request(outcomes),
             fallback=fallback,
         )
+
+
+def _readback(pending: Any, conversation: Conversation) -> str:
+    """The read-back when the model could not give one: the bank's own summary.
+
+    The summary is built in English from the bank's values. Said in an Urdu
+    conversation it would be English in the Urdu voice, so there the bot
+    points to it instead: it is on the screen, beside the Yes button.
+    """
+    if conversation.language == "ur":
+        return say("readback_on_screen", "ur")
+    return f"{pending.summary}?"
 
 
 def _pin_request(outcomes: Sequence[ToolOutcome]) -> dict[str, str] | None:

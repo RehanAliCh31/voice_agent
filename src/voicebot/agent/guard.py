@@ -33,6 +33,7 @@ from typing import Any
 
 from voicebot.assistant.text_prep import URDU_NUMBER_WORDS, urdu_number
 from voicebot.llm.prompts import UNVERIFIED, in_language
+from voicebot.messages import say
 from voicebot.utils.logging import get_logger
 
 log = get_logger("agent.guard")
@@ -347,13 +348,8 @@ def fallback_sentence(sourced_cents: Sequence[int], language: str = "en") -> str
     if not amounts:
         return in_language(UNVERIFIED, language)
     figures = [f"${amount:,.2f}" for amount in amounts]
-    if language == "ur":
-        if len(figures) == 1:
-            return f"میرے پاس موجود رقم {figures[0]} ہے۔"
-        return f"میرے پاس موجود رقمیں {'، '.join(figures)} ہیں۔"
-    if len(figures) == 1:
-        return f"The figure I have is {figures[0]}."
-    return f"The figures I have are {', '.join(figures)}."
+    joined = ("، " if language == "ur" else ", ").join(figures)
+    return say("figure_one" if len(figures) == 1 else "figure_many", language, figures=joined)
 
 
 def guard(
