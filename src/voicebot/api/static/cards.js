@@ -6,7 +6,7 @@
  * neither can be undone from here.
  */
 
-import { api, capitalise, el, node, state } from "./core.js";
+import { api, capitalise, el, explain, node, state } from "./core.js";
 import { addTurn, handleTurn } from "./conversation.js";
 
 function loadCards() {
@@ -364,7 +364,7 @@ function onPinGo() {
         showDetails(details);
       })
       .catch(function (error) {
-        pinFailed(error.message);
+        pinFailed(explain(error));
       });
     return;
   }
@@ -382,7 +382,7 @@ function onPinGo() {
       .catch(function (error) {
         // The action is still pending, so a wrong PIN costs another try and
         // not the agreement. Cancelling here leaves the bar to press again.
-        pinFailed(error.message);
+        pinFailed(explain(error));
       });
     return;
   }
@@ -400,7 +400,7 @@ function onPinGo() {
       el.pinNew.focus();
     })
     .catch(function (error) {
-      pinFailed(error.message);
+      pinFailed(explain(error));
     });
 }
 
@@ -432,7 +432,7 @@ function changePin() {
       });
     })
     .catch(function (error) {
-      pinFailed(error.message);
+      pinFailed(explain(error));
     });
 }
 
@@ -523,7 +523,7 @@ function onAskGo() {
       el.askGo.focus();
     })
     .catch(function (error) {
-      askFailed(error.message);
+      askFailed(explain(error));
     });
 }
 
@@ -541,7 +541,7 @@ function settleAsk() {
     })
     .catch(function (error) {
       el.askGo.textContent = "Yes, confirm";
-      askFailed(error.message);
+      askFailed(explain(error));
     });
 }
 

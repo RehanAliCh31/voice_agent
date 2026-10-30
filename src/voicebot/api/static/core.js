@@ -193,6 +193,22 @@ function sentence(key, language) {
   return (language === "ur" && found.ur) || found.en;
 }
 
+/**
+ * What to tell the customer about a failed request: the service's own
+ * sentence when it sent one, or the right one for a timeout or a lost
+ * connection -- never an empty box or the browser's wording.
+ */
+function explain(error) {
+  var kind = error && error.kind;
+  if (kind === "timeout") {
+    return sentence("timed_out", state.language);
+  }
+  if (kind === "network") {
+    return sentence("connection_lost", state.language);
+  }
+  return (error && error.message) || sentence("internal", state.language);
+}
+
 function loadSentences() {
   return api
     .messages()
@@ -333,6 +349,7 @@ export {
   capitalise,
   dayLabel,
   el,
+  explain,
   loadSentences,
   momentOf,
   money,

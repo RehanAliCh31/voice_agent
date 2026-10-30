@@ -7,7 +7,7 @@
  * trusted markup.
  */
 
-import { api, el, node, sentence, state } from "./core.js";
+import { api, el, explain, node, state } from "./core.js";
 import { base64ToBlob, canSpeak, play, speak, stopPlayback } from "./audio.js";
 
 function clearEmptyState() {
@@ -163,18 +163,7 @@ function fail(error) {
     idle();
     return;
   }
-  var message;
-  if (typeof error === "string") {
-    message = error;
-  } else if (kind === "timeout") {
-    message = sentence("timed_out", state.language);
-  } else if (kind === "network") {
-    message = sentence("connection_lost", state.language);
-  } else if (error && error.message) {
-    message = error.message;
-  } else {
-    message = sentence("internal", state.language);
-  }
+  var message = typeof error === "string" ? error : explain(error);
   setStatus("Something went wrong", message, "error");
   addTurn("bot", message, { error: true });
   // Said as well as shown: someone listening rather than looking must not be

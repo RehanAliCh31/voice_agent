@@ -132,8 +132,9 @@ function loadLedger() {
       renderAccounts(ledger.accounts);
       renderBills(ledger.bills);
     })
-    .catch(function () {
+    .catch(function (error) {
       // The ledger keeps its placeholder; the first turn will fill it.
+      console.warn("the ledger could not be loaded", error && error.kind);
     });
 }
 

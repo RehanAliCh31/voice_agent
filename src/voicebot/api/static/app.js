@@ -92,19 +92,27 @@ function onReset() {
   abortTurn();
   api
     .reset()
-    .catch(function () {})
+    .catch(function (error) {
+      // The page starts afresh either way; the balances reload below.
+      console.warn("reset failed", error && error.kind);
+    })
     .finally(function () {
-      return api.endSession().catch(function () {}).finally(function () {
-        state.sessionId = null;
-        state.balances = {};
-        state.lastTotalMs = null;
-        stopPlayback();
-        el.conversation.replaceChildren(el.empty);
-        el.confirm.hidden = true;
-        setPhase("idle");
-        setStatus("Ready", "Tap the microphone to start a turn", "");
-        loadLedger();
-      });
+      return api
+        .endSession()
+        .catch(function (error) {
+          console.warn("ending the session failed", error && error.kind);
+        })
+        .finally(function () {
+          state.sessionId = null;
+          state.balances = {};
+          state.lastTotalMs = null;
+          stopPlayback();
+          el.conversation.replaceChildren(el.empty);
+          el.confirm.hidden = true;
+          setPhase("idle");
+          setStatus("Ready", "Tap the microphone to start a turn", "");
+          loadLedger();
+        });
     });
 }
 
