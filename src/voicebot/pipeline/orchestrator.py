@@ -249,9 +249,12 @@ class VoicePipeline:
             return AudioBuffer(samples=SILENCE, sample_rate=16_000)
         try:
             return self.tts.synthesize(text, voice=language if language in ("en", "ur") else None)
+        except Cancelled:
+            # Nobody is left to hear it: not a failure, and not reported as one.
+            raise
         except Exception as exc:  # an engine that raises is treated as silence
             # An engine that raises rather than returning silence is treated
-            # as silence: the reply is on the page, and the page speaks it.
+            # as silence: the reply is still on the page.
             report(
                 InternalError(f"the voice raised {type(exc).__name__}", component="tts", cause=exc)
             )

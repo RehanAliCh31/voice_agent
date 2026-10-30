@@ -532,3 +532,31 @@ def _speakable(sentence: str) -> bool:
 def split_sentences(text: str, max_chars: int = 220) -> list[str]:
     stream = SentenceStream(max_chars)
     return stream.feed(text) + stream.flush()
+
+
+_CLAUSE_END = re.compile(r"(?<=[,،;؛])\s+")
+
+
+def split_long(piece: str, language: Language, max_words: int = 18) -> list[str]:
+    """A piece too long to synthesise quickly, cut at its commas into pieces of
+    at most `max_words` spoken words -- counted as said, numbers as words.
+
+    Measured: the rest of a list of bills, short in figures, was 38 words
+    spoken; qwen3-tts took 9.9 s to make it, near its time limit, and the
+    caller heard 6.5 s of silence before it. A part with no comma to cut at
+    is left whole.
+    """
+    if len(prepare_for_speech(piece, language).split()) <= max_words:
+        return [piece]
+    out: list[str] = []
+    current = ""
+    for part in _CLAUSE_END.split(piece):
+        joined = f"{current} {part}".strip()
+        if current and len(prepare_for_speech(joined, language).split()) > max_words:
+            out.append(current)
+            current = part
+        else:
+            current = joined
+    if current:
+        out.append(current)
+    return out

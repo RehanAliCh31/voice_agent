@@ -323,3 +323,24 @@ def test_a_short_reply_is_not_cut_early() -> None:
 def test_numbers_with_commas_are_not_clause_breaks() -> None:
     stream = SentenceStream(first_words=20)
     assert stream.feed("You have 2,483 dollars in it ") == []
+
+
+def test_a_long_piece_is_cut_at_its_commas_into_quick_ones() -> None:
+    from voicebot.assistant.text_prep import split_long
+
+    # Measured: 38 words spoken, 9.9 s for qwen3-tts to make.
+    rest = (
+        "Spotify for $9.99, internet for $40.00, water for $31.00, phone for $24.99, "
+        "Netflix for $10.99, and your credit card for $215.00."
+    )
+    pieces = split_long(rest, "en")
+    assert len(pieces) > 1 and " ".join(pieces) == rest
+    assert all(len(prepare_for_speech(p, "en").split()) <= 18 for p in pieces)
+    assert split_long("Your balance is $19,020.00.", "en") == ["Your balance is $19,020.00."]
+
+
+def test_a_long_piece_with_no_comma_is_left_whole() -> None:
+    from voicebot.assistant.text_prep import split_long
+
+    long = " ".join(["word"] * 30)
+    assert split_long(long, "en") == [long]

@@ -21,7 +21,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
-from voicebot.errors import InternalError
+from voicebot.errors import Cancelled, InternalError
 from voicebot.schemas import AudioBuffer
 from voicebot.utils.logging import get_logger
 from voicebot.utils.observability import report
@@ -140,6 +140,12 @@ class SpokenReply:
                 index, piece = self._next, self._pieces[self._next]
             try:
                 audio = self._speak(piece)
+            except Cancelled:
+                # Stopped while it was being made: the reply is cancelled
+                # already, and its waiting page has been told.
+                with self._lock:
+                    self._running = False
+                return
             except Exception as exc:  # whatever the voice did, the waiting page must hear of it
                 report(
                     InternalError(

@@ -33,7 +33,7 @@ from voicebot import profile
 from voicebot.assistant.asr_client import to_wav
 from voicebot.assistant.config import AssistantConfig, Language
 from voicebot.assistant.language import spoken_language
-from voicebot.assistant.text_prep import SentenceStream, prepare_for_speech
+from voicebot.assistant.text_prep import SentenceStream, prepare_for_speech, split_long
 from voicebot.assistant.tts_client import (
     BackedUpVoice,
     TtsClient,
@@ -104,14 +104,16 @@ class EndpointsTTSEngine(TTSEngine):
 
     def pieces(self, text: str, voice: str | None = None) -> list[str]:
         """The first piece cut short -- at a comma, or after the voice's first_chunk_words --
-        then pieces growing by its chunk_growth, then whole sentences."""
+        then pieces growing by its chunk_growth, then whole sentences, none of
+        them longer than a voice makes quickly (split_long)."""
         language = self._language(text, voice)
         endpoint = self.voices[language].endpoint
         stream = SentenceStream(
             first_words=endpoint.first_chunk_words, growth=endpoint.chunk_growth
         )
         found = [*stream.feed(text), *stream.flush()]
-        return [piece for piece in found if prepare_for_speech(piece, language)] or [text]
+        cut = [short for piece in found for short in split_long(piece, language)]
+        return [piece for piece in cut if prepare_for_speech(piece, language)] or [text]
 
     def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
         """`voice` may name the language; otherwise the text's script decides."""
