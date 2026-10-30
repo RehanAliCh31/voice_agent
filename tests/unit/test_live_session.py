@@ -362,6 +362,23 @@ def test_stopping_in_every_state_ends_cleanly() -> None:
         assert session.threads_alive == 0, where
 
 
+def test_the_time_limit_says_goodbye_once_and_ends() -> None:
+    services = services_for([], [], max_session_minutes=0.01)  # 0.6 s
+    goodbye = say("session_ended", "en")
+    # The voice takes its time, as it does under load: the sentence is asked
+    # for once, not again on every tick while it is being made.
+    services.tts.slow = {goodbye: 1.0}
+    page = Page()
+    session = open_session(services, page)
+    try:
+        assert page.wait(lambda p: "ended" in p.kinds(), timeout=8)
+        assert [e["key"] for e in page.of("say")] == ["session_ended"]
+        assert [text for text, _ in services.tts.said].count(goodbye) == 1
+    finally:
+        session.close()
+    assert session.threads_alive == 0
+
+
 # --- when a provider fails --------------------------------------------------------------
 
 

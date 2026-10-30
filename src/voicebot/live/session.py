@@ -412,8 +412,9 @@ class LiveSession:
             if (
                 self._started_at
                 and now - self._started_at > self.config.max_session_minutes * 60
-                and self.state in (State.LISTENING, State.USER_SPEAKING)
+                and self.state is State.LISTENING
                 and self._playing is None
+                and self._saying is None  # once: not again while it is being made
             ):
                 log.info("the live session reached its time limit")
                 self._say_then("session_ended", end=True)
@@ -874,6 +875,10 @@ class LiveSession:
                 report(InternalError(f"could not say {key}", cause=exc))
                 result = None
             with self._lock:
+                if turn is None and self._saying is token and (
+                    token.cancelled or self.state is not State.LISTENING
+                ):
+                    self._saying = None  # not said: whatever asked for it may ask again
                 if token.cancelled or self.state is State.ENDED:
                     return
                 if turn is not None and not self._current(turn):
