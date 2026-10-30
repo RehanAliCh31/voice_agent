@@ -173,6 +173,10 @@ class LiveSession:
         self.clock = clock
         self.state = State.IDLE
         self._lock = threading.RLock()
+        # Held by a turn while it is answered. A turn that replaces another --
+        # the caller resumed after a pause -- waits for the first to let go of
+        # the conversation, rather than be told "one moment" by take_turn.
+        self._answering = threading.Lock()
         cfg = self.config
         ears = VadConfig(
             threshold=cfg.threshold,
@@ -341,7 +345,7 @@ class LiveSession:
             try:
                 pcm = self._audio.get(timeout=0.25)
             except queue.Empty:
-                self._tick()
+                self._safe_tick()
                 continue
             if pcm is None or self.state is State.ENDED:
                 return
@@ -353,7 +357,13 @@ class LiveSession:
                     self._frame(frame)
                 except Exception as exc:  # one bad frame must not end the conversation
                     report(InternalError("a live audio frame failed", cause=exc))
+            self._safe_tick()
+
+    def _safe_tick(self) -> None:
+        try:
             self._tick()
+        except Exception as exc:  # the timers failing must not leave the session deaf
+            report(InternalError("the live session's timers failed", cause=exc))
 
     def _frame(self, frame: np.ndarray) -> None:
         prob = self._vad(frame)
@@ -586,29 +596,31 @@ class LiveSession:
                     self._to(State.LISTENING)
             return
 
-        session = services.sessions.get(self.session_id)
-        snapshot = (
-            [dict(m) for m in session.conversation.messages],
-            session.conversation.turn_index,
-            session.executor.writes,
-        )
-        try:
-            payload = services.take_turn(
-                self.session_id,
-                lambda s, p: p.respond_to_heard(transcript, s.conversation, asr_ms),
-                record=False,
+        with self._answering:
+            turn.token.check("the answer")
+            session = services.sessions.get(self.session_id)
+            snapshot = (
+                [dict(m) for m in session.conversation.messages],
+                session.conversation.turn_index,
+                session.executor.writes,
             )
-        except Cancelled:
-            self._restore(snapshot)
-            raise
-        result: TurnResult | None = session.last_result
-        if turn.token.cancelled:
-            # Replaced while it was answered: its answer is not given, and
-            # the history goes back to before it -- unless money moved.
-            self._restore(snapshot)
-            if result is not None and result.rest is not None:
-                result.rest.cancel()
-            return
+            try:
+                payload = services.take_turn(
+                    self.session_id,
+                    lambda s, p: p.respond_to_heard(transcript, s.conversation, asr_ms),
+                    record=False,
+                )
+            except Cancelled:
+                self._restore(snapshot)
+                raise
+            result: TurnResult | None = session.last_result
+            if turn.token.cancelled:
+                # Replaced while it was answered: its answer is not given, and
+                # the history goes back to before it -- unless money moved.
+                self._restore(snapshot)
+                if result is not None and result.rest is not None:
+                    result.rest.cancel()
+                return
         self._speak(turn, payload, result, asr_ms)
 
     def _restore(self, snapshot: tuple[list[dict[str, Any]], int, int]) -> None:
@@ -642,6 +654,11 @@ class LiveSession:
             log.info("a backchannel, not an interruption: the reply goes on")
             count("live_backchannels")
             playing.paused = False
+            if playing.sent_all:
+                # Time again for all of it: the clock ran while it was paused.
+                playing.deadline = (
+                    self.clock() + sum(playing.durations) + self.config.playback_margin_s
+                )
             self._turn = None
             self._send({"type": "resume_audio", "audio_id": playing.audio_id})
             self._to(State.AGENT_SPEAKING)
@@ -796,8 +813,9 @@ class LiveSession:
                 if self._playing is not playing and not playing.paused:
                     return
                 if audio is None:
-                    if not rest.cancelled:
-                        self._send({"type": "audio_failed", "audio_id": playing.audio_id})
+                    if rest.cancelled:
+                        return  # let go of: the page has been told to discard it
+                    self._send({"type": "audio_failed", "audio_id": playing.audio_id})
                     self._all_sent(playing)
                     return
                 self._send_piece(playing, number, audio)

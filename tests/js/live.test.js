@@ -332,3 +332,12 @@ test("an unplugged microphone is opened again", async () => {
   assert.ok(first.stopped);
   assert.strictEqual(h.client.phase, "live");
 });
+
+test("the caller being heard silences the bot even without a stop", async () => {
+  const h = harness();
+  const socket = await live(h);
+  await replyOf(socket, "a1", 1);
+  assert.ok(h.client.sounding());
+  socket.event({ type: "state", state: "user_speaking" });
+  assert.strictEqual(h.client.sounding(), false);
+});

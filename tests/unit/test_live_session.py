@@ -437,3 +437,54 @@ def test_the_model_down_is_said_in_the_callers_language_not_silent() -> None:
         assert settle(page, "listening")
     finally:
         session.close()
+
+
+# --- races --------------------------------------------------------------------------
+
+
+def test_resuming_after_a_pause_mid_thought_waits_for_the_first_half_not_says_busy() -> None:
+    # The model is slow, and the caller resumes while it is answering the
+    # first half: the whole is answered once the first half lets go -- never
+    # "one moment, I'm still answering".
+    services = services_for(
+        [("transfer fifty dollars", "en"), ("transfer fifty dollars to Ali", "en")],
+        [],
+        # Longer than take_turn waits for a busy conversation (2 s).
+        llm=SlowLLM([Reply(text="First half."), Reply(text="To Ali from checking?")], delay_s=2.5),
+    )
+    page = Page()
+    session = open_session(services, page)
+    try:
+        speak(session, tone(700), quiet(560))
+        assert settle(page, "thinking")
+        time.sleep(0.3)  # the model is answering the first half now
+        speak(session, tone(700), quiet(700))
+        assert page.wait(lambda p: len(p.of("reply")) == 1, timeout=15)
+        reply = page.of("reply")[0]
+        assert reply["reply"] == "To Ali from checking?"
+        assert reply["fallback"] != "busy"
+        users = [
+            m
+            for m in services.sessions.get("live-test").conversation.messages
+            if m["role"] == "user"
+        ]
+        assert len(users) == 1  # the first half's turn was put back
+    finally:
+        session.close()
+
+
+def test_a_resumed_reply_has_time_again_to_finish() -> None:
+    services = services_for(
+        [("hello", "en"), ("mm hmm", "en")], [Reply(text="A reply of one piece only")]
+    )
+    page = Page(auto_finish=False)
+    session = open_session(services, page)
+    try:
+        speak(session, *SENTENCE)
+        assert page.wait(lambda p: "audio_end" in p.kinds())
+        speak(session, tone(400), quiet(700))
+        assert page.wait(lambda p: bool(p.of("resume_audio")))
+        playing = session._playing
+        assert playing is not None and playing.deadline > time.monotonic() + 0.5
+    finally:
+        session.close()

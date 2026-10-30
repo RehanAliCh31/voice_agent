@@ -305,6 +305,12 @@
         break;
       case "state":
         this.serverState = message.state;
+        if (message.state === "user_speaking" && this.active) {
+          // The service is hearing the caller and has not said stop: a reply
+          // it had taken for finished is still sounding. It never talks over
+          // the caller, so it stops here too.
+          this.stopSound();
+        }
         if (message.state !== "ended") {
           this.state(message.state);
         }
