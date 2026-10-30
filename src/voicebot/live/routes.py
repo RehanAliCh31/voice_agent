@@ -107,8 +107,10 @@ async def live(websocket: WebSocket) -> None:
     finally:
         if session is not None:
             await run_in_threadpool(session.close)
+        # After whatever is already queued -- an error, "ended" -- which the
+        # page must still be sent.
+        loop.call_soon(_put, outbox, None)
         open_ = False
-        _put(outbox, None)
         with contextlib.suppress(Exception):
             await asyncio.wait_for(sender, timeout=2.0)
         with contextlib.suppress(Exception):

@@ -107,11 +107,15 @@ def services_for(
     replies: list[Reply],
     asr_delay_s: float = 0.0,
     llm: LLMClient | None = None,
+    session: dict[str, Any] | None = None,
     **live: Any,
 ) -> Services:
     config = AppConfig()
     config = config.model_copy(
-        update={"live": config.live.model_copy(update={"idle_prompt_s": 600, **live})}
+        update={
+            "live": config.live.model_copy(update={"idle_prompt_s": 600, **live}),
+            "session": config.session.model_copy(update=session or {}),
+        }
     )
     services = build_services(config)
     services.asr = ScriptedASR(heard, asr_delay_s)
@@ -124,9 +128,11 @@ def services_for(
 class Page:
     """What the page does: plays, says when it has finished, says where it was stopped."""
 
-    def __init__(self, auto_finish: bool = True) -> None:
+    def __init__(self, auto_finish: bool = True, keep_audio: bool = True) -> None:
         self.events: list[dict[str, Any]] = []
         self.audio: list[bytes] = []
+        self.audio_count = 0
+        self.keep_audio = keep_audio
         self.auto_finish = auto_finish
         self.session: LiveSession | None = None
         self.stop_at: tuple[int, float] = (0, 200.0)  # where playback is when told to stop
@@ -135,7 +141,9 @@ class Page:
     def __call__(self, message: dict[str, Any] | bytes) -> None:
         with self._lock:
             if isinstance(message, bytes):
-                self.audio.append(message)
+                self.audio_count += 1
+                if self.keep_audio:
+                    self.audio.append(message)
             else:
                 self.events.append(message)
             self._lock.notify_all()

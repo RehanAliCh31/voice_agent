@@ -32,7 +32,7 @@ import {
   renderBills,
   showView,
 } from "./screens.js";
-import { onBargeIn, onMicClick } from "./mic.js";
+import { onBargeIn, onMicClick, stopLive, wakeLive } from "./mic.js";
 
 // The screens that redraw after a turn. Saying it here, once, is what lets
 // the conversation stay ignorant of them: a new screen is a line in this
@@ -90,6 +90,7 @@ function onReset() {
   // A turn still being waited for is abandoned first: its answer belongs to
   // the conversation being thrown away.
   abortTurn();
+  stopLive("a new conversation");
   api
     .reset()
     .catch(function (error) {
@@ -110,7 +111,7 @@ function onReset() {
           el.conversation.replaceChildren(el.empty);
           el.confirm.hidden = true;
           setPhase("idle");
-          setStatus("Ready", "Tap the microphone to start a turn", "");
+          setStatus("Ready", "Tap the microphone to start a conversation", "");
           loadLedger();
         });
     });
@@ -222,6 +223,16 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   el.micButton.addEventListener("click", onMicClick);
+  // The live session lets go of the microphone and the socket when the page
+  // goes, and wakes its audio when the tab comes back into view.
+  window.addEventListener("pagehide", function () {
+    stopLive("the page was closed");
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) {
+      wakeLive();
+    }
+  });
   el.sayForm.addEventListener("submit", onSay);
   el.resetButton.addEventListener("click", onReset);
 

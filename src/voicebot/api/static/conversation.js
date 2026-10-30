@@ -147,7 +147,7 @@ function idle() {
       "done"
     );
   } else {
-    setStatus("Ready", "Tap the microphone to start a turn", "");
+    setStatus("Ready", "Tap the microphone to start a conversation", "");
   }
 }
 
@@ -255,6 +255,32 @@ function pendingSummary(turn) {
 }
 
 function handleTurn(turn) {
+  var blob = turn.audio_b64 ? base64ToBlob(turn.audio_b64, "audio/wav") : null;
+  var blobs = blob ? [blob] : null;
+  var reply = showTurn(turn, blobs);
+
+  if (blob) {
+    setPhase("speaking");
+    setStatus("Speaking", bargeHint(), "busy");
+    playReply(blob, turn, blobs).then(idle, idle);
+  } else if (turn.speak_client_side && canSpeak()) {
+    setPhase("speaking");
+    setStatus("Speaking", bargeHint(), "busy");
+    speak(reply).then(idle);
+  } else {
+    if (turn.speak_client_side) {
+      noteSilence();
+    }
+    idle();
+  }
+}
+
+/**
+ * Draw a turn -- the words, the screens, the Yes and Cancel buttons -- and
+ * play nothing. The live session plays its replies itself, as they stream.
+ * Returns the reply's text.
+ */
+function showTurn(turn, blobs) {
   state.sessionId = turn.session_id;
   state.lastTotalMs = (turn.latency_ms || {}).total || null;
   hideThinking();
@@ -263,14 +289,12 @@ function handleTurn(turn) {
     addTurn("you", turn.text);
   }
 
-  var blob = turn.audio_b64 ? base64ToBlob(turn.audio_b64, "audio/wav") : null;
   var reply = turn.reply || "";
   // What the next failure is said in.
   state.language = /[\u0600-\u06FF]/.test(reply) ? "ur" : "en";
 
-  var blobs = blob ? [blob] : null;
   addTurn("bot", reply, {
-    audioBlobs: blobs,
+    audioBlobs: blobs || null,
     replayText: turn.speak_client_side && canSpeak() ? reply : null,
     guardHit: Boolean(turn.guard_hit),
     caseRef: turn.handed_off || turn.dispute_filed || null,
@@ -292,21 +316,7 @@ function handleTurn(turn) {
   if (turn.awaiting_confirmation) {
     el.confirmText.textContent = pendingSummary(turn);
   }
-
-  if (blob) {
-    setPhase("speaking");
-    setStatus("Speaking", bargeHint(), "busy");
-    playReply(blob, turn, blobs).then(idle, idle);
-  } else if (turn.speak_client_side && canSpeak()) {
-    setPhase("speaking");
-    setStatus("Speaking", bargeHint(), "busy");
-    speak(reply).then(idle);
-  } else {
-    if (turn.speak_client_side) {
-      noteSilence();
-    }
-    idle();
-  }
+  return reply;
 }
 
 /** The Yes or Cancel button. Rendered exactly like any other turn. */
@@ -341,6 +351,8 @@ export {
   addTurn,
   fail,
   handleTurn,
+  hideThinking,
+  showTurn,
   idle,
   onTurn,
   resolvePending,

@@ -97,4 +97,4 @@ jobs:
       # No dependencies and no package.json: the detector is plain script
       # and its tests use node's own runner.
       - name: Tests
-        run: node --test tests/js/vad.test.js
+        run: node --test tests/js/vad.test.js tests/js/live.test.js

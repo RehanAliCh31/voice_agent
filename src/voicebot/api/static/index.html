@@ -93,7 +93,7 @@
 
     <div class="dock">
       <div class="dock__row">
-        <button class="mic" id="micButton" type="button" data-state="idle" aria-label="Start recording">
+        <button class="mic" id="micButton" type="button" data-state="idle" aria-label="Start a conversation">
           <span class="mic__ring" aria-hidden="true"></span>
           <span class="mic__face" aria-hidden="true">
             <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round">
@@ -104,7 +104,7 @@
 
         <div class="status">
           <p class="status__label" id="statusLabel">Ready</p>
-          <p class="status__hint" id="statusHint">Tap the microphone to start a turn</p>
+          <p class="status__hint" id="statusHint">Tap the microphone to start a conversation</p>
           <div class="level" aria-hidden="true"><span class="level__fill" id="levelFill"></span></div>
         </div>
       </div>
@@ -272,6 +272,7 @@
      a module, and so pulls in the rest of itself -- a module script is
      deferred, so the page is built by the time it runs. -->
 <script src="vad.js"></script>
+<script src="live.js"></script>
 <script type="module" src="app.js"></script>
 </body>
 </html>

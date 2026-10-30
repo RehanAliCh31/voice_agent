@@ -50,6 +50,9 @@
 .mic[data-state="listening"] .mic__face { background: linear-gradient(145deg, #C9622F, #9E4319); }
 .mic[data-state="speaking"] .mic__ring { animation: ring 2.4s ease-out infinite; }
 .mic[data-state="thinking"] .mic__face { background: var(--ink-faint); }
+/* Live: the caller is being heard -- a quicker, fuller ring than listening. */
+.mic[data-state="hearing"] .mic__ring { animation: ring 0.8s ease-out infinite; }
+.mic[data-state="hearing"] .mic__face { background: linear-gradient(145deg, #D8743F, #B0501F); }
 
 @keyframes ring {
   0% { transform: scale(1); opacity: 0.5; }

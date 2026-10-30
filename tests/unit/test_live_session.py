@@ -370,3 +370,70 @@ def test_the_fallback_is_in_the_conversations_language() -> None:
         assert page.of("say")[0]["reply"] == say("speech_unavailable", "ur")
     finally:
         session.close()
+
+
+# --- a long session -----------------------------------------------------------------
+
+
+def test_fifteen_minutes_and_ninety_turns_leak_nothing() -> None:
+    import threading
+    import tracemalloc
+
+    turns = 90
+    services = services_for(
+        [(f"question number {n}", "en") for n in range(turns)],
+        [Reply(text=f"Answer number {n}. Anything else.") for n in range(turns)],
+        session={"max_turns": 1000, "max_minutes": 120},
+    )
+    page = Page(keep_audio=False)  # the stand-in page keeps no audio of its own
+    session = open_session(services, page)
+    tracemalloc.start()
+    baseline = None
+    try:
+        for n in range(turns):
+            # 1.5 s of speech, the silence that ends it, then quiet: 10 s a turn.
+            speak(session, tone(1500), quiet(700))
+            assert page.wait(lambda p, n=n: len(p.of("reply")) == n + 1, timeout=10), n
+            assert settle(page, "listening"), n
+            speak(session, quiet(7800))
+            if n == 10:
+                baseline = tracemalloc.take_snapshot()
+        assert baseline is not None
+        after = tracemalloc.take_snapshot()
+        diffs = [
+            stat
+            for stat in after.compare_to(baseline, "traceback")
+            if any("voicebot" in frame.filename for frame in stat.traceback)
+        ]
+        grown = sum(stat.size_diff for stat in diffs)
+        # 80 turns on from the baseline: what remains is the history the
+        # conversation trims to, the turns' metrics and the bank's records.
+        assert grown < 1_000_000, f"{grown} bytes more after 80 turns"
+        assert page.audio_count >= 2 * turns  # every piece of every reply was sent
+        assert len(session._threads) < 10  # finished threads are let go
+        assert session.illegal == 0
+    finally:
+        tracemalloc.stop()
+        session.close()
+    assert session.threads_alive == 0
+    assert not [t.name for t in threading.enumerate() if t.name.startswith("live-")]
+
+
+def test_the_model_down_is_said_in_the_callers_language_not_silent() -> None:
+    from voicebot.llm.base import LLMClient, LLMUnavailable
+
+    class Down(LLMClient):
+        def complete(self, messages, tools, tool_choice="auto"):  # type: ignore[no-untyped-def]
+            raise LLMUnavailable("timed out")
+
+    services = services_for([("میرا بیلنس کیا ہے", "ur")], [], llm=Down())
+    page = Page()
+    session = open_session(services, page)
+    try:
+        speak(session, *SENTENCE)
+        assert page.wait(lambda p: bool(p.of("reply")))
+        assert page.of("reply")[0]["reply"] == say("unavailable", "ur")
+        assert page.wait(lambda p: p.audio_count >= 1)  # said, not just shown
+        assert settle(page, "listening")
+    finally:
+        session.close()
