@@ -151,11 +151,24 @@ class LiveConfig(_Strict):
     end_silence_ms: int = Field(default=500, ge=200, le=2000)
     max_utterance_s: float = Field(default=20.0, gt=1)
     # While the bot is speaking, what may interrupt it is surer, so its own
-    # voice coming back through the microphone does not.
-    barge_in_threshold: float = Field(default=0.7, gt=0, lt=1)
-    barge_in_min_speech_ms: int = Field(default=192, ge=32)
+    # voice coming back through the microphone, a cough or a chair do not:
+    # this probability, for this long, falling back below the second
+    # probability to start counting again (the hysteresis).
+    barge_in_threshold: float = Field(default=0.8, gt=0, lt=1)
+    barge_in_neg_threshold: float = Field(default=0.5, gt=0, lt=1)
+    barge_in_min_speech_ms: int = Field(default=300, ge=96, le=1500)
+    # The echo gate. The page sends how loud it is playing the bot, with each
+    # chunk of microphone audio. While it plays, speech counts only if the
+    # microphone is this many dB louder than the bot's own voice coming back
+    # -- what the echo was measured to be on this call, or `echo_prior_db`
+    # below the playback until it has been.
+    barge_in_echo_gate: bool = True
+    barge_in_echo_margin_db: float = Field(default=10.0, ge=0, le=40)
+    barge_in_echo_prior_db: float = Field(default=-20.0, ge=-60, le=0)
     # An interruption no longer than this whose words are only "mm-hmm",
-    # "ok", "جی" ... was not one: the reply carries on where it stopped.
+    # "ok", "جی" ... was not one: the reply carries on where it stopped. So
+    # does one with no words at all, however long, and one whose words are
+    # the bot's own, coming back through the speaker.
     backchannel_max_ms: int = Field(default=800, ge=0)
     backchannels: list[str] = Field(
         default_factory=lambda: [
@@ -194,6 +207,8 @@ class LiveConfig(_Strict):
     def _ordered(self) -> LiveConfig:
         if not self.neg_threshold <= self.threshold <= self.barge_in_threshold:
             raise ValueError("live: need neg_threshold <= threshold <= barge_in_threshold")
+        if not self.barge_in_neg_threshold <= self.barge_in_threshold:
+            raise ValueError("live: need barge_in_neg_threshold <= barge_in_threshold")
         return self
 
 

@@ -197,11 +197,27 @@ def open_session(services: Services, page: Page, session_id: str = "live-test") 
     return session
 
 
-def speak(session: LiveSession, *parts: np.ndarray) -> None:
-    """Feed the session audio as the page streams it: 20 ms at a time."""
+def speak(session: LiveSession, *parts: np.ndarray, far: float | None = None) -> None:
+    """Feed the session audio as the page streams it: 20 ms at a time.
+
+    `far` is how loud the page says it is playing the bot meanwhile.
+    """
     audio = np.concatenate(parts) if parts else np.zeros(0, np.int16)
     for start in range(0, len(audio), CHUNK):
-        session.feed(audio[start : start + CHUNK].astype("<i2").tobytes())
+        session.feed(audio[start : start + CHUNK].astype("<i2").tobytes(), far)
+
+
+def drained(session: LiveSession, timeout: float = 5.0) -> bool:
+    """Wait until the session has heard all the audio fed to it.
+
+    `speak` feeds faster than real time; a page plays in real time, so
+    anything it reports comes after the audio it overlapped was heard.
+    """
+    finish = time.monotonic() + timeout
+    while session._audio.qsize() and time.monotonic() < finish:
+        time.sleep(0.01)
+    time.sleep(0.05)  # the last chunk taken is being heard
+    return not session._audio.qsize()
 
 
 def settle(page: Page, state: str, timeout: float = 5.0) -> bool:

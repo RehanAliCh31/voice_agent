@@ -45,6 +45,7 @@ import queue
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -80,6 +81,23 @@ RATE = 16_000
 # the record. The model is not shown it -- it copied it into its own replies --
 # but is told in its note on the next message (agent.loop.with_language_note).
 INTERRUPTED = " [the customer interrupted here and did not hear the rest]"
+# The playback loudness, from the page, over this many 20 ms chunks: the
+# bot's voice comes back through the microphone some tens of milliseconds
+# after it plays, and rings on a little after.
+FAR_WINDOW_CHUNKS = 25
+# Below this (RMS, full scale 1) the page is playing nothing.
+FAR_SILENT = 1e-3
+# How the bot's voice comes back on this call: mic loudness over playback
+# loudness, for the frames of the last ~10 s of its speech that nobody spoke
+# over. Their 90th percentile is the echo the gate expects.
+ECHO_FRAMES = 300
+ECHO_MIN_FRAMES = 30
+# However loud the echo, speech as loud as the playback itself counts.
+ECHO_CAP = 1.0
+# A short interruption whose words are mostly the reply's own, near where
+# it stopped, was the bot's own voice coming back through the speaker.
+ECHO_MAX_WORDS = 8
+ECHO_SHARE = 0.6
 # How long a turn that began by interrupting waits for the page to say where
 # playback stopped, before working it out from the clock instead.
 REPORT_WAIT_S = 0.4
@@ -195,13 +213,20 @@ class LiveSession:
             ears.model_copy(
                 update={
                     "threshold": cfg.barge_in_threshold,
+                    "neg_threshold": cfg.barge_in_neg_threshold,
                     "min_speech_ms": cfg.barge_in_min_speech_ms,
                 }
             )
         )
         self._active = self._ears
         self._pending = np.zeros(0, dtype=np.int16)
-        self._audio: queue.Queue[bytes | None] = queue.Queue(maxsize=512)
+        self._audio: queue.Queue[tuple[bytes, float | None] | None] = queue.Queue(maxsize=512)
+        # What the page is playing, and how it comes back (the echo gate).
+        self._far: deque[float] = deque(maxlen=FAR_WINDOW_CHUNKS)
+        self._echo: deque[float] = deque(maxlen=ECHO_FRAMES)
+        self.echo_gated = 0  # frames of speech over the bot taken for its echo
+        self.false_barge_ins = 0
+        self.mic: dict[str, Any] = {}  # what the browser says it applied
         self._turns = 0
         self._turn: _Turn | None = None
         self._merge: np.ndarray | None = None  # an utterance a continuation joins
@@ -243,21 +268,42 @@ class LiveSession:
         self._audio_thread.start()
         self._spawn(self._connect, "live-connect")
 
-    def feed(self, pcm: bytes) -> None:
-        """Microphone audio: 16 kHz, 16-bit, mono, any length. Never blocks the caller."""
+    def feed(self, pcm: bytes, far: float | None = None) -> None:
+        """Microphone audio: 16 kHz, 16-bit, mono, any length. Never blocks the caller.
+
+        `far` is how loud the page was playing the bot meanwhile (RMS, full
+        scale 1), or None from a page that does not say.
+        """
         if self.state is State.ENDED:
             return
+        item = (pcm, far)
         try:
-            self._audio.put_nowait(pcm)
+            self._audio.put_nowait(item)
         except queue.Full:
             # Behind by over ten seconds: drop the oldest. Speech is lost
             # either way, and stale audio would only answer an old question.
             try:
                 self._audio.get_nowait()
-                self._audio.put_nowait(pcm)
+                self._audio.put_nowait(item)
             except (queue.Empty, queue.Full):
                 pass
             count("live_audio_dropped")
+
+    def capture(self, settings: dict[str, Any]) -> None:
+        """What the browser applied to the microphone: echo cancellation above all."""
+        keep = ("echoCancellation", "noiseSuppression", "autoGainControl", "sampleRate")
+        self.mic = {k: settings[k] for k in keep if k in settings}
+        log.info(
+            "microphone: echo cancellation %s, noise suppression %s, gain control %s",
+            self.mic.get("echoCancellation", "unknown"),
+            self.mic.get("noiseSuppression", "unknown"),
+            self.mic.get("autoGainControl", "unknown"),
+        )
+        if self.mic.get("echoCancellation") is False:
+            # The bot's voice comes back at full strength: only the echo gate
+            # and the words stand between it and interrupting itself.
+            log.warning("the browser did not apply echo cancellation to the microphone")
+            count("live_no_echo_cancellation")
 
     def played(self, audio_id: str, piece: int, offset_ms: float) -> None:
         """The page stopped playback here, as it was told to."""
@@ -346,12 +392,15 @@ class LiveSession:
     def _audio_loop(self) -> None:
         while True:
             try:
-                pcm = self._audio.get(timeout=0.25)
+                item = self._audio.get(timeout=0.25)
             except queue.Empty:
                 self._safe_tick()
                 continue
-            if pcm is None or self.state is State.ENDED:
+            if item is None or self.state is State.ENDED:
                 return
+            pcm, far = item
+            if far is not None:
+                self._far.append(far)
             samples = np.frombuffer(pcm, dtype="<i2")
             self._pending = np.concatenate([self._pending, samples])
             while len(self._pending) >= FRAME:
@@ -373,9 +422,9 @@ class LiveSession:
         with self._lock:
             if self.state in (State.IDLE, State.ENDED):
                 return
+            if self.state is State.AGENT_SPEAKING and self._active is self._barge:
+                prob = self._echo_gate(frame, prob)
             event = self._active.process(frame, prob)
-            if self.state is State.USER_SPEAKING and self._active is self._barge:
-                self._maybe_confirm_interruption()
             if event is None:
                 return
             if isinstance(event, SpeechStarted):
@@ -384,6 +433,37 @@ class LiveSession:
                 self._utterance_ended(event.utterance)
             elif isinstance(event, NoSpeech):
                 self._no_speech()
+
+    def _echo_gate(self, frame: np.ndarray, prob: float) -> float:
+        """Speech over the bot counts only if louder than the bot coming back. Under the lock.
+
+        The page says how loud it is playing. Voice activity alone cannot
+        tell the caller from the bot's own voice through the speaker -- both
+        are speech -- but loudness can: what comes back is the playback made
+        quieter by the room and the browser's echo cancellation, by an amount
+        learnt on this call. The caller has to be clearly louder than that.
+        """
+        if not self.config.barge_in_echo_gate or not self._far:
+            return prob
+        far = max(self._far)
+        if far < FAR_SILENT:
+            return prob  # nothing is playing: nothing to come back
+        mic = float(np.sqrt(np.mean((frame.astype(np.float64) / 32768) ** 2)))
+        ratio = mic / far
+        if self._barge.phase == "waiting" and self._barge.speech_ms == 0:
+            self._echo.append(ratio)  # nobody is speaking over it: this is how it comes back
+        margin = 10 ** (self.config.barge_in_echo_margin_db / 20)
+        if ratio < min(ECHO_CAP, self._echo_level() * margin):
+            if prob >= self.config.barge_in_threshold:
+                self.echo_gated += 1
+            return 0.0
+        return prob
+
+    def _echo_level(self) -> float:
+        """How loud the bot's voice comes back, as a share of how loud it plays."""
+        if len(self._echo) < ECHO_MIN_FRAMES:
+            return float(10 ** (self.config.barge_in_echo_prior_db / 20))
+        return float(np.percentile(np.fromiter(self._echo, dtype=np.float64), 90))
 
     def _tick(self) -> None:
         """Timers: a reply nobody said had finished, and the session's own limit."""
@@ -443,6 +523,10 @@ class LiveSession:
                 log.info("speech resumed before the reply was heard: one turn, not two")
                 count("live_continuations")
                 self._merge = turn.audio
+                if turn.interrupted is not None and self._interrupted is None:
+                    # The reply this began by interrupting is still waiting to
+                    # be settled: the whole turn settles it.
+                    self._interrupted, turn.interrupted = turn.interrupted, None
                 self._end_turn()
                 self._to(State.USER_SPEAKING)
         elif self.state is State.AGENT_SPEAKING:
@@ -462,16 +546,6 @@ class LiveSession:
         count("live_interruptions")
         log.info("barge-in: playback stopped %.0f ms after speech began", stop_ms)
         self._barge_stop_ms = stop_ms
-
-    def _maybe_confirm_interruption(self) -> None:
-        """Speech that has gone on longer than a "mm-hmm" did interrupt."""
-        playing = self._interrupted
-        if (
-            playing is not None
-            and self._playing is playing
-            and self._active.speech_ms > self.config.backchannel_max_ms
-        ):
-            self._confirm_interruption(playing)
 
     def _confirm_interruption(self, playing: _Playing) -> None:
         """Nothing more of the reply is made or kept. Under the lock.
@@ -565,6 +639,12 @@ class LiveSession:
         asr_ms = (self.clock() - started) * 1000
         turn.token.check("the answer")
         text = (transcript.text or "").strip()
+        if turn.interrupted is not None:
+            # Speech over the bot. It stopped at once; it carries on unless
+            # these were the caller's own words, meant for it.
+            why = self._not_an_interruption(text, turn)
+            if why is not None and self._resume(turn, why):
+                return
         if text:
             self._send(
                 {
@@ -574,9 +654,6 @@ class LiveSession:
                     "turn": turn.number,
                 }
             )
-        if turn.interrupted is not None and self._is_backchannel(text, turn):
-            if self._resume(turn):
-                return
         if turn.interrupted is not None:
             # Where playback stopped, from the page -- it says at once, so
             # this rarely waits -- before the history is told.
@@ -638,14 +715,26 @@ class LiveSession:
         session.conversation.turn_index = turn_index
         session.executor.cancel()
 
-    def _is_backchannel(self, text: str, turn: _Turn) -> bool:
-        if turn.speech_ms > self.config.backchannel_max_ms:
-            return False
-        said = _PUNCTUATION.sub(" ", text.lower()).split()
-        return not said or " ".join(said) in {b.lower() for b in self.config.backchannels}
+    def _not_an_interruption(self, text: str, turn: _Turn) -> str | None:
+        """Why speech over the bot was not the caller interrupting it; None if it was."""
+        said = _words(text)
+        if not said:
+            return "no words"  # a noise, however long: a door, a cough, the television
+        if turn.speech_ms <= self.config.backchannel_max_ms and " ".join(said) in {
+            " ".join(_words(b)) for b in self.config.backchannels
+        }:
+            return "a backchannel"
+        playing = turn.interrupted
+        if playing is not None and len(said) <= ECHO_MAX_WORDS:
+            reply = [w for piece in playing.pieces for w in _words(piece)]
+            reached = len(_words(self._heard(playing)))
+            near = set(reply[max(0, reached - 12) : reached + 4])
+            if sum(w in near for w in said) >= ECHO_SHARE * len(said):
+                return "the bot's own voice coming back"
+        return None
 
-    def _resume(self, turn: _Turn) -> bool:
-        """It was only a "mm-hmm": the reply goes on from where it stopped.
+    def _resume(self, turn: _Turn, why: str = "a backchannel") -> bool:
+        """Not an interruption after all: the reply goes on from where it stopped.
 
         False when there is nothing left to go on with -- the reply was
         already let go -- and the turn is then answered like any other.
@@ -655,8 +744,12 @@ class LiveSession:
             if not self._current(turn) or playing is None or self._playing is not playing:
                 return False
             self.interruptions -= 1
-            log.info("a backchannel, not an interruption: the reply goes on")
-            count("live_backchannels")
+            log.info("%s, not an interruption: the reply goes on", why)
+            if why == "a backchannel":
+                count("live_backchannels")
+            else:
+                self.false_barge_ins += 1
+                count("live_false_barge_ins")
             playing.paused = False
             if playing.sent_all:
                 # Time again for all of it: the clock ran while it was paused.
@@ -835,9 +928,7 @@ class LiveSession:
         playing.deadline = self.clock() + sum(playing.durations) + self.config.playback_margin_s
         # How many pieces there are: the page plays to the last of them, even
         # one still decoding when this arrives.
-        self._send(
-            {"type": "audio_end", "audio_id": playing.audio_id, "pieces": playing.sent}
-        )
+        self._send({"type": "audio_end", "audio_id": playing.audio_id, "pieces": playing.sent})
 
     def _finished_playing(self, playing: _Playing) -> None:
         """The reply was heard to its end. Under the lock."""
@@ -878,8 +969,10 @@ class LiveSession:
                 report(InternalError(f"could not say {key}", cause=exc))
                 result = None
             with self._lock:
-                if turn is None and self._saying is token and (
-                    token.cancelled or self.state is not State.LISTENING
+                if (
+                    turn is None
+                    and self._saying is token
+                    and (token.cancelled or self.state is not State.LISTENING)
                 ):
                     self._saying = None  # not said: whatever asked for it may ask again
                 if token.cancelled or self.state is State.ENDED:
@@ -952,6 +1045,11 @@ def _payload_audio(payload: Any) -> AudioBuffer | None:
         return decode_wav(base64.b64decode(payload.audio_b64))
     except Exception:  # unreadable: the reply is still shown
         return None
+
+
+def _words(text: str) -> list[str]:
+    """Lower-cased words, punctuation gone -- English and Urdu alike."""
+    return _PUNCTUATION.sub(" ", (text or "").lower()).split()
 
 
 def _has_words(text: str) -> bool:
