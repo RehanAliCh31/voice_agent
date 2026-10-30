@@ -16,8 +16,9 @@ from tests.live_support import (
     tone,
 )
 from voicebot.asr.base import ASRUnavailable
+from voicebot.errors import ErrorCode
 from voicebot.live.session import INTERRUPTED, State
-from voicebot.llm.base import Reply
+from voicebot.llm.base import Reply, ToolCall
 from voicebot.messages import say
 
 # A sentence: speech, then the silence that ends it (end_silence_ms is 500).
@@ -286,6 +287,25 @@ def test_two_interruptions_in_a_row_leave_nothing_stuck() -> None:
         session.close()
 
 
+def test_interrupting_the_first_word_keeps_none_of_the_reply() -> None:
+    services = services_for(
+        [("what is my balance", "en"), ("no wait", "en")],
+        [Reply(text="Your savings balance is fine. Anything else."), Reply(text="Yes?")],
+    )
+    page = Page(auto_finish=False)
+    page.stop_at = (0, 0.0)  # stopped before a word of it was heard
+    session = open_session(services, page)
+    try:
+        _speaking(page, session, services)
+        speak(session, tone(1000), quiet(700))
+        assert page.wait(lambda p: len(p.of("reply")) == 2)
+        # Nothing of the first answer was heard, so none of it is on record.
+        assert _assistant_lines(services)[0] == INTERRUPTED.strip()
+        assert session.interruptions == 1
+    finally:
+        session.close()
+
+
 def test_interrupting_at_the_very_end_still_counts() -> None:
     services = services_for(
         [("hello", "en"), ("wait", "en")], [Reply(text="Hello there."), Reply(text="Yes?")]
@@ -459,6 +479,50 @@ def test_the_model_down_is_said_in_the_callers_language_not_silent() -> None:
         speak(session, *SENTENCE)
         assert page.wait(lambda p: bool(p.of("reply")))
         assert page.of("reply")[0]["reply"] == say("unavailable", "ur")
+        assert page.wait(lambda p: p.audio_count >= 1)  # said, not just shown
+        assert settle(page, "listening")
+    finally:
+        session.close()
+
+
+def test_a_recogniser_that_times_out_is_said_not_silent() -> None:
+    timed_out = ASRUnavailable(
+        "the recogniser did not answer within 4.0s", code=ErrorCode.PROVIDER_TIMEOUT
+    )
+    services = services_for([timed_out, ("hello", "en")], [Reply(text="Hi.")])
+    page = Page()
+    session = open_session(services, page)
+    try:
+        speak(session, *SENTENCE)
+        assert page.wait(lambda p: bool(p.of("say")))
+        assert page.of("say")[0]["key"] == "speech_unavailable"
+        assert settle(page, "listening")
+        # And the next turn is heard as usual.
+        speak(session, *SENTENCE)
+        assert page.wait(lambda p: bool(p.of("reply")))
+    finally:
+        session.close()
+
+
+def test_a_model_slower_than_the_turns_budget_is_said_not_silent() -> None:
+    # The first round asks for a tool and takes most of the budget: there is
+    # not time for a second, so the turn says so rather than wait on.
+    slow = SlowLLM(
+        [
+            Reply(tool_calls=(ToolCall("c1", "get_balance", {"account": "savings"}),)),
+            Reply(text="Your savings are fine."),
+        ],
+        delay_s=0.8,
+    )
+    services = services_for(
+        [("what is my balance", "en")], [], llm=slow, resilience={"turn_budget_s": 1.5}
+    )
+    page = Page()
+    session = open_session(services, page)
+    try:
+        speak(session, *SENTENCE)
+        assert page.wait(lambda p: bool(p.of("reply")))
+        assert page.of("reply")[0]["reply"] == say("unavailable", "en")
         assert page.wait(lambda p: p.audio_count >= 1)  # said, not just shown
         assert settle(page, "listening")
     finally:

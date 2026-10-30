@@ -111,6 +111,7 @@ def services_for(
     asr_delay_s: float = 0.0,
     llm: LLMClient | None = None,
     session: dict[str, Any] | None = None,
+    resilience: dict[str, Any] | None = None,
     **live: Any,
 ) -> Services:
     config = AppConfig()
@@ -118,6 +119,7 @@ def services_for(
         update={
             "live": config.live.model_copy(update={"idle_prompt_s": 600, **live}),
             "session": config.session.model_copy(update=session or {}),
+            "resilience": config.resilience.model_copy(update=resilience or {}),
         }
     )
     services = build_services(config)
