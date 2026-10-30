@@ -262,6 +262,10 @@ ENGLISH_THAT_WHISPER_CALLED_URDU = [
     ("Is Osman Tarik on my list of pays?", "اس عثمان تاریخ عنمائل اسٹاپپیس"),
     # In English letters: called Urdu, written as English.
     ("Did Bilal Ahmed send me any money?", "Did Bilal Ahmed send me any money?"),
+    # From a live test call: English words spelled as Urdu's own small words
+    # -- "hear" as ہی, "me" as میں, "hey" as ہے -- and answered in Urdu.
+    ("Hey, can you hear me?", "ہی، کن یو ہی مینگ؟"),
+    ("Hey, can you hear me?", "ہے کہ یوں ہی میں؟"),
 ]
 
 URDU_WITH_QWEN_GUESSING = [
