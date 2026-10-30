@@ -850,6 +850,12 @@ class LiveSession:
             "tts_first_ms": round(latency.get("tts", 0.0)),
             "end_of_speech_to_first_audio_ms": round((sent_at - turn.speech_ended_at) * 1000),
             "interruptions": self.interruptions,
+            "false_barge_ins": self.false_barge_ins,
+            # How the bot's voice comes back on this call, and whether the
+            # browser was cancelling it: what to look at when it interrupts itself.
+            "echo_return_db": round(20 * np.log10(max(self._echo_level(), 1e-6)), 1),
+            "echo_gated_frames": self.echo_gated,
+            "echo_cancellation": self.mic.get("echoCancellation"),
         }
         stop = getattr(self, "_barge_stop_ms", None)
         if stop is not None:

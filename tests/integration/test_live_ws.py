@@ -97,6 +97,50 @@ def test_a_conversation_by_voice_alone(client: TestClient) -> None:
     assert len(users) == 2
 
 
+def _framed(ws: Any, level: float, *parts: np.ndarray) -> None:
+    """As the page sends it: each chunk led by how loud the bot is playing."""
+    audio = np.concatenate(parts)
+    head = np.array([level], dtype="<f4").tobytes()
+    for start in range(0, len(audio), CHUNK):
+        ws.send_bytes(head + audio[start : start + CHUNK].astype("<i2").tobytes())
+
+
+def test_the_bot_coming_back_through_the_speaker_does_not_stop_it(client: TestClient) -> None:
+    _script(
+        client,
+        [("what is my balance", "en"), ("stop, just my savings", "en")],
+        [Reply(text="Your checking is open. Your savings are open. Anything else?")],
+    )
+    with client.websocket_connect("/v1/live") as ws:
+        ws.send_text(
+            json.dumps(
+                {
+                    "type": "start",
+                    "capture": {
+                        "format": "level+pcm16",
+                        "settings": {"echoCancellation": False, "deviceId": "kept-here"},
+                    },
+                }
+            )
+        )
+        _until(ws, "started")
+        _framed(ws, 0.0, tone(900), quiet(700))
+        seen = _until(ws, "metrics")
+        # What the browser applied is on the turn's record.
+        assert _events(seen, "metrics")[0]["echo_cancellation"] is False
+        # Its own voice, coming back loud enough to be speech -- while the
+        # page says it is playing louder still -- is not an interruption...
+        _framed(ws, 0.5, tone(1500, 4500))
+        time.sleep(0.5)  # heard by the session, not just received
+        ws.send_text(json.dumps({"type": "ping"}))
+        assert not _events(_until(ws, "pong"), "stop_audio")
+        # ...the caller, clearly louder, is.
+        _framed(ws, 0.5, tone(1000, 30000), quiet(700))
+        assert _events(_until(ws, "stop_audio"), "stop_audio")
+        ws.send_text(json.dumps({"type": "stop"}))
+        _until(ws, "ended")
+
+
 def test_speaking_over_the_bot_through_the_socket(client: TestClient) -> None:
     _script(
         client,

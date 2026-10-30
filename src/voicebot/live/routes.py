@@ -2,9 +2,15 @@
 
 The page connects, says `start`, and streams the microphone as binary
 messages: 16 kHz, 16-bit, little-endian, mono PCM, in chunks of any length
-(it sends 20 ms). It may also send, as JSON:
+(it sends 20 ms). A page whose `start` says `"capture": {"format":
+"level+pcm16"}` puts before each chunk, as a little-endian float32, how loud
+it was playing the bot meanwhile (RMS, full scale 1): the echo gate's
+reference. Its `capture.settings` are what the browser applied to the
+microphone -- echo cancellation above all -- and are logged. It may also
+send, as JSON:
 
-    {"type": "start", "session_id": "..."}   begin (or carry on a conversation)
+    {"type": "start", "session_id": "...", "capture": {...}}
+                                              begin (or carry on a conversation)
     {"type": "stop"}                          end it
     {"type": "interrupted", "audio_id": "...", "piece": 2, "offset_ms": 840}
                                               where playback stopped, when told to stop
@@ -29,6 +35,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
+import struct
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -47,6 +55,8 @@ router = APIRouter()
 # A connection whose page falls this far behind on what it is sent is not
 # reading: it is let go, rather than held in memory.
 OUTBOX_LIMIT = 2000
+# Microphone chunks led by the playback loudness (see above).
+FRAMED = "level+pcm16"
 
 
 @router.websocket("/v1/live")
@@ -64,6 +74,7 @@ async def live(websocket: WebSocket) -> None:
 
     sender = asyncio.create_task(_drain(websocket, outbox))
     session: LiveSession | None = None
+    framed = False
     count("live_sessions")
     try:
         while True:
@@ -73,7 +84,10 @@ async def live(websocket: WebSocket) -> None:
             data = message.get("bytes")
             if data is not None:
                 if session is not None:
-                    session.feed(data)
+                    if framed:
+                        session.feed(data[4:], _level(data))
+                    else:
+                        session.feed(data)
                 continue
             control = _control(message.get("text"))
             if control is None:
@@ -83,6 +97,11 @@ async def live(websocket: WebSocket) -> None:
                 session = await _start(services, control, send)
                 if session is None:
                     break
+                capture = control.get("capture")
+                if isinstance(capture, dict):
+                    framed = capture.get("format") == FRAMED
+                    if isinstance(capture.get("settings"), dict):
+                        session.capture(capture["settings"])
             elif kind == "stop":
                 if session is not None:
                     session.stop("the caller stopped")
@@ -140,6 +159,14 @@ async def _start(services: Any, control: dict[str, Any], send: Any) -> LiveSessi
     )
     await run_in_threadpool(session.start)
     return session
+
+
+def _level(data: bytes) -> float | None:
+    """The playback loudness a framed chunk begins with; None if it is unreadable."""
+    if len(data) < 4:
+        return None
+    (level,) = struct.unpack_from("<f", data)
+    return level if math.isfinite(level) and 0.0 <= level <= 2.0 else None
 
 
 def _control(text: str | None) -> dict[str, Any] | None:

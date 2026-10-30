@@ -50,14 +50,29 @@ FakeSocket.made = [];
 
 function harness({ denied = false } = {}) {
   FakeSocket.made = [];
-  const log = { states: [], errors: [], events: [], timers: [], tracks: [], sources: [] };
+  const log = {
+    states: [],
+    errors: [],
+    events: [],
+    timers: [],
+    tracks: [],
+    sources: [],
+    connections: [],
+  };
+  const node = (name) => ({
+    name,
+    connect(to, output, input) {
+      log.connections.push({ from: name, to: to && to.name, output, input });
+    },
+    disconnect() {},
+  });
   const context = {
     currentTime: 0,
     state: "running",
     closed: false,
-    destination: {},
+    destination: { name: "speakers" },
     audioWorklet: { addModule: () => Promise.resolve() },
-    createGain: () => ({ gain: { value: 1 }, connect() {}, disconnect() {} }),
+    createGain: () => Object.assign(node("gain"), { gain: { value: 1 } }),
     createMediaStreamSource: () => ({ connect() {}, disconnect() {} }),
     decodeAudioData: (bytes) => Promise.resolve({ duration: bytes.byteLength / 1000 }),
     createBufferSource() {
@@ -85,7 +100,21 @@ function harness({ denied = false } = {}) {
     },
   };
   const mic = () => {
-    const track = { stopped: false, onended: null, stop() { this.stopped = true; } };
+    const track = {
+      stopped: false,
+      onended: null,
+      stop() {
+        this.stopped = true;
+      },
+      // What the browser says it applied -- and an identifier that stays here.
+      getSettings: () => ({
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false,
+        sampleRate: 48000,
+        deviceId: "a-device",
+      }),
+    };
     log.tracks.push(track);
     return { getTracks: () => [track], getAudioTracks: () => [track] };
   };
@@ -99,7 +128,10 @@ function harness({ denied = false } = {}) {
         : Promise.resolve(mic());
     },
     createAudioContext: () => context,
-    createWorkletNode: () => ({ port: { onmessage: null }, connect() {}, disconnect() {} }),
+    createWorkletNode: (context, name, options) => {
+      log.workletOptions = options;
+      return Object.assign(node("capture"), { port: { onmessage: null } });
+    },
     workletUrl: "live-capture.js",
     now: () => Date.now(),
     setTimeout: (fn, ms) => {
@@ -151,10 +183,30 @@ test("one click opens the microphone with echo cancellation and starts the sessi
     autoGainControl: true,
     channelCount: 1,
   });
-  assert.deepStrictEqual(socket.json()[0], { type: "start", session_id: null });
-  // The microphone goes straight to the socket, as binary.
-  h.client.onFrame({ pcm: new ArrayBuffer(640), level: 0.1 });
-  assert.ok(socket.sent.some((d) => d instanceof ArrayBuffer));
+  // The start says what the browser applied to the microphone, and that
+  // every chunk comes with how loud the bot was playing.
+  assert.deepStrictEqual(socket.json()[0], {
+    type: "start",
+    session_id: null,
+    capture: {
+      format: "level+pcm16",
+      settings: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false,
+        sampleRate: 48000,
+      },
+    },
+  });
+  // The bot's own playback is the worklet's second input.
+  assert.strictEqual(h.log.workletOptions.numberOfInputs, 2);
+  assert.ok(h.log.connections.some((c) => c.to === "capture" && c.input === 1));
+  // The microphone goes straight to the socket, as binary, led by the playback level.
+  h.client.onFrame({ pcm: new Int16Array([1, -1]).buffer, level: 0.1, far: 0.25 });
+  const frame = socket.sent.find((d) => d instanceof ArrayBuffer);
+  assert.strictEqual(frame.byteLength, 4 + 4);
+  assert.ok(Math.abs(new DataView(frame).getFloat32(0, true) - 0.25) < 1e-6);
+  assert.deepStrictEqual(Array.from(new Int16Array(frame.slice(4))), [1, -1]);
   assert.deepStrictEqual(h.log.states, ["connecting", "listening"]);
 });
 
@@ -213,7 +265,9 @@ test("a dropped connection is reopened, with the same conversation", async () =>
   h.log.timers[0].fn();
   const again = FakeSocket.made[1];
   again.open();
-  assert.deepStrictEqual(again.json()[0], { type: "start", session_id: "s1" });
+  const start = again.json()[0];
+  assert.strictEqual(start.type, "start");
+  assert.strictEqual(start.session_id, "s1");
 });
 
 test("a connection that will not come back ends the session and says why", async () => {

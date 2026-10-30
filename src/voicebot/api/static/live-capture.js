@@ -6,6 +6,11 @@
  * filter, enough to keep speech clean on its way down to 16 kHz -- and every
  * 320 of them (20 ms) are posted to the page, with their loudness for the
  * meter. The buffer is transferred, not copied.
+ *
+ * The second input is the bot's own playback, as the speakers are given it.
+ * How loud it was over the same 20 ms goes with each chunk: the service's
+ * echo gate tells the caller from the bot coming back through the
+ * microphone by it.
  */
 
 class LiveCapture extends AudioWorkletProcessor {
@@ -20,6 +25,8 @@ class LiveCapture extends AudioWorkletProcessor {
     this.count = 0;
     this.step = 0;
     this.energy = 0;
+    this.farEnergy = 0;
+    this.farCount = 0;
   }
 
   emit(value) {
@@ -29,10 +36,13 @@ class LiveCapture extends AudioWorkletProcessor {
     this.filled += 1;
     if (this.filled === this.size) {
       var level = Math.sqrt(this.energy / this.size);
-      this.port.postMessage({ pcm: this.chunk.buffer, level: level }, [this.chunk.buffer]);
+      var far = this.farCount ? Math.sqrt(this.farEnergy / this.farCount) : 0;
+      this.port.postMessage({ pcm: this.chunk.buffer, level: level, far: far }, [this.chunk.buffer]);
       this.chunk = new Int16Array(this.size);
       this.filled = 0;
       this.energy = 0;
+      this.farEnergy = 0;
+      this.farCount = 0;
     }
   }
 
@@ -41,7 +51,13 @@ class LiveCapture extends AudioWorkletProcessor {
     if (!input) {
       return true;
     }
+    // Nothing playing is no channels at all, not a channel of zeros.
+    var far = inputs[1] && inputs[1][0];
     for (var i = 0; i < input.length; i += 1) {
+      if (far) {
+        this.farEnergy += far[i] * far[i];
+      }
+      this.farCount += 1;
       this.sum += input[i];
       this.count += 1;
       this.step += 1;

@@ -15,8 +15,11 @@
  *
  * The browser's echo cancellation, noise suppression and gain control are
  * asked for: without the first the service hears the bot through the
- * speakers. A socket that drops is reopened, a few times, with the same
- * conversation; a microphone that is unplugged is opened again.
+ * speakers. What the browser actually applied is told to the service, and
+ * each chunk of microphone audio goes with how loud the bot was playing
+ * meanwhile, for the service's echo gate. A socket that drops is reopened,
+ * a few times, with the same conversation; a microphone that is unplugged is
+ * opened again.
  *
  * Everything the browser provides is passed in (`deps`), so the tests drive
  * this with stand-ins (tests/js/live.test.js).
@@ -34,6 +37,11 @@
   // Waits between attempts to reopen a dropped socket; after the last, the
   // session ends and says so.
   var RECONNECT_MS = [300, 800, 1600, 3200, 5000];
+
+  // Each microphone chunk is led by the playback loudness, as a float32.
+  var FRAMED = "level+pcm16";
+  // What the browser applied to the microphone, told to the service.
+  var SETTINGS = ["echoCancellation", "noiseSuppression", "autoGainControl", "sampleRate"];
 
   var CONSTRAINTS = {
     audio: {
@@ -148,7 +156,10 @@
         if (!current()) {
           return false; // cleanup, run by the stop, has the stream and context
         }
+        // Input 0 is the microphone; input 1 the bot's own playback, so the
+        // worklet can say how loud it was over each chunk.
         self.node = deps.createWorkletNode(self.context, "live-capture", {
+          numberOfInputs: 2,
           processorOptions: { targetRate: 16000, chunk: 320 },
         });
         self.node.port.onmessage = function (event) {
@@ -162,6 +173,7 @@
         hush.connect(self.context.destination);
         self.output = self.context.createGain();
         self.output.connect(self.context.destination);
+        self.output.connect(self.node, 0, 1);
         self.attach(stream);
         return true;
       });
@@ -230,9 +242,26 @@
       this.on.level(data.level);
     }
     if (this.phase === "live" && this.socket && this.socket.readyState === 1) {
-      this.socket.send(data.pcm);
+      var pcm = new Uint8Array(data.pcm);
+      var frame = new ArrayBuffer(4 + pcm.byteLength);
+      new DataView(frame).setFloat32(0, data.far || 0, true);
+      new Uint8Array(frame, 4).set(pcm);
+      this.socket.send(frame);
       this.framesSent += 1;
     }
+  };
+
+  /** What the browser says it applied to the microphone: echo cancellation above all. */
+  LiveClient.prototype.micSettings = function () {
+    var track = this.stream && this.stream.getAudioTracks()[0];
+    var applied = track && track.getSettings ? track.getSettings() : {};
+    var settings = {};
+    SETTINGS.forEach(function (name) {
+      if (applied[name] !== undefined) {
+        settings[name] = applied[name];
+      }
+    });
+    return settings;
   };
 
   // --- the socket ------------------------------------------------------------------
@@ -243,7 +272,13 @@
     socket.binaryType = "arraybuffer";
     this.socket = socket;
     socket.onopen = function () {
-      socket.send(JSON.stringify({ type: "start", session_id: self.sessionId }));
+      socket.send(
+        JSON.stringify({
+          type: "start",
+          session_id: self.sessionId,
+          capture: { format: FRAMED, settings: self.micSettings() },
+        })
+      );
     };
     socket.onmessage = function (event) {
       self.onMessage(event.data);
