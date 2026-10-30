@@ -142,6 +142,7 @@ class _Playing:
     result: TurnResult | None
     rest: Any = None  # SpokenReply
     durations: list[float] = field(default_factory=list)
+    sent: int = 0  # pieces whose audio went to the page
     sent_all: bool = False
     first_sent_at: float = 0.0
     deadline: float = float("inf")
@@ -790,6 +791,7 @@ class LiveSession:
     def _send_piece(self, playing: _Playing, number: int, audio: AudioBuffer) -> None:
         data = encode_wav(audio)
         playing.durations.append(audio.duration_s)
+        playing.sent += 1
         self._send(
             {
                 "type": "audio",
@@ -827,7 +829,11 @@ class LiveSession:
     def _all_sent(self, playing: _Playing) -> None:
         playing.sent_all = True
         playing.deadline = self.clock() + sum(playing.durations) + self.config.playback_margin_s
-        self._send({"type": "audio_end", "audio_id": playing.audio_id})
+        # How many pieces there are: the page plays to the last of them, even
+        # one still decoding when this arrives.
+        self._send(
+            {"type": "audio_end", "audio_id": playing.audio_id, "pieces": playing.sent}
+        )
 
     def _finished_playing(self, playing: _Playing) -> None:
         """The reply was heard to its end. Under the lock."""

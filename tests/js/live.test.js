@@ -252,6 +252,39 @@ test("a reply's pieces play one after another, then the service is told", async 
   assert.deepStrictEqual(socket.json().pop(), { type: "playback_done", audio_id: "a1" });
 });
 
+test("a last piece that comes after a gap is played, not dropped", async () => {
+  const h = harness();
+  const socket = await live(h);
+  const done = () => socket.json().some((m) => m.type === "playback_done");
+  // The first piece arrives and plays to its end before the next is made...
+  await replyOf(socket, "a1", 1);
+  h.log.sources[0].onended();
+  // ...then the last comes, and the reply's end right behind it, while the
+  // last piece is still being decoded.
+  socket.event({ type: "audio", audio_id: "a1", piece: 1, seconds: 1, last: true });
+  socket.receive(new ArrayBuffer(1000));
+  socket.event({ type: "audio_end", audio_id: "a1", pieces: 2 });
+  assert.strictEqual(done(), false, "not finished: a piece is still to play");
+  await tick();
+  assert.strictEqual(h.log.sources.length, 2, "the last piece is played");
+  assert.strictEqual(done(), false);
+  h.log.sources[1].onended();
+  assert.strictEqual(done(), true);
+});
+
+test("a piece that never came is skipped, not waited for", async () => {
+  const h = harness();
+  const socket = await live(h);
+  // The first piece's voice failed; the second was made.
+  socket.event({ type: "audio", audio_id: "a1", piece: 1, seconds: 1, last: true });
+  socket.receive(new ArrayBuffer(1000));
+  socket.event({ type: "audio_end", audio_id: "a1", pieces: 1 });
+  await tick();
+  assert.strictEqual(h.log.sources.length, 1, "the piece there is played");
+  h.log.sources[0].onended();
+  assert.ok(socket.json().some((m) => m.type === "playback_done"));
+});
+
 test("barge-in silences the reply at once and says exactly where it stopped", async () => {
   const h = harness();
   const socket = await live(h);

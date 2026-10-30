@@ -319,7 +319,7 @@
         this.header = message;
         return;
       case "audio_end":
-        this.ended(message.audio_id);
+        this.ended(message.audio_id, message.pieces);
         break;
       case "stop_audio":
         this.pause(message.audio_id);
@@ -349,7 +349,16 @@
 
   LiveClient.prototype.reply = function (id) {
     if (!this.replies[id]) {
-      this.replies[id] = { id: id, pieces: [], expected: null, next: 0, offset: 0, paused: false };
+      this.replies[id] = {
+        id: id,
+        pieces: [],
+        received: 0, // pieces whose audio has come, decoded or not
+        decoding: 0,
+        expected: null,
+        next: 0,
+        offset: 0,
+        paused: false,
+      };
     }
     return this.replies[id];
   };
@@ -362,8 +371,13 @@
     }
     var self = this;
     var reply = this.reply(header.audio_id);
+    // Counted now, not when decoded: the reply's end can arrive while this
+    // piece is still decoding, and must not be taken for the end of the sound.
+    reply.received = Math.max(reply.received, header.piece + 1);
+    reply.decoding += 1;
     this.context.decodeAudioData(bytes).then(
       function (buffer) {
+        reply.decoding -= 1;
         if (self.replies[reply.id] !== reply) {
           return; // discarded while it was decoding
         }
@@ -372,15 +386,17 @@
       },
       function () {
         // Unreadable: it is skipped, and the next piece plays.
+        reply.decoding -= 1;
         reply.pieces[header.piece] = null;
         self.play(reply);
       }
     );
   };
 
-  LiveClient.prototype.ended = function (id) {
+  /** Every piece has been sent: `count` of them, as the service says. */
+  LiveClient.prototype.ended = function (id, count) {
     var reply = this.reply(id);
-    reply.expected = Math.max(reply.pieces.length, reply.next);
+    reply.expected = Math.max(count || 0, reply.received, reply.next);
     this.play(reply);
   };
 
@@ -388,16 +404,23 @@
     if (reply.paused || this.active || !this.context) {
       return;
     }
-    while (reply.next < reply.pieces.length && reply.pieces[reply.next] === null) {
-      reply.next += 1; // a piece that could not be decoded
-    }
     var buffer = reply.pieces[reply.next];
-    if (!buffer) {
-      if (reply.expected !== null && reply.next >= reply.expected) {
-        delete this.replies[reply.id];
-        this.send({ type: "playback_done", audio_id: reply.id });
+    while (!buffer) {
+      if (buffer === undefined) {
+        // Not here: on its way, or still decoding -- unless the reply's end
+        // has come and nothing is decoding, when it is done, or the piece was
+        // never sent.
+        if (reply.expected === null || reply.decoding > 0) {
+          return;
+        }
+        if (reply.next >= reply.expected) {
+          delete this.replies[reply.id];
+          this.send({ type: "playback_done", audio_id: reply.id });
+          return;
+        }
       }
-      return; // the next piece is still on its way
+      reply.next += 1; // could not be decoded, or never sent: the next one plays
+      buffer = reply.pieces[reply.next];
     }
     var self = this;
     var source = this.context.createBufferSource();
