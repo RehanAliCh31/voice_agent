@@ -16,6 +16,7 @@ import base64
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import numpy as np
@@ -192,6 +193,17 @@ class TtsClient:
             self._reference_url = "data:audio/wav;base64," + base64.b64encode(data).decode()
         return self._reference_url
 
+    def warm(self) -> None:
+        """Open the connection now, with a health check, so the first real request need not.
+
+        A failure is left for the real request to report.
+        """
+        parts = urlsplit(self.endpoint.url)
+        try:
+            self._client.get(f"{parts.scheme}://{parts.netloc}/health", timeout=3.0)
+        except httpx.HTTPError:
+            pass
+
     def close(self) -> None:
         self._client.close()
 
@@ -224,6 +236,10 @@ class BackedUpVoice:
                 self.backup.endpoint.label or self.backup.endpoint.voice or self.backup.name,
             )
             return self.backup.synthesize(text)
+
+    def warm(self) -> None:
+        self.main.warm()
+        self.backup.warm()
 
     def close(self) -> None:
         self.main.close()

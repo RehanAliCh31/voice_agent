@@ -55,6 +55,23 @@ class TurnResult:
     audio: AudioBuffer
     latency: LatencyBreakdown
     rest: SpokenReply | None = None
+    # The text of each piece of the audio, in order: the first is `audio`,
+    # the others are `rest`'s. What was said when someone interrupts.
+    pieces: tuple[str, ...] = ()
+
+
+def _hear_language(transcript: Transcript, conversation: Conversation) -> None:
+    """The conversation's language after hearing `transcript`.
+
+    The recognisers' "Urdu" stands. Anything else is read as typing is, so a
+    word or two -- "yes", "savings" -- leaves the conversation in the
+    language it was already in.
+    """
+    conversation.language = (
+        "ur"
+        if transcript.language == "ur"
+        else typed_language(transcript.text, conversation.language)  # type: ignore[arg-type]
+    )
 
 
 class VoicePipeline:
@@ -111,14 +128,23 @@ class VoicePipeline:
         if not _HAS_CONTENT.search(transcript.text or ""):
             return self._nothing_heard(transcript, conversation, tracker)
 
-        # The recognisers' "Urdu" stands. Anything else is read as typing is,
-        # so a word or two -- "yes", "savings" -- leaves the conversation in
-        # the language it was already in.
-        conversation.language = (
-            "ur"
-            if transcript.language == "ur"
-            else typed_language(transcript.text, conversation.language)  # type: ignore[arg-type]
-        )
+        _hear_language(transcript, conversation)
+        return self._finish(transcript, transcript.text.strip(), conversation, tracker)
+
+    def respond_to_heard(
+        self, transcript: Transcript, conversation: Conversation, asr_ms: float = 0.0
+    ) -> TurnResult:
+        """Same turn, on speech already recognised.
+
+        The live session recognises an utterance itself, so the caller sees
+        their words before the reply, and an interruption can be told from a
+        "mm-hmm". The rest is the turn every other path takes.
+        """
+        tracker = LatencyTracker()
+        tracker.stages["asr"] = asr_ms
+        if not _HAS_CONTENT.search(transcript.text or ""):
+            return self._nothing_heard(transcript, conversation, tracker)
+        _hear_language(transcript, conversation)
         return self._finish(transcript, transcript.text.strip(), conversation, tracker)
 
     def respond_to_text(self, text: str, conversation: Conversation) -> TurnResult:
@@ -154,7 +180,7 @@ class VoicePipeline:
 
         checkpoint("speaking")
         with tracker.stage("tts"):
-            audio, rest = self._speak_reply(result.text, conversation.language)
+            audio, rest, pieces = self._speak_reply(result.text, conversation.language)
 
         turn = TurnResult(
             transcript=transcript,
@@ -163,6 +189,7 @@ class VoicePipeline:
             audio=audio,
             latency=tracker.breakdown(),
             rest=rest,
+            pieces=pieces,
         )
         self._log(turn, conversation.language)
         return turn
@@ -179,7 +206,7 @@ class VoicePipeline:
 
         checkpoint("speaking")
         with tracker.stage("tts"):
-            audio, rest = self._speak_reply(result.text, conversation.language)
+            audio, rest, pieces = self._speak_reply(result.text, conversation.language)
 
         turn = TurnResult(
             transcript=transcript,
@@ -188,6 +215,7 @@ class VoicePipeline:
             audio=audio,
             latency=tracker.breakdown(),
             rest=rest,
+            pieces=pieces,
         )
         self._log(turn, conversation.language)
         return turn
@@ -213,7 +241,9 @@ class VoicePipeline:
             )
             return AgentResult(text=say("internal", conversation.language), fallback="internal")
 
-    def _speak_reply(self, text: str, language: str) -> tuple[AudioBuffer, SpokenReply | None]:
+    def _speak_reply(
+        self, text: str, language: str
+    ) -> tuple[AudioBuffer, SpokenReply | None, tuple[str, ...]]:
         """The reply's first piece now, and the rest being made in the background.
 
         The customer hears the first piece as soon as it exists rather than
@@ -222,7 +252,7 @@ class VoicePipeline:
         voice is not working, and the answer is on the screen.
         """
         if not self.speak:
-            return AudioBuffer(samples=SILENCE, sample_rate=16_000), None
+            return AudioBuffer(samples=SILENCE, sample_rate=16_000), None, ()
         try:
             pieces = self.tts.pieces(text, voice=language)
         except Exception as exc:  # cutting it up failed: say it whole
@@ -233,11 +263,12 @@ class VoicePipeline:
             kept = self.tts.kept("voice_unavailable", language)
             if kept is not None:
                 log.warning("the voice failed; saying so in the bot's own recorded voice")
-                return kept, None
-            return first, None
+                return kept, None, (say("voice_unavailable", language),)
+            return first, None, ()
         if len(pieces) == 1:
-            return first, None
-        return first, SpokenReply(pieces[1:], lambda piece: self._speak(piece, language))
+            return first, None, tuple(pieces)
+        rest = SpokenReply(pieces[1:], lambda piece: self._speak(piece, language))
+        return first, rest, tuple(pieces)
 
     def _speak(self, text: str, language: str | None = None) -> AudioBuffer:
         """`text` in the voice of `language` -- the customer's, never the reply's own script.
@@ -286,6 +317,7 @@ class VoicePipeline:
             agent=AgentResult(text=sentence, fallback=key),
             audio=audio,
             latency=tracker.breakdown(),
+            pieces=(sentence,),
         )
 
     # --- for the conversation's own rules, around a turn ------------------------
@@ -305,7 +337,7 @@ class VoicePipeline:
         if result.rest is not None:
             # Still being spoken a piece at a time: it goes on the end.
             result.rest.add(sentence)
-            return dataclasses.replace(result, agent=agent)
+            return dataclasses.replace(result, agent=agent, pieces=(*result.pieces, sentence))
         extra = self._speak(sentence)
         audio = result.audio
         if len(audio.samples) and len(extra.samples) and extra.sample_rate == audio.sample_rate:
@@ -313,13 +345,17 @@ class VoicePipeline:
                 samples=np.concatenate([audio.samples, extra.samples]),
                 sample_rate=audio.sample_rate,
             )
-        return dataclasses.replace(result, agent=agent, audio=audio)
+        # One clip now, so one piece: both sentences in it.
+        joined = " ".join((*result.pieces, sentence)).strip()
+        return dataclasses.replace(result, agent=agent, audio=audio, pieces=(joined,))
 
     def replace_reply(self, result: TurnResult, agent: AgentResult) -> TurnResult:
         """`result`, answered with `agent`'s reply instead, spoken afresh."""
         if result.rest is not None:
             result.rest.cancel()
-        return dataclasses.replace(result, agent=agent, audio=self._speak(agent.text), rest=None)
+        return dataclasses.replace(
+            result, agent=agent, audio=self._speak(agent.text), rest=None, pieces=(agent.text,)
+        )
 
     def _log(self, result: TurnResult, language: str) -> None:
         slowest = result.latency.slowest()

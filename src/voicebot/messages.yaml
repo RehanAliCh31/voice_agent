@@ -212,3 +212,17 @@ figure_many:
 readback_on_screen:
   en: "Please check the details on your screen, and confirm if they are right."
   ur: "براہِ کرم اپنی اسکرین پر تفصیل دیکھ لیں، اور درست ہو تو تصدیق کر دیں۔"
+
+# A live session: nothing has been said for a while.
+still_there:
+  en: "Are you still there? I'm listening."
+  ur:
+    female: "کیا آپ ابھی موجود ہیں؟ میں سن رہی ہوں۔"
+    male: "کیا آپ ابھی موجود ہیں؟ میں سن رہا ہوں۔"
+
+# A live session: still nothing after asking, so it is ended.
+idle_goodbye:
+  en: "I'll end our call now. Thank you, and goodbye."
+  ur:
+    female: "میں اب ہماری کال ختم کر رہی ہوں۔ شکریہ، اللہ حافظ۔"
+    male: "میں اب ہماری کال ختم کر رہا ہوں۔ شکریہ، اللہ حافظ۔"

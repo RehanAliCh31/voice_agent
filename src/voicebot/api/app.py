@@ -26,6 +26,7 @@ from voicebot.api.deps import build_services, check_startup
 from voicebot.api.routes import router
 from voicebot.config import AppConfig, build_config, load_config
 from voicebot.errors import ErrorCode, InternalError, VoicebotError, current_call_id
+from voicebot.live.routes import router as live_router
 from voicebot.messages import say
 from voicebot.utils.env import load_env_file
 from voicebot.utils.logging import get_logger
@@ -176,6 +177,7 @@ def create_app() -> FastAPI:
 
     _install_handlers(app)
     app.include_router(router)
+    app.include_router(live_router)
 
     # Mounted last and at the root, so every API path above still wins. The
     # frontend then shares an origin with the API, which means the page can

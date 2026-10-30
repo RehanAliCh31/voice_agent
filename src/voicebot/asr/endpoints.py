@@ -87,5 +87,12 @@ class EndpointsASREngine(ASREngine):
             language=language,
         )
 
+    def connect(self) -> None:
+        """Open both recognisers' connections now, for a live session about to need them."""
+        for client in (self.router.en, self.router.ur):
+            warm = getattr(client, "warm", None)
+            if callable(warm):
+                warm()
+
     def close(self) -> None:
         self.router.close()

@@ -15,6 +15,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from fastapi import HTTPException, Request
 
@@ -63,6 +64,16 @@ class Services:
     _in_flight: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ready: tuple[float, bool, str] = (0.0, False, "")
+    # Makes the live session's voice activity model, one per session (Silero
+    # keeps state between frames). Tests put a stand-in here.
+    live_vad_factory: Callable[[], Any] | None = None
+
+    def make_live_vad(self) -> Any:
+        if self.live_vad_factory is not None:
+            return self.live_vad_factory()
+        from voicebot.assistant.vad import SileroVad
+
+        return SileroVad(self.config.live.vad_model_path)
 
     def pipeline(self, session: Session) -> VoicePipeline:
         """A pipeline bound to one caller's conversation.
@@ -92,7 +103,10 @@ class Services:
     # --- a turn --------------------------------------------------------------
 
     def take_turn(
-        self, session_id: str, work: Callable[[Session, VoicePipeline], TurnResult]
+        self,
+        session_id: str,
+        work: Callable[[Session, VoicePipeline], TurnResult],
+        record: bool = True,
     ) -> TurnPayload:
         """Run one turn of `session_id`'s conversation, and always answer it.
 
@@ -145,8 +159,9 @@ class Services:
                     )
                 result = limits.settle(session, pipeline, result)
             session.speaking = result.rest
+            session.last_result = result
             self.sessions.put(session_id, session)
-            return self.publish(session_id, session, result)
+            return self.publish(session_id, session, result, record=record)
         finally:
             with self._lock:
                 self._in_flight -= 1

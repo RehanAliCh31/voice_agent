@@ -20,6 +20,7 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Any
 
 from voicebot.agent.executor import ToolExecutor
 from voicebot.agent.loop import Conversation
@@ -56,6 +57,9 @@ class Session:
     # The rest of the last reply, being spoken a piece at a time. A new turn
     # cancels it, so nothing of an old answer is heard over a new one.
     speaking: SpokenReply | None = None
+    # The last turn's result, for a caller that records it later -- the live
+    # session, once it knows how much of the reply was heard.
+    last_result: Any = None
 
     def minutes(self) -> float:
         return (time.monotonic() - self.started) / 60

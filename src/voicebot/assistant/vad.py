@@ -119,6 +119,16 @@ class Endpointer:
     def phase(self) -> str:
         return self._phase
 
+    @property
+    def speech_ms(self) -> int:
+        """How much of the utterance so far was voiced."""
+        return self._speech_ms if self._phase == "speech" else self._voiced_ms
+
+    @property
+    def silence_ms(self) -> int:
+        """How long the silence after the last voiced frame has lasted."""
+        return self._silence_ms
+
     def start(self, wait_s: float | None = None, min_speech_ms: int | None = None) -> None:
         """Begin listening for speech. `wait_s` None waits for ever."""
         self._phase = "waiting"

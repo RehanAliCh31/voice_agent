@@ -17,6 +17,7 @@ import re
 import time
 import wave
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 import numpy as np
@@ -130,6 +131,17 @@ class AsrClient:
             circuit=breaker(f"asr-{self.name}"),
             error_type=AsrError,
         )
+
+    def warm(self) -> None:
+        """Open the connection now, with a health check, so the first real request need not.
+
+        A failure is left for the real request to report.
+        """
+        parts = urlsplit(self.endpoint.url)
+        try:
+            self._client.get(f"{parts.scheme}://{parts.netloc}/health", timeout=3.0)
+        except httpx.HTTPError:
+            pass
 
     def close(self) -> None:
         self._client.close()

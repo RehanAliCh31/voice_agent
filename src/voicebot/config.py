@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 class _Strict(BaseModel):
@@ -129,6 +129,74 @@ class SessionConfig(_Strict):
     busy_wait_s: float = Field(default=2.0, ge=0)
 
 
+class LiveConfig(_Strict):
+    """The hands-free session: how speech is found, ended and interrupted.
+
+    Probabilities are Silero VAD's, per 32 ms frame. Durations are of audio,
+    so they hold whatever the network does. See HANDS_FREE.md for tuning.
+    """
+
+    vad_model_path: str = "models/silero/silero_vad.onnx"
+    # Speech starts above `threshold` and carries on until it falls below
+    # `neg_threshold`, so a soft syllable mid-word does not end it.
+    threshold: float = Field(default=0.5, gt=0, lt=1)
+    neg_threshold: float = Field(default=0.35, gt=0, lt=1)
+    # Shorter than this is a cough, a click or a chair: not speech.
+    min_speech_ms: int = Field(default=200, ge=32)
+    # Kept from before speech was confirmed, so its first syllable is heard.
+    pre_roll_ms: int = Field(default=300, ge=0)
+    # The silence that ends a turn. Shorter answers sooner and cuts more
+    # people off mid-thought; speech that resumes before the reply is heard
+    # joins the same turn whatever this is (see HANDS_FREE.md).
+    end_silence_ms: int = Field(default=500, ge=200, le=2000)
+    max_utterance_s: float = Field(default=20.0, gt=1)
+    # While the bot is speaking, what may interrupt it is surer, so its own
+    # voice coming back through the microphone does not.
+    barge_in_threshold: float = Field(default=0.7, gt=0, lt=1)
+    barge_in_min_speech_ms: int = Field(default=192, ge=32)
+    # An interruption no longer than this whose words are only "mm-hmm",
+    # "ok", "جی" ... was not one: the reply carries on where it stopped.
+    backchannel_max_ms: int = Field(default=800, ge=0)
+    backchannels: list[str] = Field(
+        default_factory=lambda: [
+            "mm",
+            "mhm",
+            "mm hmm",
+            "uh huh",
+            "hmm",
+            "ok",
+            "okay",
+            "yeah",
+            "yes",
+            "right",
+            "sure",
+            "جی",
+            "جی ہاں",
+            "ہاں",
+            "اچھا",
+            "ٹھیک",
+            "ٹھیک ہے",
+            "ہوں",
+            "ہم",
+        ]
+    )
+    # Said nothing for this long: asked whether they are still there; as long
+    # again after that, and the session is ended politely.
+    idle_prompt_s: float = Field(default=20.0, gt=1)
+    idle_end_s: float = Field(default=20.0, gt=1)
+    # The longest a live session runs, whatever happens in it.
+    max_session_minutes: float = Field(default=30.0, gt=0)
+    # If the page never says the reply finished playing, it is taken to have
+    # finished this long after its audio would have.
+    playback_margin_s: float = Field(default=3.0, ge=0)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> LiveConfig:
+        if not self.neg_threshold <= self.threshold <= self.barge_in_threshold:
+            raise ValueError("live: need neg_threshold <= threshold <= barge_in_threshold")
+        return self
+
+
 class AuditConfig(_Strict):
     """The record of every turn, written after the turn rather than during it."""
 
@@ -148,6 +216,7 @@ class AppConfig(_Strict):
     resilience: ResilienceConfig = Field(default_factory=ResilienceConfig)
     session: SessionConfig = Field(default_factory=SessionConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
+    live: LiveConfig = Field(default_factory=LiveConfig)
 
 
 ENV_PREFIX = "VOICEBOT__"

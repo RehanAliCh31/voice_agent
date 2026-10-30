@@ -222,6 +222,13 @@ class EndpointsTTSEngine(TTSEngine):
         if loaded:
             log.info("%d kept recordings of the bot's own sentences loaded", loaded)
 
+    def connect(self) -> None:
+        """Open each voice's connection now, for a live session about to need it."""
+        for client in self.voices.values():
+            warm = getattr(client, "warm", None)
+            if callable(warm):
+                warm()
+
     def close(self) -> None:
         for client in self.voices.values():
             close = getattr(client, "close", None)
