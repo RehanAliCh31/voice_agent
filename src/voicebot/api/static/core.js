@@ -91,16 +91,26 @@ var api = {
     });
   },
 
-  /** Piece `n` (from 1) of a reply's audio: null when it will never come. */
+  /**
+   * Piece `n` (from 1) of a reply's audio: a Blob; null when the voice failed
+   * on it (204); "stopped" when the reply was stopped or replaced (404, 410).
+   */
   replyAudio: function (sessionId, audioId, n) {
-    return api.audio(
-      "/v1/sessions/" +
-        encodeURIComponent(sessionId) +
-        "/audio/" +
-        encodeURIComponent(audioId) +
-        "/" +
-        n
-    );
+    var url =
+      "/v1/sessions/" + encodeURIComponent(sessionId) + "/audio/" +
+      encodeURIComponent(audioId) + "/" + n;
+    return fetch(url, { method: "GET" }).then(function (response) {
+      if (response.status === 204) {
+        return null;
+      }
+      if (response.status === 404 || response.status === 410) {
+        return "stopped";
+      }
+      if (!response.ok) {
+        throw failure("server", null, response.status);
+      }
+      return response.blob();
+    });
   },
 
   // The PIN is left out of the first press. Whether one is needed at all is

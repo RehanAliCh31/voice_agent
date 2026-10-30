@@ -1333,3 +1333,25 @@ def test_a_caller_who_hangs_up_stops_the_rest_of_the_reply(client: TestClient) -
     assert speaking.wait(1, timeout=1) is None  # nothing more is made, or given out
     base = f"/v1/sessions/{turn['session_id']}/audio/{turn['audio_id']}"
     assert client.get(f"{base}/1").status_code == 404
+
+
+def test_a_stopped_reply_is_gone_and_a_failed_piece_is_empty(client: TestClient) -> None:
+    services: Services = client.app.state.services  # type: ignore[attr-defined]
+
+    class FailsOnTwo(_PiecesVoice):
+        def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
+            if text == "Two.":
+                return AudioBuffer(samples=np.zeros(0, dtype=np.float32), sample_rate=16_000)
+            return super().synthesize(text, voice)
+
+    _speaking(client, FailsOnTwo(), "One. Two. Three.")
+    turn = client.post("/v1/chat", json={"text": "hello"}).json()
+    base = f"/v1/sessions/{turn['session_id']}/audio/{turn['audio_id']}"
+    assert client.get(f"{base}/1").status_code == 204  # the voice failed: the page says so
+
+    _speaking(client, _PiecesVoice(), "One. Two. Three.")
+    turn = client.post("/v1/chat", json={"text": "hello"}).json()
+    speaking = services.sessions.find(turn["session_id"]).speaking  # type: ignore[union-attr]
+    speaking.cancel()  # type: ignore[union-attr]
+    base = f"/v1/sessions/{turn['session_id']}/audio/{turn['audio_id']}"
+    assert client.get(f"{base}/1").status_code == 410  # stopped: the page says nothing

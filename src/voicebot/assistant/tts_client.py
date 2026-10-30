@@ -24,7 +24,7 @@ from voicebot.assistant.config import LANGUAGES, AssistantConfig, Language, TtsE
 from voicebot.assistant.http_errors import from_status, from_transport
 from voicebot.errors import ProviderUnavailable
 from voicebot.utils.logging import get_logger
-from voicebot.utils.resilience import RetryPolicy, breaker, call_with_retry
+from voicebot.utils.resilience import RetryPolicy, breaker, call_with_retry, checkpoint
 
 log = get_logger("assistant.tts")
 
@@ -165,11 +165,25 @@ class TtsClient:
         return call_with_retry(
             attempt,
             component=f"tts-{self.name}",
-            timeout_s=self.timeout_s,
+            timeout_s=self.limit_for(text),
             policy=self.policy,
             circuit=breaker(f"tts-{self.name}"),
             error_type=TtsError,
         )
+
+    # A piece takes ~2 s a request and ~0.1-0.2 s a word, measured. Several
+    # times that, and the voice is not slow but stuck -- measured, qwen3-tts
+    # once gave no answer to a short piece for 12 s, twice, and the caller
+    # waited 24 s for the backup. The base leaves room for a request queued
+    # behind another caller's (each voice makes one clip at a time). No limit
+    # is above the configured one.
+    LIMIT_BASE_S = 6.0
+    LIMIT_PER_WORD_S = 0.4
+
+    def limit_for(self, text: str) -> float:
+        """How long one request for `text` may take before it is given up as stuck."""
+        words = len(text.split())
+        return min(self.timeout_s, self.LIMIT_BASE_S + self.LIMIT_PER_WORD_S * words)
 
     def _reference(self) -> str:
         """The reference recording as a data URL, read from disk once."""
@@ -200,6 +214,9 @@ class BackedUpVoice:
         try:
             return self.main.synthesize(text)
         except TtsError as exc:
+            # Nobody left to hear it -- the reply was replaced, or the caller
+            # hung up -- and the backup's time is the next caller's.
+            checkpoint("the backup voice")
             log.warning(
                 "the %s voice failed (%s); trying its backup, %s",
                 self.name,
@@ -222,10 +239,12 @@ def build_voices(config: AssistantConfig) -> dict[Language, TtsClient | BackedUp
     tts = config.tts
     voices: dict[Language, TtsClient | BackedUpVoice] = {}
     for language in LANGUAGES:
-        main = TtsClient(
-            tts.voice(language), language, tts.timeout_s, tts.retries, tts.trim_silence
-        )
         endpoint = tts.backup(language)
+        # With a backup, a failed request goes straight to it: a voice that
+        # did not answer is likelier stuck than unlucky, and asking it again
+        # first doubled the wait.
+        retries = 0 if endpoint is not None else tts.retries
+        main = TtsClient(tts.voice(language), language, tts.timeout_s, retries, tts.trim_silence)
         voices[language] = (
             main
             if endpoint is None

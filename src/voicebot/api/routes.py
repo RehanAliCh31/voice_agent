@@ -255,9 +255,10 @@ def reply_audio(
 ) -> Response:
     """Piece `number` of a reply's audio, as WAV, as soon as it has been made.
 
-    Waits for it, up to the voice's own limit. 204 when it will never come:
-    the voice failed on it, or a newer turn replaced the reply. 404 for a
-    reply that is not the session's latest.
+    Waits for it, up to the voice's own limit. 204 when the voice failed on
+    it -- the page then says so, in the bot's recorded voice; 410 when the
+    reply was stopped, by a newer turn or a hang-up -- the page says nothing.
+    404 for a reply that is not the session's latest.
     """
     session = services.sessions.find(session_id)
     speaking = session.speaking if session is not None else None
@@ -268,7 +269,7 @@ def reply_audio(
     except IndexError as exc:
         raise HTTPException(status_code=404, detail="no such piece of that reply") from exc
     if audio is None:
-        return Response(status_code=204)
+        return Response(status_code=410 if speaking.cancelled else 204)
     return Response(encode_wav(audio), media_type="audio/wav")
 
 

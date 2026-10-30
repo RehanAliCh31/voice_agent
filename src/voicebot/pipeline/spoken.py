@@ -25,6 +25,7 @@ from voicebot.errors import InternalError
 from voicebot.schemas import AudioBuffer
 from voicebot.utils.logging import get_logger
 from voicebot.utils.observability import report
+from voicebot.utils.resilience import CancelToken, cancel_context
 
 log = get_logger("pipeline.spoken")
 
@@ -63,6 +64,9 @@ class SpokenReply:
         self._audio: list[AudioBuffer | None] = [None] * len(self._pieces)
         self._done = [threading.Event() for _ in self._pieces]
         self._cancelled = threading.Event()
+        # Cancelled with the reply, so a voice that checks it (the backup)
+        # does not start work nobody will hear.
+        self._token = CancelToken()
         self._lock = threading.Lock()
         self._next = 0
         self._running = False
@@ -99,9 +103,14 @@ class SpokenReply:
             # A cancelled reply gives nothing out, made or not: it is not to be heard.
             return None if self._cancelled.is_set() else self._audio[number - 1]
 
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
     def cancel(self) -> None:
         """Make and give out nothing more: the turn has been replaced, or the caller has gone."""
         self._cancelled.set()
+        self._token.cancel("the reply was replaced, or the caller left")
         with self._lock:
             for event in self._done:
                 event.set()
@@ -114,9 +123,13 @@ class SpokenReply:
                 return
             self._running = True
         try:
-            _pool().submit(contextvars.copy_context().run, self._run)
+            _pool().submit(contextvars.copy_context().run, self._run_cancellable)
         except RuntimeError:  # the pool is shut down: the service is stopping
             self.cancel()
+
+    def _run_cancellable(self) -> None:
+        with cancel_context(self._token):
+            self._run()
 
     def _run(self) -> None:
         while True:

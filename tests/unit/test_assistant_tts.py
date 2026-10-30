@@ -233,3 +233,46 @@ def test_a_different_reference_is_a_different_voice(tmp_path) -> None:  # type: 
         TtsEndpoint(**same, reference=str(one)).identity()
         != TtsEndpoint(**same, reference=str(two)).identity()
     )
+
+
+def test_a_short_piece_is_given_up_on_sooner_than_a_long_one() -> None:
+    voice = TtsClient(TtsEndpoint(url="http://t/x", model="m"), "en", 12, 1)
+    assert voice.limit_for("Your balance is") == pytest.approx(7.2)
+    assert voice.limit_for(" ".join(["word"] * 40)) == 12  # never above the configured limit
+
+
+def test_with_a_backup_a_failed_request_goes_straight_to_it() -> None:
+    config = load_assistant_config()
+    voices = build_voices(config)
+    for voice in voices.values():
+        assert isinstance(voice, BackedUpVoice)
+        assert voice.main.retries == 0 and voice.backup.retries == config.tts.retries
+        voice.close()
+
+
+def test_a_backup_is_not_started_for_speech_nobody_will_hear() -> None:
+    from voicebot.errors import Cancelled
+    from voicebot.utils.resilience import CancelToken, cancel_context
+
+    def down(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "overloaded"})
+
+    asked: list[str] = []
+
+    def backup(request: httpx.Request) -> httpx.Response:
+        asked.append("backup")
+        return httpx.Response(200, content=_wav(np.full(2400, 4000, np.int16)))
+
+    voice = BackedUpVoice(
+        TtsClient(
+            TtsEndpoint(url="http://a/x", model="m"), "cancel-main", 5, 0, client=_client(down)
+        ),
+        TtsClient(
+            TtsEndpoint(url="http://b/x", model="m"), "cancel-backup", 5, 0, client=_client(backup)
+        ),
+    )
+    token = CancelToken()
+    token.cancel("the caller left")
+    with cancel_context(token), pytest.raises(Cancelled):
+        voice.synthesize("Hello")
+    assert asked == []

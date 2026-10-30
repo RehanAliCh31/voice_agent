@@ -187,8 +187,9 @@ function fail(error) {
  * Play a reply that arrives a piece at a time: the first piece came with the
  * turn, and each next one is asked for while the one before it plays. Every
  * piece is added to `blobs`, so the replay button plays the whole reply. A
- * piece that never comes means the voice failed partway: the bot says so in
- * its own recorded voice, and the rest is on the screen.
+ * piece the voice could not make means it failed partway: the bot says so in
+ * its own recorded voice, and the rest is on the screen. A reply the service
+ * stopped (a newer turn, a hang-up) just stops.
  */
 function playReply(first, turn, blobs) {
   var total = turn.audio_more || 0;
@@ -213,7 +214,7 @@ function playReply(first, turn, blobs) {
         return undefined;
       }
       return piece(n + 1).then(function (next) {
-        if (generation !== state.playGeneration) {
+        if (generation !== state.playGeneration || next === "stopped") {
           return undefined;
         }
         if (!next) {
