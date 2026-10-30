@@ -368,3 +368,13 @@ def test_a_sentence_added_after_the_reply_goes_on_its_end(bank: Bank) -> None:
     assert result.rest is not None and result.rest.count == 2
     assert result.rest.wait(2, timeout=5) is not None
     assert result.agent.text == "One. Two. Bye."
+
+
+def test_nothing_added_after_the_voice_failed_is_spoken(bank: Bank) -> None:
+    tts = _Pieces(fail_on="Two")
+    pipeline = _with_voice(bank, tts, "One. Two. Three.")
+    result = pipeline.respond_to_text("hi", Conversation("s1"))
+    assert result.rest is not None and result.rest.wait(1, timeout=5) is None
+    result.rest.add("Bye.")
+    assert result.rest.wait(3, timeout=5) is None
+    assert "Bye." not in [text for text, _ in tts.said]

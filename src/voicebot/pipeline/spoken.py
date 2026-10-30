@@ -66,6 +66,7 @@ class SpokenReply:
         self._lock = threading.Lock()
         self._next = 0
         self._running = False
+        self._failed = False  # the voice failed: nothing after that point is made
         self._start()
 
     @property
@@ -80,7 +81,7 @@ class SpokenReply:
             self._pieces.append(piece)
             self._audio.append(None)
             self._done.append(threading.Event())
-            if self._cancelled.is_set():
+            if self._cancelled.is_set() or self._failed:
                 self._done[-1].set()
                 return
         self._start()
@@ -149,5 +150,6 @@ class SpokenReply:
                 for event in self._done[index:]:
                     event.set()
                 self._next = len(self._pieces)
+                self._failed = True
                 self._running = False
                 return
