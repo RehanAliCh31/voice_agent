@@ -394,6 +394,7 @@ def build_services(config: AppConfig | None = None) -> Services:
                 backoff_s=config.resilience.retry_base_s,
                 backoff_cap_s=config.resilience.retry_cap_s,
                 name=name,
+                disable_thinking=config.llm.disable_thinking,
             )
 
         llm = client(config.llm.base_url, config.llm.model, "llm")

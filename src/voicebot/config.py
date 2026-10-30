@@ -63,6 +63,10 @@ class LLMConfig(_Strict):
     max_retries: int = Field(default=1, ge=0, le=3)
     temperature: float = 0.4
     max_tokens: int = Field(default=200, gt=0)
+    # Asks the server not to think before answering (chat_template_kwargs).
+    # Thinking is never shown or spoken, but it is waited for and it counts
+    # against max_tokens: a reply that thought first was cut off part way.
+    disable_thinking: bool = True
     # A model that keeps calling tools is stuck; an unbounded loop against a
     # shared endpoint is an outage rather than a bug.
     max_tool_rounds: int = Field(default=4, ge=1)

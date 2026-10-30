@@ -261,3 +261,25 @@ def test_a_request_the_main_model_refused_is_not_sent_to_the_backup() -> None:
     with pytest.raises(LLMUnavailable):
         FallbackLLMClient(Refuses([]), backup).complete([], [])
     assert backup.calls == []
+
+
+def test_an_amount_the_limit_cut_in_half_is_not_taken_for_a_full_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Measured: an Urdu list of bills cut off at "$1,200." of "$1,200.00".
+    body = _ok("Rent is $1,200.00. Your checking holds $2,483.", finish="length")
+    assert _client(monkeypatch, Server(body)).complete([], []).text == "Rent is $1,200.00."
+
+
+def test_the_model_is_asked_not_to_think_before_answering(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[dict] = []
+
+    def server(url: str, payload: dict, headers: dict, timeout: float) -> dict:
+        sent.append(payload)
+        return _ok()
+
+    monkeypatch.setattr(openai_client, "_post", server)
+    OpenAIClient(base_url="http://x/v1", model="m").complete([], [])
+    OpenAIClient(base_url="http://x/v1", model="m", disable_thinking=False).complete([], [])
+    assert sent[0]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "chat_template_kwargs" not in sent[1]

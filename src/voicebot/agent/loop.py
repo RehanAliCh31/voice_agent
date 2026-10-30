@@ -83,7 +83,34 @@ _ANNOUNCEMENT_UR = re.compile(
     _ACTION_UR
     + r"(?:(?:تا|تی)\s+ہوں|\s+(?:رہا|رہی|لیتا|لیتی)\s+ہوں|(?:وں|\s+لوں)\s+(?:گا|گی))"
     + r"|انتظار\s+(?:کریں|کیجیے|کیجئے|فرمائیں)|ایک\s+لمحہ|ذرا\s+رک"
+    # "دیکھنے کی کوشش کر رہی ہوں" -- I am trying to see -- measured, with
+    # nothing called.
+    + r"|کوشش\s+کر\s+(?:رہا|رہی)\s+ہوں"
 )
+
+# A case or reference number, stated. Only a tool opens a case, so a reply
+# that names one when no case was opened this turn has made it up: measured,
+# "آپ کا حوالہ نمبر 7254 ہے" with nothing called.
+_REFERENCE = re.compile(
+    r"(?i)\breference(?:\s+number)?(?:\s+is)?\s*[:#]?\s*[A-Z]{0,3}-?\d{3,}"
+    r"|(?:ریفرنس|حوالہ)(?:\s+نمبر)?[^\d۔؟]{0,15}?[A-Z]{0,3}-?\d{3,}"
+)
+
+
+_DIGITS = re.compile(r"\d{3,}")
+
+
+def invents_a_reference(text: str | None, messages: Sequence[dict[str, Any]]) -> bool:
+    """True when a reply names a case or reference number no tool has given.
+
+    A reference read back from an earlier turn -- "what was my reference?" --
+    is in that turn's tool result, and is not an invention.
+    """
+    stated = [_DIGITS.findall(m.group(0)) for m in _REFERENCE.finditer(text or "")]
+    if not stated:
+        return False
+    given = " ".join(str(m.get("content") or "") for m in messages if m.get("role") == "tool")
+    return any(number not in given for numbers in stated for number in numbers)
 
 
 def announces_action(text: str | None) -> bool:
@@ -575,6 +602,13 @@ class Agent:
             # No words and no rounds left: say something rather than nothing.
             return self._fallback("nothing_said", conversation, calls, outcomes, rounds)
 
+        if invents_a_reference(spoken, conversation.messages):
+            # Compelled to call a tool, it still named a case nobody opened.
+            # A made-up reference is the one thing worse than none.
+            log.warning("suppressing a reference no tool gave")
+            return self._fallback(
+                "not_looked_up", conversation, calls, outcomes, rounds, suppressed=spoken
+            )
         if not calls and self._unfinished(spoken):
             # Compelled to call a tool, it still did not. Whatever it wrote is
             # a promise nothing will keep, so it is not worth saying. Asking
@@ -829,7 +863,7 @@ class Agent:
         Deliberately not used to decide what is finally spoken -- that stays
         the guard's, so an invention is still counted as one.
         """
-        if self._unfinished(text):
+        if self._unfinished(text) or invents_a_reference(text, conversation.messages):
             return True
         allowed = allowed_values(self._allowed(conversation, ()))
         return any(value not in allowed for value in money_in_text(text or ""))

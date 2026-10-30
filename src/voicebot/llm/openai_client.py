@@ -40,7 +40,11 @@ _THINKING = re.compile(r"^.*</think>\s*", re.DOTALL)
 _OVERFLOW = re.compile(r"context length|context window|too many tokens|maximum.*tokens", re.I)
 
 # The end of the last whole sentence in a reply the token limit cut short.
-_SENTENCE_END = re.compile(r"[.!?؟۔](?=\s|$)")
+# A full stop straight after a digit, at the very end, is not one: it is the
+# decimal point of an amount the limit cut in half -- measured, an Urdu list
+# of bills ended "...$1,200." where it said "$1,200.00", and "$2,483.50"
+# would have been read as "$2,483".
+_SENTENCE_END = re.compile(r"(?:\.(?=\s)|(?<!\d)\.$|[!?؟۔](?=\s|$))")
 
 _READ_CHUNK = 65_536
 
@@ -116,8 +120,10 @@ class OpenAIClient(LLMClient):
         backoff_s: float = 0.2,
         backoff_cap_s: float = 1.0,
         name: str = "llm",
+        disable_thinking: bool = True,
     ) -> None:
         self.base_url = base_url.rstrip("/")
+        self.disable_thinking = disable_thinking
         self.model = model
         self.api_key = api_key
         self.timeout_s = timeout_s
@@ -139,6 +145,8 @@ class OpenAIClient(LLMClient):
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
+        if self.disable_thinking:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         # An empty tools list makes some servers refuse the request outright,
         # so the key is omitted rather than sent empty.
         if tools:

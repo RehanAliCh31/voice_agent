@@ -1338,3 +1338,43 @@ def test_waiting_on_the_pin_is_said_in_urdu(executor: ToolExecutor) -> None:
     out = agent.resolve_pending(True, conversation)
 
     assert out.text == in_language(PIN_NEEDED, "ur") != PIN_NEEDED
+
+
+# --- promises and references nothing stands behind ---------------------------------
+
+
+def test_trying_to_look_in_urdu_is_a_promise_and_the_lookup_is_made(
+    executor: ToolExecutor,
+) -> None:
+    # Measured, with nothing called: "I am trying to see your credit card bill".
+    client = FakeLLMClient(
+        [
+            Reply(text="میں آپ کے کریڈٹ کارڈ کے بل کی مقدار دیکھنے کی کوشش کر رہی ہوں۔"),
+            Reply(tool_calls=(ToolCall("c1", "list_bills", {}),)),
+            Reply(text="آپ کے کریڈٹ کارڈ کا بل $215.00 ہے۔"),
+        ]
+    )
+    out = Agent(client, executor).handle("میرے کریڈٹ کارڈ کا بل کتنا ہے؟", in_urdu())
+    assert client.choices[1] == "required"
+    assert out.text == "آپ کے کریڈٹ کارڈ کا بل $215.00 ہے۔"
+
+
+def test_a_reference_no_case_was_opened_for_is_never_said(executor: ToolExecutor) -> None:
+    # Measured: "I'm connecting you to a manager; your reference is 7254" -- nothing called.
+    invented = "شکایت کے لیے میں آپ کو ایک مینیجر سے جوڑتی ہوں۔ آپ کا حوالہ نمبر 7254 ہے۔"
+    client = FakeLLMClient([Reply(text=invented), Reply(text=invented)])
+    out = Agent(client, executor).handle("شکایت کے لیے کس سے بات کروں؟", in_urdu())
+    assert client.choices[1] == "required"  # it was made to open the case
+    assert "7254" not in out.text and out.fallback == "not_looked_up"
+
+
+def test_a_reference_read_back_from_an_earlier_turn_is_not_an_invention(
+    executor: ToolExecutor,
+) -> None:
+    conversation = asked_for("I need a person")
+    conversation.append_assistant(Reply(tool_calls=(ToolCall("h1", "hand_off", {}),)))
+    conversation.append_tool_result("h1", {"status": "handed_off", "reference": "H-7392"})
+    conversation.append_assistant(Reply(text="Your reference is H-7392."))
+    client = FakeLLMClient([Reply(text="Your reference is H-7392.")])
+    out = Agent(client, executor).handle("what was my reference?", conversation)
+    assert out.text == "Your reference is H-7392." and len(client.calls) == 1
