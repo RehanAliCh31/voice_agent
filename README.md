@@ -288,6 +288,21 @@ for development, not for a paying client. For a phrase of your own:
 
 ---
 
+## When something fails
+
+A caller always gets a true sentence, whatever fails: the model, the speech
+services, the voices, the database, a tool or the network. Every external
+call has a timeout, retries only when that can help, stays inside a 20 s
+budget per turn and skips a provider that keeps failing; nothing that moves
+money is ever retried; and any one call can be followed through the logs by
+its call id. How each failure is handled, every fallback sentence (in one
+file, [`src/voicebot/messages.yaml`](src/voicebot/messages.yaml), English and
+Urdu), the settings, and how to find out why a call failed are in
+[ERROR_HANDLING.md](ERROR_HANDLING.md); what was found and fixed is in
+[HARDENING_REPORT.md](HARDENING_REPORT.md).
+
+---
+
 ## The API
 
 | Endpoint | Purpose |
@@ -301,8 +316,9 @@ for development, not for a paying client. For a phrase of your own:
 | `POST /v1/speak` | TTS alone. |
 | `DELETE /v1/session/{id}` | Forget a conversation. |
 | `GET /health` | Liveness. Answers before the models load. |
-| `GET /ready` | Readiness, naming the engines actually loaded. |
-| `GET /metrics` | Prometheus text: turns, tool calls by name, guard hits. |
+| `GET /ready` | Readiness: 503 while the database is unreachable or the service is stopping; `checks` names each dependency and circuit. |
+| `GET /metrics` | Prometheus text: turns, tool calls, guard hits, errors by component and code, open circuits, the audit queue. |
+| `GET /v1/messages` | The bot's fallback sentences, in English and Urdu. |
 
 A turn returns the reply, every tool call with its arguments and result,
 whether the guard fired, and per-stage timings — which is exactly what the
