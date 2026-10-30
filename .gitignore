@@ -35,6 +35,8 @@ data/synthetic/
 checkpoints/
 results/**/*.json
 *.wav
+# The listening samples are the one place recordings are committed.
+!voice_samples/**/*.wav
 
 # Generated at runtime
 *.db
