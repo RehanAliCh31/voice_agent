@@ -17,7 +17,8 @@ from tests.live_support import (
 )
 from voicebot.asr.base import ASRUnavailable
 from voicebot.errors import ErrorCode
-from voicebot.live.session import INTERRUPTED, State
+from voicebot.agent.loop import CUT_SHORT_NOTE, HEARD_ONLY, with_language_note
+from voicebot.live.session import State
 from voicebot.llm.base import Reply, ToolCall
 from voicebot.messages import say
 
@@ -28,6 +29,12 @@ SENTENCE = (tone(900), quiet(700))
 def _assistant_lines(services, session_id: str = "live-test") -> list[str]:  # type: ignore[no-untyped-def]
     conversation = services.sessions.get(session_id).conversation
     return [m["content"] for m in conversation.messages if m["role"] == "assistant"]
+
+
+def _cut_short(services, session_id: str = "live-test") -> list[bool]:  # type: ignore[no-untyped-def]
+    """For each of the bot's replies, whether the caller cut it short."""
+    conversation = services.sessions.get(session_id).conversation
+    return [bool(m.get(HEARD_ONLY)) for m in conversation.messages if m["role"] == "assistant"]
 
 
 # --- a conversation ---------------------------------------------------------------
@@ -189,10 +196,16 @@ def test_speaking_over_the_bot_stops_it_and_it_answers_the_new_question() -> Non
         assert page.wait(lambda p: bool(p.of("stop_audio")))
         assert page.wait(lambda p: bool(p.of("discard_audio")))
         assert page.wait(lambda p: len(p.of("reply")) == 2)
-        lines = _assistant_lines(services)
-        # What was heard of the first answer, marked as cut off -- not all of it.
-        assert lines[0].endswith(INTERRUPTED) and "Or both" not in lines[0]
-        assert lines[0].startswith("Which account would you like.")
+        # What was heard of the first answer, marked as cut short -- not all of it.
+        assert _assistant_lines(services)[0] == "Which account would you like. Checking"
+        assert _cut_short(services)[0]
+        # The model is told so next to the question that interrupted it, and
+        # is sent no mark of ours it could copy into a reply.
+        conversation = services.sessions.get("live-test").conversation
+        sent = with_language_note(conversation)
+        asked = [m for m in sent if m["role"] == "user"][-1]["content"]
+        assert asked.startswith("actually my savings") and CUT_SHORT_NOTE in asked
+        assert not any(HEARD_ONLY in m for m in sent)
         assert session.interruptions == 1
         assert page.wait(lambda p: len(p.of("metrics")) == 2)
         # Stopped once barge_in_min_speech_ms of speech had been heard.
@@ -241,7 +254,7 @@ def test_a_mm_hmm_does_not_interrupt() -> None:
         assert settle(page, "agent_speaking")
         assert not page.of("discard_audio") and len(page.of("reply")) == 1
         assert session.interruptions == 0
-        assert not _assistant_lines(services)[0].endswith(INTERRUPTED)
+        assert not _cut_short(services)[0]
     finally:
         session.close()
 
@@ -300,7 +313,7 @@ def test_interrupting_the_first_word_keeps_none_of_the_reply() -> None:
         speak(session, tone(1000), quiet(700))
         assert page.wait(lambda p: len(p.of("reply")) == 2)
         # Nothing of the first answer was heard, so none of it is on record.
-        assert _assistant_lines(services)[0] == INTERRUPTED.strip()
+        assert _assistant_lines(services)[0] == "..." and _cut_short(services)[0]
         assert session.interruptions == 1
     finally:
         session.close()
@@ -318,7 +331,7 @@ def test_interrupting_at_the_very_end_still_counts() -> None:
         assert page.wait(lambda p: "audio_end" in p.kinds())
         speak(session, tone(1000), quiet(700))
         assert page.wait(lambda p: len(p.of("reply")) == 2)
-        assert _assistant_lines(services)[0] == "Hello there." + INTERRUPTED
+        assert _assistant_lines(services)[0] == "Hello there." and _cut_short(services)[0]
     finally:
         session.close()
 

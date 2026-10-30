@@ -52,6 +52,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
+from voicebot.agent.loop import HEARD_ONLY
 from voicebot.asr.base import ASRUnavailable
 from voicebot.assistant.config import VadConfig
 from voicebot.assistant.vad import (
@@ -75,8 +76,9 @@ from voicebot.utils.resilience import CancelToken, cancel_context
 log = get_logger("live.session")
 
 RATE = 16_000
-# The history's note on an answer the caller cut short. For the model, never
-# spoken: the reply after it knows what was and was not heard.
+# The turn record's note on an answer the caller cut short, for whoever reads
+# the record. The model is not shown it -- it copied it into its own replies --
+# but is told in its note on the next message (agent.loop.with_language_note).
 INTERRUPTED = " [the customer interrupted here and did not hear the rest]"
 # How long a turn that began by interrupting waits for the page to say where
 # playback stopped, before working it out from the clock instead.
@@ -687,7 +689,8 @@ class LiveSession:
             session = self.services.sessions.get(self.session_id)
             for message in reversed(session.conversation.messages):
                 if message.get("role") == "assistant" and not message.get("tool_calls"):
-                    message["content"] = f"{spoken}{INTERRUPTED}" if spoken else INTERRUPTED.strip()
+                    message["content"] = spoken or "..."
+                    message[HEARD_ONLY] = True  # never sent: with_language_note says it instead
                     break
         log.info("the reply was interrupted after %d word(s)", len(spoken.split()))
         self._record(playing, interrupted=True, spoken=spoken)

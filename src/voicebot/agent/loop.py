@@ -327,14 +327,41 @@ def with_language_note(conversation: Conversation, retry: bool = False) -> list[
     stricter note used to ask again for a reply that came back in the wrong
     language.
     """
-    messages = list(conversation.messages)
+    messages = [_sendable(m) for m in conversation.messages]
     for index in range(len(messages) - 1, -1, -1):
         if messages[index].get("role") == "user":
             note = language_note(conversation.language, retry=retry)
+            if _cut_short_before(conversation.messages, index):
+                note = f"{CUT_SHORT_NOTE} {note}"
             said = messages[index].get("content") or ""
             messages[index] = {**messages[index], "content": f"{said}\n\n({note})"}
             break
     return messages
+
+
+# The live session's mark on a reply the caller cut short: the history keeps
+# only the words that were heard. The mark itself is never sent -- a note in
+# the reply's own text was copied by the model into its next replies -- and
+# the note on the next message says it instead.
+HEARD_ONLY = "_heard_only"
+CUT_SHORT_NOTE = (
+    "The customer cut your previous reply short: they heard only what is shown of it, not the rest."
+)
+
+
+def _sendable(message: dict[str, Any]) -> dict[str, Any]:
+    """A history message as the model's server takes it: no marks of our own."""
+    return {k: v for k, v in message.items() if not k.startswith("_")}
+
+
+def _cut_short_before(messages: Sequence[dict[str, Any]], index: int) -> bool:
+    """Whether the bot's last reply before message `index` was cut short."""
+    for message in reversed(messages[:index]):
+        if message.get("role") == "user":
+            return False
+        if message.get("role") == "assistant" and not message.get("tool_calls"):
+            return bool(message.get(HEARD_ONLY))
+    return False
 
 
 @dataclass(frozen=True)
