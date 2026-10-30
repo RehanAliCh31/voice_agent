@@ -444,3 +444,20 @@ def test_the_page_gets_the_same_fallback_sentences_as_the_bot(client: TestClient
     table = client.get("/v1/messages").json()
     assert table["connection_lost"]["ur"] and table["timed_out"]["en"]
     assert table["internal"]["en"] == say("internal", "en")
+
+
+def test_turn_records_go_wherever_the_service_reads_the_bank_from(client: TestClient) -> None:
+    # Found under PostgreSQL: the writer kept the bank it was built with, so
+    # once services.bank was replaced the records went to the old one.
+    from voicebot.bank.sqlite_bank import SqliteBank
+
+    services = services_of(client)
+    replacement = SqliteBank()
+    services.bank = replacement
+    services.llm = FakeLLMClient([Reply(text="Hello there.")])
+
+    client.post("/v1/chat", json={"text": "hello", "session_id": "swapped"})
+
+    assert services.audit is not None and services.audit.flush()
+    rows = replacement._db.execute("SELECT session_id FROM turns").fetchall()
+    assert [row["session_id"] for row in rows] == ["swapped"]

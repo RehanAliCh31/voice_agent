@@ -408,13 +408,15 @@ def build_services(config: AppConfig | None = None) -> Services:
             max_sessions=config.session.max_sessions,
         ),
         device=device,
-        audit=AuditWriter(
-            bank,
-            config.audit.dead_letter,
-            retries=config.audit.retries,
-            queue_size=config.audit.queue_size,
-        ),
         limits=ConversationLimits(config.session),
+    )
+    # Told how to find the bank rather than given one: records go wherever
+    # services.bank points, the one place every route reads it from.
+    services.audit = AuditWriter(
+        lambda: services.bank,
+        config.audit.dead_letter,
+        retries=config.audit.retries,
+        queue_size=config.audit.queue_size,
     )
     log.info("services ready: %s on %s", services.describe(), device)
     return services

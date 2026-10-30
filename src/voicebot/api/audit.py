@@ -50,14 +50,19 @@ class AuditWriter:
 
     def __init__(
         self,
-        bank: Bank,
+        bank: Bank | Callable[[], Bank],
         dead_letter: str | Path,
         retries: int = 3,
         queue_size: int = 1000,
         backoff_s: float = 0.5,
         sleep: Callable[[float], None] | None = None,
     ) -> None:
-        self.bank = bank
+        # A bank, or how to find the current one. The service passes the
+        # latter, so the records always go where every route's reads do --
+        # including after the bank is replaced, as the tests replace it.
+        self._bank_of: Callable[[], Bank] = (
+            bank if callable(bank) and not hasattr(bank, "log_turn") else (lambda: bank)  # type: ignore[assignment,return-value]
+        )
         self.dead_letter = Path(dead_letter)
         self.retries = retries
         self.backoff_s = backoff_s
@@ -119,7 +124,7 @@ class AuditWriter:
     def _write(self, record: TurnRecord) -> None:
         for attempt in range(self.retries + 1):
             try:
-                self.bank.log_turn(**asdict(record))
+                self._bank_of().log_turn(**asdict(record))
             except Exception as exc:  # any failure: retried, then kept -- never lost
                 error = DatabaseError(
                     f"the turn record could not be written: {type(exc).__name__}",
