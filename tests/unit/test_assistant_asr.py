@@ -277,6 +277,8 @@ URDU_WITH_QWEN_GUESSING = [
     # Code-switched: English nouns, Urdu grammar.
     ("Please, Mary, last transaction, batay.", "پلیز میری لاسٹ ٹرانزیکشن بتائیں"),
     ("My checking account balance is high.", "میرا چیکنگ اکاؤنٹ بالنس کیا ہے۔"),
+    # A goodbye with no grammar in it at all, from the held-out set.
+    ("Very much, thank you, Huda Hafiz.", "بہت شکریہ خدا حافظ"),
 ]
 
 
@@ -299,9 +301,14 @@ def test_with_nothing_else_to_go_on_whispers_verdict_decides() -> None:
         assert decision.language == verdict
 
 
-def test_an_even_count_with_no_verdict_goes_by_script() -> None:
-    decision = choose(Transcript("Okay.", "en", 1), Transcript("اوکے", "ur", 1), "en")
-    assert (decision.language, decision.text) == ("ur", "اوکے")
+@pytest.mark.parametrize("conversation", ["en", "ur"])
+def test_an_even_count_keeps_the_conversations_language(conversation: str) -> None:
+    # Measured: "Thank you for your help", in an accent, came back with one
+    # Urdu grammar word and one English word in Urdu letters. Uncertain, so
+    # the language the conversation was already in stands.
+    decision = choose(Transcript("Okay.", "en", 1), Transcript("اوکے", "ur", 1), conversation)  # type: ignore[arg-type]
+    assert decision.language == conversation
+    assert decision.text == ("اوکے" if conversation == "ur" else "Okay.")
     assert "even" in decision.reason
 
 

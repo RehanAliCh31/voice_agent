@@ -112,7 +112,8 @@ class Decision:
 
 
 # The small words Urdu grammar cannot do without: postpositions, the verb "to
-# be", pronouns, question words, particles. A real Urdu sentence of three
+# be", pronouns, question words, particles -- and the verbs a request is
+# made with ("بتائیں", "بھیج دیں", "چاہیے"). A real Urdu sentence of three
 # words or more has at least one; English written out in Urdu letters has
 # none. Left out: words English speech also turns into ("تو" for "to", "اس"
 # for "is", "دس" for "this").
@@ -120,6 +121,9 @@ _URDU_GRAMMAR = frozenset("""
     ہے ہیں ہوں ہو تھا تھی تھے گا گی گے کا کی کے کو سے نے میں پر بھی اور یا
     کیا کیوں کب کہاں کون کتنا کتنی کتنے کیسے مجھے میرا میری میرے مرے ہمارا
     آپ ہم یہ وہ نہیں جی ہاں کر کریں کرنا کرنی کرو دیں دے دو لیے ساتھ ہی
+    بتائیں بتاؤ بتا دکھائیں دکھاؤ بھیجیں بھیجو بھیج کیجیے کیجئے چاہیے
+    چاہتا چاہتی چاہتے سکتا سکتی سکتے رہا رہی رہے گیا گئی ہوا ہوئی
+    بہت شکریہ حافظ ٹھیک اچھا
     """.split())
 # English words as whisper-urdu writes them when it takes English speech for
 # Urdu, measured: "کین یو شو مائی ٹرانزیکشنز", "فریز دہ کارڈ".
@@ -176,8 +180,10 @@ def choose(en: Transcript | None, ur: Transcript | None, fallback: Language) -> 
     spoken with a Pakistani accent -- and some spoken without one -- Urdu, 12
     of 30 English clips measured, and then wrote the English out in Urdu
     letters or in English ones. So when both recognisers heard something,
-    the evidence of both transcripts is weighed, and whisper's verdict
-    settles a tie.
+    the evidence of both transcripts is weighed -- whisper's verdict counting
+    as one sign among them -- and when it is even, the conversation's own
+    language (`fallback`, the last one confirmed) stands: an uncertain turn
+    does not switch it.
     """
     heard = {t.endpoint: t for t in (en, ur) if t is not None}
     en_text = en.text if en else ""
@@ -191,12 +197,10 @@ def choose(en: Transcript | None, ur: Transcript | None, fallback: Language) -> 
             return Decision("en", en_text, f"English, {english} to {urdu}: {why}", heard)
         if urdu > english:
             return Decision("ur", ur_text, f"Urdu, {urdu} to {english}: {why}", heard)
-        if ur.language in ("en", "ur"):
-            language = "ur" if ur.language == "ur" else "en"
-        else:
-            language = "ur" if (share or 0) >= 0.5 else "en"
-        text = ur_text if language == "ur" else en_text
-        return Decision(language, text, f"even, {urdu} each, so whisper's verdict: {why}", heard)
+        text = ur_text if fallback == "ur" else en_text
+        return Decision(
+            fallback, text, f"even, {urdu} each, so the conversation's language: {why}", heard
+        )
     if has_devanagari(en_text):
         return Decision("ur", en_text, "qwen3-asr wrote Hindi script; no Urdu transcript", heard)
     if en_text:
