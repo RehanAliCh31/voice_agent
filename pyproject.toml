@@ -38,6 +38,11 @@ serve = [
     "python-multipart>=0.0.9",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
+    # The live voice session: uvicorn serves WebSockets only with this (or
+    # wsproto) installed; it is what uvicorn's own [standard] extra brings.
+    "websockets>=13",
+    # Silero VAD on the server, for the live session's endpointing and barge-in.
+    "onnxruntime>=1.18",
 ]
 # The hands-free assistant: the microphone and speaker, and onnxruntime for
 # the wake word and voice activity models. Not the openwakeword package: on
