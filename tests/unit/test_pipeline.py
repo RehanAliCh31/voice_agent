@@ -284,3 +284,87 @@ def test_an_english_sentence_takes_an_urdu_conversation_back_to_english(bank: Ba
 
     assert conversation.language == "en"
     assert client.calls[0][0][-1]["content"] == sent("What is my checking balance?")
+
+
+# --- a reply spoken a piece at a time -----------------------------------------------
+
+
+class _Pieces(FakeTTSEngine):
+    """Cuts a reply at each full stop; can lose its voice on a chosen piece."""
+
+    def __init__(self, fail_on: str | None = None, kept: AudioBuffer | None = None) -> None:
+        super().__init__()
+        self.fail_on = fail_on
+        self.said: list[tuple[str, str | None]] = []
+        self._kept = kept
+
+    def pieces(self, text: str, voice: str | None = None) -> list[str]:
+        return [p.strip() + "." for p in text.split(".") if p.strip()]
+
+    def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
+        self.said.append((text, voice))
+        if self.fail_on is not None and self.fail_on in text:
+            return AudioBuffer(samples=np.zeros(0, dtype=np.float32), sample_rate=16_000)
+        return super().synthesize(text, voice)
+
+    def kept(self, key: str, language: str) -> AudioBuffer | None:
+        return self._kept if key == "voice_unavailable" else None
+
+
+def _with_voice(bank: Bank, tts: _Pieces, reply: str) -> VoicePipeline:
+    agent = Agent(FakeLLMClient([Reply(text=reply)]), ToolExecutor(bank))
+    return VoicePipeline(asr=FakeASREngine(fixed_text="hello"), agent=agent, tts=tts)
+
+
+def test_the_first_piece_comes_with_the_turn_and_the_rest_after(bank: Bank) -> None:
+    tts = _Pieces()
+    result = _with_voice(bank, tts, "One. Two. Three.").respond_to_text("hi", Conversation("s1"))
+
+    assert len(result.audio.samples) == len(FakeTTSEngine().synthesize("One.").samples)
+    assert result.rest is not None and result.rest.count == 2
+    assert len(result.rest.wait(1, timeout=5).samples)  # type: ignore[union-attr]
+    assert len(result.rest.wait(2, timeout=5).samples)  # type: ignore[union-attr]
+    # Every piece in the voice of the conversation's language.
+    assert [voice for _, voice in tts.said] == ["en", "en", "en"]
+
+
+def test_a_short_reply_is_one_piece(bank: Bank) -> None:
+    result = _with_voice(bank, _Pieces(), "Hello there.").respond_to_text("hi", Conversation("s1"))
+    assert result.rest is None
+
+
+def test_a_cancelled_reply_makes_nothing_more(bank: Bank) -> None:
+    result = _with_voice(bank, _Pieces(), "One. Two. Three. Four.").respond_to_text(
+        "hi", Conversation("s1")
+    )
+    assert result.rest is not None
+    result.rest.cancel()
+    assert result.rest.wait(3, timeout=5) is None
+
+
+def test_a_voice_that_fails_partway_ends_the_reply_there(bank: Bank) -> None:
+    result = _with_voice(bank, _Pieces(fail_on="Two"), "One. Two. Three.").respond_to_text(
+        "hi", Conversation("s1")
+    )
+    assert result.rest is not None
+    assert result.rest.wait(1, timeout=5) is None and result.rest.wait(2, timeout=5) is None
+
+
+def test_a_voice_that_fails_at_once_is_said_to_have_failed_in_the_bots_own_voice(
+    bank: Bank,
+) -> None:
+    sorry = AudioBuffer(samples=np.ones(800, dtype=np.float32), sample_rate=16_000)
+    result = _with_voice(bank, _Pieces(fail_on="One", kept=sorry), "One. Two.").respond_to_text(
+        "hi", Conversation("s1")
+    )
+    assert result.audio is sorry and result.rest is None
+    assert result.agent.text == "One. Two."  # the answer is still on the screen
+
+
+def test_a_sentence_added_after_the_reply_goes_on_its_end(bank: Bank) -> None:
+    tts = _Pieces()
+    pipeline = _with_voice(bank, tts, "One. Two.")
+    result = pipeline.say_after(pipeline.respond_to_text("hi", Conversation("s1")), "Bye.")
+    assert result.rest is not None and result.rest.count == 2
+    assert result.rest.wait(2, timeout=5) is not None
+    assert result.agent.text == "One. Two. Bye."

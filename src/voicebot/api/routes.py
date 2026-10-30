@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Resp
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
 
-from voicebot import __version__
+from voicebot import __version__, profile
 from voicebot.api.audit import TurnRecord
 from voicebot.api.deps import Services, get_services
 from voicebot.api.payloads import (
@@ -64,6 +64,10 @@ from voicebot.utils.resilience import CancelToken, cancel_context
 log = get_logger("api.routes")
 
 router = APIRouter()
+
+# How long the page may wait for one piece of a reply's audio: a voice's own
+# limit, its one retry and its backup, with a margin.
+PIECE_WAIT_S = 45.0
 
 MAX_AUDIO_BYTES = 10 * 1024 * 1024  # ~5 minutes of 16 kHz mono
 
@@ -209,6 +213,63 @@ def metrics(services: Services = Depends(get_services)) -> str:
         ]
     lines += metrics_lines()
     return "\n".join(lines) + "\n"
+
+
+@router.get("/v1/voice", tags=["ops"])
+def voice(services: Services = Depends(get_services)) -> dict[str, object]:
+    """Who is speaking, and whether the page does the speaking itself.
+
+    The page reads this once: with the office voices it never speaks in the
+    browser's own voice, which may be the other gender and has no Urdu.
+    """
+    me = profile.current()
+    return {
+        "speaks_client_side": services.speaks_client_side,
+        "gender": me.gender,
+        "name": {"en": me.name("en"), "ur": me.name("ur")},
+    }
+
+
+@router.get("/v1/messages/{key}/audio", tags=["ops"])
+def message_audio(
+    key: str, language: str = "en", services: Services = Depends(get_services)
+) -> Response:
+    """The bot's own recording of one of its sentences, made in advance, as WAV.
+
+    The page keeps a few -- a lost connection, a reply that took too long --
+    for the moments it cannot reach the service to ask for them. 404 when
+    none has been made yet.
+    """
+    try:
+        kept = services.tts.kept(key, "ur" if language == "ur" else "en")
+    except KeyError:
+        kept = None
+    if kept is None:
+        raise HTTPException(status_code=404, detail="no recording of that sentence yet")
+    return Response(encode_wav(kept), media_type="audio/wav")
+
+
+@router.get("/v1/sessions/{session_id}/audio/{audio_id}/{number}", tags=["conversation"])
+def reply_audio(
+    session_id: str, audio_id: str, number: int, services: Services = Depends(get_services)
+) -> Response:
+    """Piece `number` of a reply's audio, as WAV, as soon as it has been made.
+
+    Waits for it, up to the voice's own limit. 204 when it will never come:
+    the voice failed on it, or a newer turn replaced the reply. 404 for a
+    reply that is not the session's latest.
+    """
+    session = services.sessions.find(session_id)
+    speaking = session.speaking if session is not None else None
+    if speaking is None or speaking.id != audio_id:
+        raise HTTPException(status_code=404, detail="that reply is no longer being spoken")
+    try:
+        audio = speaking.wait(number, timeout=PIECE_WAIT_S)
+    except IndexError as exc:
+        raise HTTPException(status_code=404, detail="no such piece of that reply") from exc
+    if audio is None:
+        return Response(status_code=204)
+    return Response(encode_wav(audio), media_type="audio/wav")
 
 
 @router.get("/v1/messages", tags=["ops"])

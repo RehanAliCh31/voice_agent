@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from voicebot.agent.executor import ToolExecutor
 from voicebot.agent.loop import Conversation
 from voicebot.bank.base import Bank
+from voicebot.pipeline.spoken import SpokenReply
 from voicebot.utils.logging import get_logger
 
 log = get_logger("api.sessions")
@@ -52,6 +53,9 @@ class Session:
     failures: int = 0
     last_reply: str = ""
     warned: bool = False
+    # The rest of the last reply, being spoken a piece at a time. A new turn
+    # cancels it, so nothing of an old answer is heard over a new one.
+    speaking: SpokenReply | None = None
 
     def minutes(self) -> float:
         return (time.monotonic() - self.started) / 60
@@ -63,6 +67,10 @@ class SessionStore(ABC):
     @abstractmethod
     def get(self, session_id: str) -> Session:
         """Return the session for `session_id`, creating it if new."""
+
+    def find(self, session_id: str) -> Session | None:
+        """The session, if it exists; never makes one."""
+        raise NotImplementedError
 
     @abstractmethod
     def put(self, session_id: str, session: Session) -> None:
@@ -120,6 +128,11 @@ class InMemorySessionStore(SessionStore):
                 return session
             entry.touched = time.monotonic()
             return entry.session
+
+    def find(self, session_id: str) -> Session | None:
+        with self._lock:
+            entry = self._entries.get(session_id)
+            return entry.session if entry is not None else None
 
     def put(self, session_id: str, session: Session) -> None:
         """Mark the session used. One that was ended mid-turn stays ended."""

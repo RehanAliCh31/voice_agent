@@ -84,7 +84,14 @@ function base64ToBlob(base64, type) {
   return new Blob([bytes], { type: type });
 }
 
+/** Stop what is playing now, and every piece of the reply still to come. */
 function stopPlayback() {
+  state.playGeneration += 1;
+  halt();
+}
+
+/** Stop what is playing now; a reply going on to its next piece carries on. */
+function halt() {
   if (state.playing) {
     state.playing.pause();
     URL.revokeObjectURL(state.playing.src);
@@ -106,7 +113,7 @@ function canSpeak() {
 
 /** Speak text with the browser's own synthesiser, arming barge-in. */
 function speak(text) {
-  stopPlayback();
+  halt();
 
   return new Promise(function (resolve) {
     if (!text || !canSpeak()) {
@@ -160,7 +167,7 @@ function speak(text) {
 
 /** Play the bot's reply, arming barge-in for as long as it lasts. */
 function play(blob) {
-  stopPlayback();
+  halt();
 
   return new Promise(function (resolve) {
     var audio = new Audio(URL.createObjectURL(blob));
@@ -231,4 +238,14 @@ function loadVoices() {
  * turn, spends no session, and never reaches the model.
  */
 
-export { base64ToBlob, canSpeak, loadVoices, play, speak, stopPlayback, toWav };
+/** Play several clips one after another; an interruption stops the rest. */
+function playAll(blobs) {
+  var generation = state.playGeneration;
+  return blobs.reduce(function (chain, blob) {
+    return chain.then(function () {
+      return generation === state.playGeneration ? play(blob) : undefined;
+    });
+  }, Promise.resolve());
+}
+
+export { base64ToBlob, canSpeak, loadVoices, play, playAll, speak, stopPlayback, toWav };

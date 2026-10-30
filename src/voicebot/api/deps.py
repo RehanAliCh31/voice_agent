@@ -31,6 +31,7 @@ from voicebot.config import AppConfig
 from voicebot.errors import Cancelled, DatabaseError, InternalError
 from voicebot.llm.base import FakeLLMClient, LLMClient, Reply
 from voicebot.messages import MessagesError, messages, say
+from voicebot.pipeline import spoken
 from voicebot.pipeline.orchestrator import TurnResult, VoicePipeline
 from voicebot.tts.base import FakeTTSEngine, TTSEngine
 from voicebot.utils.logging import get_logger
@@ -121,6 +122,10 @@ class Services:
             )
         with self._lock:
             self._in_flight += 1
+        if session.speaking is not None:
+            # Whatever was left of the last answer is not to be heard now.
+            session.speaking.cancel()
+            session.speaking = None
         try:
             pipeline = self.pipeline(session)
             limits = self.limits or ConversationLimits(self.config.session)
@@ -139,6 +144,7 @@ class Services:
                         say("internal", session.conversation.language), key="internal"
                     )
                 result = limits.settle(session, pipeline, result)
+            session.speaking = result.rest
             self.sessions.put(session_id, session)
             return self.publish(session_id, session, result)
         finally:
@@ -252,6 +258,7 @@ class Services:
         if self.audit is not None:
             parts.append(("the audit writer", self.audit.close))
         parts += [
+            ("the voices' background work", spoken.shutdown),
             ("the recognisers", self.asr.close),
             ("the voices", self.tts.close),
             # A pooled bank holds server connections; hand them back rather

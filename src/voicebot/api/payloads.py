@@ -93,6 +93,11 @@ class TurnPayload(BaseModel):
     audio_b64: str | None = None
     speak_client_side: bool = False
     audio_sample_rate: int = 16_000
+    # How many more pieces of the reply's audio follow audio_b64, and the id
+    # to ask for them by: GET /v1/sessions/{session_id}/audio/{audio_id}/{n},
+    # n from 1. Each is ready a moment after the one before.
+    audio_more: int = 0
+    audio_id: str | None = None
     # When the reply is one of the bot's own fallback sentences, which one --
     # and the call the turn belongs to, for anyone reading the logs after.
     fallback: str | None = None
@@ -529,13 +534,13 @@ def turn_payload(
     reply is a few hundred kilobytes. With browser speech there is no audio at
     all, and `speak_client_side` tells the page to say the words itself.
     """
+    # A voice that failed is never handed to the browser's own: it may be
+    # the other gender, and has no Urdu. The pipeline has already put the
+    # bot's own recording of "my voice isn't working" in its place if it
+    # could; failing that the reply is on the screen, silent.
     audio_b64 = None
     if len(result.audio.samples):
         audio_b64 = base64.b64encode(encode_wav(result.audio)).decode("ascii")
-    elif result.agent.text and not speaks_client_side:
-        # The voice failed. The page has one of its own, and a reply read by
-        # the browser beats a reply nobody hears.
-        speaks_client_side = True
 
     # The token gates money. There is no reason to publish it, even
     # same-origin to the session that owns it.
@@ -569,6 +574,8 @@ def turn_payload(
         audio_b64=audio_b64,
         speak_client_side=speaks_client_side,
         audio_sample_rate=result.audio.sample_rate,
+        audio_more=result.rest.count if result.rest is not None else 0,
+        audio_id=result.rest.id if result.rest is not None else None,
         fallback=result.agent.fallback,
         call_id=current_call_id() or session_id,
     )

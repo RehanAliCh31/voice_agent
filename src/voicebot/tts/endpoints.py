@@ -1,10 +1,19 @@
 """The office voices, English and Urdu, synthesised here and played by the page.
 
-The reply's own script chooses the voice, so an Urdu answer always gets the
-Urdu voice, whatever language the question was asked in. What the voice is
-given is the reply made speakable -- numbers as words in its language, no
-markdown or links -- while the page shows the reply as written, figures in
-digits.
+The voice is the customer's language -- the turn passes it -- or, for the
+bot's own sentences, the text's script. What the voice is given is the reply
+made speakable -- numbers as words in its language, no markdown or links --
+while the page shows the reply as written, figures in digits.
+
+A reply is cut into pieces (`pieces`): the first is short, so it is heard
+while the rest is still being made. Neither voice streams, and each costs
+seconds per request, so the first piece is what the customer waits for.
+
+The bot's own sentences are recorded once and kept, on disk as well as in
+memory, so an apology is still heard when the voice that would say it is
+down, and a restart does not record them all again. A recording is kept
+under the voice that made it and the bot's gender: change either and it is
+never played again, so a kept recording cannot speak in the wrong voice.
 
 A voice that fails leaves the reply on screen and silent rather than failing
 the turn: the customer can still read the answer.
@@ -12,15 +21,25 @@ the turn: the customer can still read the answer.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from collections.abc import Mapping
+from pathlib import Path
 
 import numpy as np
 
+from voicebot import profile
+from voicebot.assistant.asr_client import to_wav
 from voicebot.assistant.config import AssistantConfig, Language
 from voicebot.assistant.language import spoken_language
-from voicebot.assistant.text_prep import prepare_for_speech
-from voicebot.assistant.tts_client import BackedUpVoice, TtsClient, TtsError, build_voices
+from voicebot.assistant.text_prep import SentenceStream, prepare_for_speech
+from voicebot.assistant.tts_client import (
+    BackedUpVoice,
+    TtsClient,
+    TtsError,
+    build_voices,
+    parse_wav,
+)
 from voicebot.messages import messages, say
 from voicebot.schemas import AudioBuffer
 from voicebot.tts.base import TTSEngine
@@ -31,38 +50,71 @@ log = get_logger("tts.endpoints")
 
 RATE = 24000  # what both voices produce
 SILENT = np.zeros(0, dtype=np.float32)
+CACHE_DIR = Path("data/voice_cache")
 
-
-# The fallback sentences worth having ready before they are needed: what the
-# customer hears when the service is in trouble -- which is exactly when the
-# voice may be too.
-WARM_KEYS = ("unavailable", "tool_failed", "speech_unavailable", "internal")
+# The bot's sentences recorded first, before the rest: what the customer
+# hears when the service is in trouble -- which is exactly when the voice
+# may be too -- and what the page plays when it cannot reach the service.
+FIRST_KEYS = (
+    "voice_unavailable",
+    "unavailable",
+    "tool_failed",
+    "speech_unavailable",
+    "internal",
+    "connection_lost",
+    "timed_out",
+)
 
 
 @register("tts", "endpoints")
 class EndpointsTTSEngine(TTSEngine):
     speaks_client_side = False
 
-    def __init__(self, voices: Mapping[Language, TtsClient | BackedUpVoice]) -> None:
+    def __init__(
+        self,
+        voices: Mapping[Language, TtsClient | BackedUpVoice],
+        cache_dir: Path | None = None,
+    ) -> None:
         self.voices = voices
-        # Audio for the bot's own fallback sentences, kept from the last time
-        # each was spoken, so an apology is still heard when the voice that
-        # would say it is down.
+        self.cache_dir = cache_dir
+        # Audio for the bot's own sentences, by (language, sentence), kept from
+        # the last time each was spoken, so an apology is still heard when the
+        # voice that would say it is down.
         self._fallbacks: dict[tuple[str, str], AudioBuffer] = {}
         self._lock = threading.Lock()
+        self.gender = profile.current().gender
         self._own = {
             (language, sentences[language])
-            for sentences in messages().values()
+            for sentences in messages(self.gender).values()
             for language in ("en", "ur")
         }
+        self._load_kept()
 
     @classmethod
-    def from_config(cls, config: AssistantConfig) -> EndpointsTTSEngine:
-        return cls(build_voices(config))
+    def from_config(
+        cls, config: AssistantConfig, cache_dir: Path | None = CACHE_DIR
+    ) -> EndpointsTTSEngine:
+        return cls(build_voices(config), cache_dir)
+
+    # --- speaking --------------------------------------------------------------
+
+    def _language(self, text: str, voice: str | None) -> Language:
+        return voice if voice in ("en", "ur") else spoken_language(text)  # type: ignore[return-value]
+
+    def pieces(self, text: str, voice: str | None = None) -> list[str]:
+        """The first piece cut short -- at a comma, or after the voice's first_chunk_words --
+        then pieces growing by its chunk_growth, then whole sentences."""
+        language = self._language(text, voice)
+        endpoint = self.voices[language].endpoint
+        stream = SentenceStream(
+            first_words=endpoint.first_chunk_words, growth=endpoint.chunk_growth
+        )
+        found = [*stream.feed(text), *stream.flush()]
+        return [piece for piece in found if prepare_for_speech(piece, language)] or [text]
 
     def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
         """`voice` may name the language; otherwise the text's script decides."""
-        language: Language = voice if voice in ("en", "ur") else spoken_language(text)  # type: ignore[assignment]
+        language = self._language(text, voice)
         speakable = prepare_for_speech(text, language)
         if not speakable:
             return AudioBuffer(samples=SILENT, sample_rate=RATE)
@@ -81,24 +133,77 @@ class EndpointsTTSEngine(TTSEngine):
         audio = AudioBuffer(
             samples=speech.samples.astype(np.float32) / 32768, sample_rate=speech.sample_rate
         )
-        if key in self._own:
+        # Kept only when the main voice made it: one made by the backup is the
+        # right gender, but not the voice the rest of the conversation has.
+        if key in self._own and speech.voice == self._identity(language):
             with self._lock:
                 self._fallbacks[key] = audio
+            self._store(language, key[1], speech.samples, speech.sample_rate)
         return audio
 
-    def warm(self, keys: tuple[str, ...] = WARM_KEYS) -> int:
-        """Record the most needed fallback sentences now. Returns how many were kept.
+    # --- the bot's own sentences, kept ---------------------------------------------
 
-        Run once, in the background, after startup. A voice that is down now
+    def kept(self, key: str, language: str) -> AudioBuffer | None:
+        with self._lock:
+            return self._fallbacks.get((language, say(key, language)))
+
+    def warm(self, keys: tuple[str, ...] | None = None) -> int:
+        """Record the bot's own sentences now, the most needed first. Returns how many are kept.
+
+        Run once, in the background, after startup; sentences already kept
+        from an earlier run are not recorded again. A voice that is down now
         simply leaves them to be kept the first time they are spoken.
         """
-        kept = 0
-        for key in keys:
+        wanted = list(keys) if keys is not None else self._all_keys()
+        for key in wanted:
             for language in ("en", "ur"):
-                if len(self.synthesize(say(key, language), voice=language).samples):
-                    kept += 1
-        log.info("kept %d fallback recordings ready", kept)
+                if self.kept(key, language) is None:
+                    self.synthesize(say(key, language), voice=language)
+        kept = sum(self.kept(k, lang) is not None for k in wanted for lang in ("en", "ur"))
+        log.info("%d of %d recordings of the bot's own sentences kept", kept, 2 * len(wanted))
         return kept
+
+    def _all_keys(self) -> list[str]:
+        rest = [key for key in messages(self.gender) if key not in FIRST_KEYS]
+        return [*FIRST_KEYS, *rest]
+
+    def _identity(self, language: str) -> str:
+        return self.voices[language].endpoint.identity()  # type: ignore[index]
+
+    def _path(self, language: str, sentence: str) -> Path | None:
+        if self.cache_dir is None:
+            return None
+        name = f"{self._identity(language)}|{self.gender}|{language}|{sentence}"
+        return self.cache_dir / f"{hashlib.sha256(name.encode()).hexdigest()[:24]}.wav"
+
+    def _store(self, language: str, sentence: str, samples: np.ndarray, rate: int) -> None:
+        path = self._path(language, sentence)
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(to_wav(samples, rate))
+        except OSError as exc:  # kept in memory all the same; only the next start loses it
+            log.warning("could not keep a recording on disk: %s", exc)
+
+    def _load_kept(self) -> None:
+        """The recordings an earlier run kept, for this voice and this gender only."""
+        loaded = 0
+        for language, sentence in self._own:
+            path = self._path(language, sentence)
+            if path is None or not path.is_file():
+                continue
+            try:
+                samples, rate = parse_wav(path.read_bytes())
+            except (OSError, TtsError) as exc:  # a damaged file is recorded again
+                log.warning("a kept recording could not be read: %s", type(exc).__name__)
+                continue
+            self._fallbacks[(language, sentence)] = AudioBuffer(
+                samples=samples.astype(np.float32) / 32768, sample_rate=rate
+            )
+            loaded += 1
+        if loaded:
+            log.info("%d kept recordings of the bot's own sentences loaded", loaded)
 
     def close(self) -> None:
         for client in self.voices.values():

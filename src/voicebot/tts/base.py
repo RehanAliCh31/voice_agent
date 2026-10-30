@@ -25,6 +25,19 @@ class TTSEngine(ABC):
     def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
         """Synthesize one reply."""
 
+    def pieces(self, text: str, voice: str | None = None) -> list[str]:
+        """`text` cut into the pieces it is best spoken in, first piece first.
+
+        An engine that synthesises quickly enough says a reply whole; one that
+        does not cuts it so the first piece can be heard while the rest is
+        still being made.
+        """
+        return [text]
+
+    def kept(self, key: str, language: str) -> AudioBuffer | None:
+        """A recording of one of the bot's own sentences, made earlier, if there is one."""
+        return None
+
 
 @register("tts", "fake")
 class FakeTTSEngine(TTSEngine):

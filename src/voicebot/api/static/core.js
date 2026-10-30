@@ -27,6 +27,12 @@ var state = {
   pin: null, // the card and purpose the PIN dialogue is open for
   language: "en", // the language of the last reply: what a failure is said in
   turnRequest: null, // the turn being waited for, so it can be abandoned
+  playGeneration: 0, // moved on by every interruption: a reply still playing stops
+  clips: {}, // the bot's own recordings of its failure sentences, "key:language" -> Blob
+  // Whether the page speaks with the browser's own voice. Only when the
+  // service says so: with the office voices it never does, because the
+  // browser's voice may be the other gender and has no Urdu.
+  clientVoice: false,
 };
 
 var el = {};
@@ -66,6 +72,35 @@ var api = {
 
   messages: function () {
     return request("/v1/messages", { method: "GET" });
+  },
+
+  voice: function () {
+    return request("/v1/voice", { method: "GET" });
+  },
+
+  /** A WAV the service has, as a Blob; null for 204 or 404. */
+  audio: function (url) {
+    return fetch(url, { method: "GET" }).then(function (response) {
+      if (response.status === 204 || response.status === 404) {
+        return null;
+      }
+      if (!response.ok) {
+        throw failure("server", null, response.status);
+      }
+      return response.blob();
+    });
+  },
+
+  /** Piece `n` (from 1) of a reply's audio: null when it will never come. */
+  replyAudio: function (sessionId, audioId, n) {
+    return api.audio(
+      "/v1/sessions/" +
+        encodeURIComponent(sessionId) +
+        "/audio/" +
+        encodeURIComponent(audioId) +
+        "/" +
+        n
+    );
   },
 
   // The PIN is left out of the first press. Whether one is needed at all is
@@ -193,23 +228,60 @@ function sentence(key, language) {
   return (language === "ur" && found.ur) || found.en;
 }
 
+/** Which of the bot's own sentences a failed request is told in. */
+function failureKey(error) {
+  var kind = error && error.kind;
+  if (kind === "timeout") {
+    return "timed_out";
+  }
+  if (kind === "network") {
+    return "connection_lost";
+  }
+  return error && error.message ? null : "internal";
+}
+
 /**
  * What to tell the customer about a failed request: the service's own
  * sentence when it sent one, or the right one for a timeout or a lost
  * connection -- never an empty box or the browser's wording.
  */
 function explain(error) {
-  var kind = error && error.kind;
-  if (kind === "timeout") {
-    return sentence("timed_out", state.language);
-  }
-  if (kind === "network") {
-    return sentence("connection_lost", state.language);
-  }
-  return (error && error.message) || sentence("internal", state.language);
+  var key = failureKey(error);
+  return key ? sentence(key, state.language) : error.message;
+}
+
+// The sentences the page may have to say when the service cannot, recorded
+// by the service in the bot's own voice and kept here in advance -- a lost
+// connection is exactly when they cannot be fetched.
+var KEPT_CLIPS = ["connection_lost", "timed_out", "internal", "voice_unavailable"];
+
+function loadClips() {
+  KEPT_CLIPS.forEach(function (key) {
+    ["en", "ur"].forEach(function (language) {
+      api
+        .audio("/v1/messages/" + key + "/audio?language=" + language)
+        .then(function (blob) {
+          if (blob) {
+            state.clips[key + ":" + language] = blob;
+          }
+        })
+        .catch(function () {
+          // Not recorded yet, or the service is down: asked again next load.
+        });
+    });
+  });
 }
 
 function loadSentences() {
+  api
+    .voice()
+    .then(function (voice) {
+      state.clientVoice = Boolean(voice && voice.speaks_client_side);
+    })
+    .catch(function () {
+      // Unknown: the browser's voice stays unused, which is never wrong.
+    });
+  loadClips();
   return api
     .messages()
     .then(function (table) {
@@ -350,6 +422,7 @@ export {
   dayLabel,
   el,
   explain,
+  failureKey,
   loadSentences,
   momentOf,
   money,

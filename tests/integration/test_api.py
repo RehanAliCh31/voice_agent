@@ -18,12 +18,14 @@ from fastapi.testclient import TestClient
 
 from tests import support
 from voicebot.api.app import STATIC_DIR, create_app
+from voicebot.api.deps import Services
 from voicebot.api.sessions import InMemorySessionStore
 from voicebot.bank.sqlite_bank import DEMO_PIN
 from voicebot.config import AppConfig
 from voicebot.llm.base import FakeLLMClient, Reply, ToolCall
 from voicebot.pipeline.audio_io import encode_wav
 from voicebot.schemas import AudioBuffer
+from voicebot.tts.base import FakeTTSEngine
 
 # Named by what is on disk rather than by a list kept here, so a module
 # added to the page cannot be left out of the tests that serve it.
@@ -1178,3 +1180,86 @@ def test_freezing_a_card_still_needs_no_pin(client: TestClient) -> None:
 
     assert body["pin_request"] is None
     assert next(c for c in bank.cards() if c.last4 == "4417").frozen is True
+
+
+# --- a reply spoken a piece at a time, in the bot's own voice ------------------------
+
+
+class _PiecesVoice(FakeTTSEngine):
+    """Cuts at each full stop and can keep one recording, like the office voices."""
+
+    def __init__(self, fail: bool = False) -> None:
+        super().__init__()
+        self.fail = fail
+        self.sorry = AudioBuffer(samples=np.ones(800, dtype=np.float32), sample_rate=16_000)
+
+    def pieces(self, text: str, voice: str | None = None) -> list[str]:
+        return [p.strip() + "." for p in text.split(".") if p.strip()]
+
+    def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
+        if self.fail:
+            return AudioBuffer(samples=np.zeros(0, dtype=np.float32), sample_rate=16_000)
+        return super().synthesize(text, voice)
+
+    def kept(self, key: str, language: str) -> AudioBuffer | None:
+        return self.sorry if key == "voice_unavailable" else None
+
+
+def _speaking(client: TestClient, tts: _PiecesVoice, reply: str) -> None:
+    services: Services = client.app.state.services  # type: ignore[attr-defined]
+    services.tts = tts
+    services.llm = FakeLLMClient([Reply(text=reply)])
+
+
+def test_a_long_reply_arrives_a_piece_at_a_time(client: TestClient) -> None:
+    _speaking(client, _PiecesVoice(), "One. Two. Three.")
+    turn = client.post("/v1/chat", json={"text": "hello"}).json()
+
+    assert turn["audio_b64"] and turn["audio_more"] == 2 and turn["audio_id"]
+    base = f"/v1/sessions/{turn['session_id']}/audio/{turn['audio_id']}"
+    for n in (1, 2):
+        piece = client.get(f"{base}/{n}")
+        assert piece.status_code == 200 and piece.headers["content-type"] == "audio/wav"
+        assert piece.content[:4] == b"RIFF"
+    assert client.get(f"{base}/3").status_code == 404
+
+
+def test_a_new_turn_stops_what_was_left_of_the_last_one(client: TestClient) -> None:
+    _speaking(client, _PiecesVoice(), "One. Two. Three.")
+    first = client.post("/v1/chat", json={"text": "hello"}).json()
+    services: Services = client.app.state.services  # type: ignore[attr-defined]
+    services.llm = FakeLLMClient([Reply(text="Fine.")])
+    client.post("/v1/chat", json={"text": "again", "session_id": first["session_id"]})
+
+    stale = f"/v1/sessions/{first['session_id']}/audio/{first['audio_id']}/1"
+    assert client.get(stale).status_code == 404
+
+
+def test_a_failed_voice_is_said_in_the_bots_own_voice_never_the_browsers(
+    client: TestClient,
+) -> None:
+    _speaking(client, _PiecesVoice(fail=True), "Your balance is fine.")
+    turn = client.post("/v1/chat", json={"text": "hello"}).json()
+    # The kept recording of "my voice isn't working", and no hand-over to a
+    # browser voice that may be the other gender and has no Urdu.
+    assert turn["audio_b64"] and turn["audio_more"] == 0
+    assert turn["speak_client_side"] is False
+    assert turn["reply"] == "Your balance is fine."
+
+
+def test_the_page_is_told_who_is_speaking(client: TestClient) -> None:
+    voice = client.get("/v1/voice").json()
+    assert voice == {
+        "speaks_client_side": False,
+        "gender": "female",
+        "name": {"en": "Layla", "ur": "لیلیٰ"},
+    }
+
+
+def test_the_page_can_keep_the_bots_recordings_of_its_failure_sentences(
+    client: TestClient,
+) -> None:
+    assert client.get("/v1/messages/connection_lost/audio?language=ur").status_code == 404
+    _speaking(client, _PiecesVoice(), "x")
+    kept = client.get("/v1/messages/voice_unavailable/audio?language=ur")
+    assert kept.status_code == 200 and kept.content[:4] == b"RIFF"

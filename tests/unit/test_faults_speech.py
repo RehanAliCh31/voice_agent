@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 
 import httpx
 import numpy as np
 import pytest
 
+from voicebot import profile
 from voicebot.asr.base import ASRUnavailable
 from voicebot.asr.endpoints import EndpointsASREngine
 from voicebot.assistant.asr_client import AsrClient, AsrError
@@ -24,6 +26,7 @@ from voicebot.assistant.language import LanguageRouter
 from voicebot.assistant.tts_client import Speech, TtsClient, TtsError
 from voicebot.errors import ErrorCode
 from voicebot.messages import say
+from voicebot.profile import AgentProfile
 from voicebot.schemas import AudioBuffer
 from voicebot.tts.endpoints import EndpointsTTSEngine
 from voicebot.utils.resilience import BreakerState, breaker
@@ -191,15 +194,22 @@ def test_the_conversations_language_is_the_tie_break_not_another_callers() -> No
 
 
 class _Voice:
-    def __init__(self) -> None:
+    def __init__(self, voice: str = "test") -> None:
         self.down = False
         self.said: list[str] = []
+        self.endpoint = TtsEndpoint(url="http://t/x", model="m", voice=voice, first_chunk_words=4)
 
     def synthesize(self, text: str) -> Speech:
         self.said.append(text)
         if self.down:
             raise TtsError("voice down", code=ErrorCode.PROVIDER_TIMEOUT)
-        return Speech(np.array([0, 16_384, -32_768], dtype=np.int16), 24_000, text, 900)
+        return Speech(
+            np.array([0, 16_384, -32_768], dtype=np.int16),
+            24_000,
+            text,
+            900,
+            self.endpoint.identity(),
+        )
 
 
 def test_a_fallback_sentence_spoken_once_is_still_heard_when_the_voice_dies() -> None:
@@ -212,7 +222,7 @@ def test_a_fallback_sentence_spoken_once_is_still_heard_when_the_voice_dies() ->
     assert engine.synthesize(sorry).samples.tolist() == first.samples.tolist()
 
 
-def test_an_ordinary_reply_with_the_voice_down_is_silent_for_the_page_to_cover() -> None:
+def test_an_ordinary_reply_with_the_voice_down_is_silent_from_the_engine() -> None:
     voices = {"en": _Voice(), "ur": _Voice()}
     voices["en"].down = True
     audio = EndpointsTTSEngine(voices).synthesize("Your balance is $19,020.00.")  # type: ignore[arg-type]
@@ -267,3 +277,51 @@ def test_engines_release_their_connections() -> None:
 
     EndpointsTTSEngine({"en": Closes("en"), "ur": Closes("ur")}).close()  # type: ignore[arg-type]
     assert sorted(closed) == ["en", "ur"]
+
+
+# --- the bot's own sentences, kept; a reply in pieces ------------------------------
+
+
+def test_a_kept_recording_survives_a_restart_in_the_same_voice(tmp_path: Path) -> None:
+    sorry = say("unavailable", "en")
+    EndpointsTTSEngine({"en": _Voice(), "ur": _Voice()}, tmp_path).synthesize(sorry)  # type: ignore[arg-type]
+
+    down = {"en": _Voice(), "ur": _Voice()}
+    down["en"].down = True
+    restarted = EndpointsTTSEngine(down, tmp_path)  # type: ignore[arg-type]
+    assert len(restarted.synthesize(sorry).samples) == 3  # from disk, the voice never asked
+    assert restarted.kept("unavailable", "en") is not None
+
+
+def test_a_kept_recording_is_never_played_as_another_voice(tmp_path: Path) -> None:
+    EndpointsTTSEngine({"en": _Voice(), "ur": _Voice()}, tmp_path).warm(("unavailable",))
+    other = EndpointsTTSEngine({"en": _Voice("male"), "ur": _Voice("male")}, tmp_path)  # type: ignore[arg-type]
+    assert other.kept("unavailable", "en") is None
+
+
+def test_a_kept_recording_is_never_played_in_the_other_gender(tmp_path: Path) -> None:
+    EndpointsTTSEngine({"en": _Voice(), "ur": _Voice()}, tmp_path).warm(("busy",))
+    previous = profile.use(AgentProfile(gender="male", names={"en": "Omar", "ur": "عمر"}))
+    try:
+        male = EndpointsTTSEngine({"en": _Voice(), "ur": _Voice()}, tmp_path)  # type: ignore[arg-type]
+        assert male.kept("busy", "ur") is None
+    finally:
+        profile.use(previous)
+
+
+def test_a_recording_the_backup_made_is_not_kept_as_the_main_voice() -> None:
+    class Backup(_Voice):
+        def synthesize(self, text: str) -> Speech:
+            speech = super().synthesize(text)
+            return Speech(speech.samples, speech.sample_rate, text, 1, "the backup")
+
+    engine = EndpointsTTSEngine({"en": Backup(), "ur": Backup()})  # type: ignore[arg-type]
+    engine.synthesize(say("unavailable", "en"))
+    assert engine.kept("unavailable", "en") is None
+
+
+def test_a_reply_is_cut_short_first_then_into_sentences() -> None:
+    engine = EndpointsTTSEngine({"en": _Voice(), "ur": _Voice()})  # type: ignore[arg-type]
+    pieces = engine.pieces("Your savings balance is $19,020.00. Anything else today?", "en")
+    assert pieces[0] == "Your savings balance is"  # the voice's first_chunk_words: 4
+    assert " ".join(pieces) == "Your savings balance is $19,020.00. Anything else today?"

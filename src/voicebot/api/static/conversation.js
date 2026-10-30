@@ -7,8 +7,8 @@
  * trusted markup.
  */
 
-import { api, el, explain, node, state } from "./core.js";
-import { base64ToBlob, canSpeak, play, speak, stopPlayback } from "./audio.js";
+import { api, el, explain, failureKey, node, state } from "./core.js";
+import { base64ToBlob, canSpeak, play, playAll, speak, stopPlayback } from "./audio.js";
 
 function clearEmptyState() {
   if (el.empty && el.empty.parentNode) {
@@ -54,7 +54,7 @@ function addTurn(who, text, options) {
     turn.appendChild(case_);
   }
 
-  if (options.audioBlob || options.replayText) {
+  if (options.audioBlobs || options.replayText) {
     var row = node("div", "turn__audio");
     var replay = node("button", "replay");
     replay.type = "button";
@@ -63,8 +63,9 @@ function addTurn(who, text, options) {
       '<svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">' +
       '<path d="M2 1.5l8 4.5-8 4.5z" fill="currentColor"></path></svg>';
     replay.addEventListener("click", function () {
-      if (options.audioBlob) {
-        play(options.audioBlob);
+      if (options.audioBlobs) {
+        stopPlayback();
+        playAll(options.audioBlobs);
       } else {
         speak(options.replayText);
       }
@@ -164,16 +165,68 @@ function fail(error) {
     return;
   }
   var message = typeof error === "string" ? error : explain(error);
+  var key = typeof error === "string" ? null : failureKey(error);
   setStatus("Something went wrong", message, "error");
   addTurn("bot", message, { error: true });
   // Said as well as shown: someone listening rather than looking must not be
-  // left in silence.
-  if (canSpeak()) {
+  // left in silence. In the bot's own voice, recorded in advance; the
+  // browser's voice only where the service has none of its own.
+  var clip = key && state.clips[key + ":" + state.language];
+  if (clip) {
+    setPhase("speaking");
+    play(clip).then(idle, idle);
+  } else if (state.clientVoice && canSpeak()) {
     setPhase("speaking");
     speak(message).then(idle, idle);
   } else {
     setPhase("idle");
   }
+}
+
+/**
+ * Play a reply that arrives a piece at a time: the first piece came with the
+ * turn, and each next one is asked for while the one before it plays. Every
+ * piece is added to `blobs`, so the replay button plays the whole reply. A
+ * piece that never comes means the voice failed partway: the bot says so in
+ * its own recorded voice, and the rest is on the screen.
+ */
+function playReply(first, turn, blobs) {
+  var total = turn.audio_more || 0;
+  var generation = state.playGeneration;
+  var asked = [];
+
+  function piece(n) {
+    if (!asked[n]) {
+      asked[n] = api.replyAudio(turn.session_id, turn.audio_id, n).catch(function () {
+        return null;
+      });
+    }
+    return asked[n];
+  }
+
+  function from(n, blob) {
+    if (n < total) {
+      piece(n + 1); // made while this one plays
+    }
+    return play(blob).then(function () {
+      if (generation !== state.playGeneration || n >= total) {
+        return undefined;
+      }
+      return piece(n + 1).then(function (next) {
+        if (generation !== state.playGeneration) {
+          return undefined;
+        }
+        if (!next) {
+          var clip = state.clips["voice_unavailable:" + state.language];
+          return clip ? play(clip) : undefined;
+        }
+        blobs.push(next);
+        return from(n + 1, next);
+      });
+    });
+  }
+
+  return from(0, first);
 }
 
 // --- a turn ------------------------------------------------------------------
@@ -214,8 +267,9 @@ function handleTurn(turn) {
   // What the next failure is said in.
   state.language = /[\u0600-\u06FF]/.test(reply) ? "ur" : "en";
 
+  var blobs = blob ? [blob] : null;
   addTurn("bot", reply, {
-    audioBlob: blob,
+    audioBlobs: blobs,
     replayText: turn.speak_client_side && canSpeak() ? reply : null,
     guardHit: Boolean(turn.guard_hit),
     caseRef: turn.handed_off || turn.dispute_filed || null,
@@ -241,7 +295,7 @@ function handleTurn(turn) {
   if (blob) {
     setPhase("speaking");
     setStatus("Speaking", bargeHint(), "busy");
-    play(blob).then(idle);
+    playReply(blob, turn, blobs).then(idle, idle);
   } else if (turn.speak_client_side && canSpeak()) {
     setPhase("speaking");
     setStatus("Speaking", bargeHint(), "busy");

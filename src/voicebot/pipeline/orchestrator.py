@@ -26,6 +26,7 @@ from voicebot.errors import Cancelled, InternalError
 from voicebot.messages import say
 from voicebot.pipeline.audio_io import is_silent, trim_silence
 from voicebot.pipeline.latency import LatencyBreakdown, LatencyTracker
+from voicebot.pipeline.spoken import SpokenReply
 from voicebot.schemas import AudioBuffer, Transcript
 from voicebot.tts.base import TTSEngine
 from voicebot.utils.logging import get_logger
@@ -49,8 +50,11 @@ class TurnResult:
     transcript: Transcript
     text: str
     agent: AgentResult
+    # The first piece of the reply's audio; `rest`, when there is more, is
+    # the remainder being made in the background (voicebot.pipeline.spoken).
     audio: AudioBuffer
     latency: LatencyBreakdown
+    rest: SpokenReply | None = None
 
 
 class VoicePipeline:
@@ -150,7 +154,7 @@ class VoicePipeline:
 
         checkpoint("speaking")
         with tracker.stage("tts"):
-            audio = self._speak(result.text, conversation.language)
+            audio, rest = self._speak_reply(result.text, conversation.language)
 
         turn = TurnResult(
             transcript=transcript,
@@ -158,6 +162,7 @@ class VoicePipeline:
             agent=result,
             audio=audio,
             latency=tracker.breakdown(),
+            rest=rest,
         )
         self._log(turn)
         return turn
@@ -174,7 +179,7 @@ class VoicePipeline:
 
         checkpoint("speaking")
         with tracker.stage("tts"):
-            audio = self._speak(result.text, conversation.language)
+            audio, rest = self._speak_reply(result.text, conversation.language)
 
         turn = TurnResult(
             transcript=transcript,
@@ -182,6 +187,7 @@ class VoicePipeline:
             agent=result,
             audio=audio,
             latency=tracker.breakdown(),
+            rest=rest,
         )
         self._log(turn)
         return turn
@@ -206,6 +212,32 @@ class VoicePipeline:
                 )
             )
             return AgentResult(text=say("internal", conversation.language), fallback="internal")
+
+    def _speak_reply(self, text: str, language: str) -> tuple[AudioBuffer, SpokenReply | None]:
+        """The reply's first piece now, and the rest being made in the background.
+
+        The customer hears the first piece as soon as it exists rather than
+        waiting for the whole reply. If the voice cannot make even that, the
+        bot's own recording -- made earlier, in its own voice -- says the
+        voice is not working, and the answer is on the screen.
+        """
+        if not self.speak:
+            return AudioBuffer(samples=SILENCE, sample_rate=16_000), None
+        try:
+            pieces = self.tts.pieces(text, voice=language)
+        except Exception as exc:  # cutting it up failed: say it whole
+            report(InternalError(f"the reply could not be cut: {type(exc).__name__}", cause=exc))
+            pieces = [text]
+        first = self._speak(pieces[0], language)
+        if not len(first.samples) and text.strip():
+            kept = self.tts.kept("voice_unavailable", language)
+            if kept is not None:
+                log.warning("the voice failed; saying so in the bot's own recorded voice")
+                return kept, None
+            return first, None
+        if len(pieces) == 1:
+            return first, None
+        return first, SpokenReply(pieces[1:], lambda piece: self._speak(piece, language))
 
     def _speak(self, text: str, language: str | None = None) -> AudioBuffer:
         """`text` in the voice of `language` -- the customer's, never the reply's own script.
@@ -266,6 +298,11 @@ class VoicePipeline:
 
     def say_after(self, result: TurnResult, sentence: str) -> TurnResult:
         """`result`, with `sentence` said after its reply."""
+        agent = dataclasses.replace(result.agent, text=f"{result.agent.text} {sentence}".strip())
+        if result.rest is not None:
+            # Still being spoken a piece at a time: it goes on the end.
+            result.rest.add(sentence)
+            return dataclasses.replace(result, agent=agent)
         extra = self._speak(sentence)
         audio = result.audio
         if len(audio.samples) and len(extra.samples) and extra.sample_rate == audio.sample_rate:
@@ -273,12 +310,13 @@ class VoicePipeline:
                 samples=np.concatenate([audio.samples, extra.samples]),
                 sample_rate=audio.sample_rate,
             )
-        agent = dataclasses.replace(result.agent, text=f"{result.agent.text} {sentence}".strip())
         return dataclasses.replace(result, agent=agent, audio=audio)
 
     def replace_reply(self, result: TurnResult, agent: AgentResult) -> TurnResult:
         """`result`, answered with `agent`'s reply instead, spoken afresh."""
-        return dataclasses.replace(result, agent=agent, audio=self._speak(agent.text))
+        if result.rest is not None:
+            result.rest.cancel()
+        return dataclasses.replace(result, agent=agent, audio=self._speak(agent.text), rest=None)
 
     def _log(self, result: TurnResult) -> None:
         slowest = result.latency.slowest()

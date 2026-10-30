@@ -39,6 +39,9 @@ class Speech:
     sample_rate: int
     text: str
     latency_ms: int
+    # Which voice made it (TtsEndpoint.identity): a recording kept for later
+    # is only ever played as that same voice.
+    voice: str = ""
 
     @property
     def duration_s(self) -> float:
@@ -145,7 +148,13 @@ class TtsClient:
                 raise TtsError(f"{what} sent a WAV with no sound in it")
             if self.trim:
                 samples = trim_silence(samples, rate)
-            return Speech(samples, rate, text, round((time.perf_counter() - start) * 1000))
+            return Speech(
+                samples,
+                rate,
+                text,
+                round((time.perf_counter() - start) * 1000),
+                self.endpoint.identity(),
+            )
 
         return call_with_retry(
             attempt,
