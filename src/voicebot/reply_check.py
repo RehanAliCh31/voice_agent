@@ -36,13 +36,23 @@ _LATIN_WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
 # Said as letters in Urdu too, and read that way by the Urdu voice.
 LETTERS_SAID_IN_URDU = frozenset({"pin", "atm", "otp", "sms", "pkr", "usd", "id"})
 
+# The bank's own everyday words. Its records hold them in English, but Urdu
+# has words for them (چیکنگ، سیونگز، کرایہ، بل), and an Urdu reply says those.
+BANK_WORDS = frozenset(
+    "checking savings account accounts card cards debit credit bill bills balance "
+    "rent groceries electricity water phone internet transfer payment deposit".split()
+)
+
 
 def latin_words(values: Iterable[Any]) -> frozenset[str]:
     """The names in English letters in some values -- a turn's tool results, say.
 
-    Names are capitalised ("Netflix", "Sara"); the bank's own words are not
-    ("checking", "savings"), and those an Urdu reply says in Urdu. JSON text,
-    as tool results are kept in the history, is read for its values only.
+    What the bank's records call a payee, a merchant or a subscription
+    ("sarah", "Netflix", "spotify") may be said as the records hold it; its
+    everyday words (BANK_WORDS) may not. Measured: asked for this month's
+    bills in Urdu, the model kept "Spotify" and "Netflix" in English letters
+    even when asked again, and the customer heard no answer at all. JSON
+    text, as tool results are kept in the history, is read for its values.
     """
     found: set[str] = set()
 
@@ -54,7 +64,7 @@ def latin_words(values: Iterable[Any]) -> frozenset[str]:
                     return
                 except ValueError:
                     pass
-            found.update(w.lower() for w in _LATIN_WORD.findall(value) if w[0].isupper())
+            found.update(w.lower() for w in _LATIN_WORD.findall(value))
         elif isinstance(value, dict):
             for item in value.values():
                 walk(item)
@@ -64,7 +74,7 @@ def latin_words(values: Iterable[Any]) -> frozenset[str]:
 
     for value in values:
         walk(value)
-    return frozenset(found)
+    return frozenset(found - BANK_WORDS)
 
 
 def language_problems(text: str, language: str, allowed: Iterable[str] = ()) -> list[str]:

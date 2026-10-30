@@ -89,8 +89,11 @@ def test_a_reply_in_one_language_passes(text: str, language: str) -> None:
 
 
 def test_names_from_the_banks_records_may_stay_in_english_letters() -> None:
+    bills = {"bills": [{"name": "spotify", "amount": "$9.99"}, {"name": "rent"}]}
     result = {"transactions": [{"merchant": "Netflix", "account": "checking"}]}
-    allowed = latin_words([result, '{"payee": "Sara"}'])
-    assert allowed == {"netflix", "sara"}  # names only: "checking" is said in Urdu
-    assert language_problems("آپ کا Netflix کا بل $15.99 ہے۔", "ur", allowed) == []
+    allowed = latin_words([result, bills, '{"payee": "sarah"}'])
+    # Names only: the bank's everyday words are said in Urdu.
+    assert allowed == {"netflix", "spotify", "sarah"}
+    assert language_problems("آپ کا Netflix اور Spotify کا بل $15.99 ہے۔", "ur", allowed) == []
     assert language_problems("آپ کا checking بیلنس", "ur", allowed)
+    assert language_problems("آپ کا rent بل", "ur", allowed)
