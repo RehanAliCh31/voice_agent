@@ -103,7 +103,7 @@ def language_problems(text: str, language: str, allowed: Iterable[str] = ()) -> 
 
 # Verb stems that take an agent: "I could not do / understand / hear ...".
 # Never "ہو" (happen) or "مل" (be found): their subject is a thing.
-_AGENT = r"(?:کر|سمجھ|سن|دیکھ|بتا|ڈھونڈ|پہچان|پڑھ|جان)"
+_AGENT = r"(?:کر|دے|سمجھ|سن|دیکھ|بتا|ڈھونڈ|پہچان|پڑھ|جان)"
 
 # The words that carry the gender, masculine to feminine. Participles in -تا
 # (کرتا، سکتا، چاہتا) turn into -تی by rule; these do not.
