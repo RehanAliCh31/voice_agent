@@ -172,6 +172,9 @@ function play(blob) {
   return new Promise(function (resolve) {
     var audio = new Audio(URL.createObjectURL(blob));
     state.playing = audio;
+    if (state.route) {
+      state.route(audio); // through the live session's output, while there is one
+    }
 
     function finish() {
       if (state.vad) {

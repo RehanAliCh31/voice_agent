@@ -74,6 +74,7 @@ function harness({ denied = false } = {}) {
     audioWorklet: { addModule: () => Promise.resolve() },
     createGain: () => Object.assign(node("gain"), { gain: { value: 1 } }),
     createMediaStreamSource: () => ({ connect() {}, disconnect() {} }),
+    createMediaElementSource: () => node("element"),
     decodeAudioData: (bytes) => Promise.resolve({ duration: bytes.byteLength / 1000 }),
     createBufferSource() {
       const source = {
@@ -427,4 +428,11 @@ test("the caller being heard silences the bot even without a stop", async () => 
   assert.ok(h.client.sounding());
   socket.event({ type: "state", state: "user_speaking" });
   assert.strictEqual(h.client.sounding(), false);
+});
+
+test("a reply to a button plays through the live output, so the service hears how loud", async () => {
+  const h = harness();
+  await live(h);
+  h.client.route({ src: "blob:reply" });
+  assert.ok(h.log.connections.some((c) => c.from === "element" && c.to === "gain"));
 });

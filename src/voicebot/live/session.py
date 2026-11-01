@@ -89,6 +89,9 @@ INTERRUPTED = " [the customer interrupted here and did not hear the rest]"
 FAR_WINDOW_CHUNKS = 25
 # Below this (RMS, full scale 1) the page is playing nothing.
 FAR_SILENT = 1e-3
+# A reply past its deadline that the page says it is still playing is waited
+# for -- a suspended or hidden tab plays late -- but not for longer than this.
+PLAYING_GRACE_S = 30.0
 # How the bot's voice comes back on this call: mic loudness over playback
 # loudness, for the frames of the last ~10 s of its speech that the gate held
 # back -- never those loud enough to be the caller, who would otherwise teach
@@ -411,8 +414,9 @@ class LiveSession:
             if item is None or self.state is State.ENDED:
                 return
             pcm, far = item
-            if far is not None:
-                self._far.append(far)
+            # A chunk that does not say is a chunk with nothing playing: the
+            # window must not keep saying the page plays after it has stopped.
+            self._far.append(far if far is not None else 0.0)
             samples = np.frombuffer(pcm, dtype="<i2")
             self._pending = np.concatenate([self._pending, samples])
             while len(self._pending) >= FRAME:
@@ -434,8 +438,9 @@ class LiveSession:
         with self._lock:
             if self.state in (State.IDLE, State.ENDED):
                 return
-            if self.state is State.AGENT_SPEAKING and self._active is self._barge:
-                prob = self._echo_gate(frame, prob)
+            # Whenever the page is playing anything -- a reply, or one to a
+            # button through the page's own player -- not only while it speaks.
+            prob = self._echo_gate(frame, prob)
             event = self._active.process(frame, prob)
             if self.state is State.USER_SPEAKING:
                 self._recognise_early()
@@ -509,15 +514,15 @@ class LiveSession:
         if ratio >= min(ECHO_CAP, self._echo_level() * 10 ** (margin_db / 20)):
             return prob  # clearly louder than the bot coming back: it may be the caller
         self._echo.append(ratio)  # held back: this is how the bot comes back
-        cfg = self.config
-        if prob < cfg.barge_in_neg_threshold:
+        ears = self._active.config  # the barge-in listener's, or the plain one's
+        if prob < ears.neg_threshold:
             return prob  # not speech either way: counts as the pause it is
-        if prob >= cfg.barge_in_threshold:
+        if prob >= ears.threshold:
             self.echo_gated += 1
         # Speech, but no louder than the echo: it neither counts towards an
         # interruption nor ends one being counted -- the caller's softer
         # syllables, under the bot's voice, must not start their count again.
-        return (cfg.barge_in_neg_threshold + cfg.barge_in_threshold) / 2
+        return (ears.neg_threshold + ears.threshold) / 2
 
     def _echo_level(self) -> float:
         """How loud the bot's voice comes back, as a share of how loud it plays.
@@ -543,6 +548,13 @@ class LiveSession:
                 and playing.sent_all
                 and not playing.paused
                 and now > playing.deadline
+                and not (
+                    # Still sounding on the page, only later than it would have:
+                    # listening now would hear the bot as the caller.
+                    self._far
+                    and max(self._far) >= FAR_SILENT
+                    and now < playing.deadline + PLAYING_GRACE_S
+                )
             ):
                 log.info("the page never said the reply finished; going on")
                 self._finished_playing(playing)

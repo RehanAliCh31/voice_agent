@@ -8,6 +8,8 @@ words: none, a backchannel, or the bot's own.
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pytest
 
@@ -173,5 +175,42 @@ def test_a_pause_in_an_interruption_still_settles_the_reply_it_interrupted() -> 
         assert page.wait(lambda p: len(p.of("reply")) == 2, timeout=8)
         assert page.of("discard_audio") and _cut_short(services)[0]
         assert session.interruptions == 1
+    finally:
+        session.close()
+
+
+def test_the_page_playing_a_reply_to_a_button_is_not_taken_for_the_caller() -> None:
+    # A reply to Yes or the keypad plays through the page's own player while
+    # the session listens; the page reports how loud, as it does for its own.
+    services = services_for([("stop please", "en")], [Reply(text="Stopping.")])
+    page = Page()
+    session = open_session(services, page)
+    try:
+        speak(session, tone(1500, ECHO), quiet(300), far=PLAYING)
+        assert drained(session)
+        assert page.states() == ["listening"]  # its echo began nothing
+        speak(session, _mix(tone(1000, CALLER), tone(1000, ECHO)), quiet(700), far=PLAYING)
+        assert page.wait(lambda p: "user_speaking" in p.states())  # the caller still does
+    finally:
+        session.close()
+
+
+def test_a_reply_the_page_is_still_playing_is_not_taken_for_finished() -> None:
+    # A suspended or hidden tab plays late: past the reply's deadline, the
+    # page still says it is playing, and the session does not listen yet.
+    services = services_for(
+        [("what is my balance", "en")], [Reply(text="Fine.")], playback_margin_s=0
+    )
+    page = Page(auto_finish=False)
+    session = open_session(services, page)
+    try:
+        _asked(page, session, 1)
+        assert page.wait(lambda p: "audio_end" in p.kinds())
+        for _ in range(4):  # well past its deadline, still sounding
+            speak(session, quiet(300), far=PLAYING)
+            time.sleep(0.3)
+        assert page.states()[-1] == "agent_speaking"
+        speak(session, quiet(600), far=0.0)  # the page went quiet without saying so
+        assert settle(page, "listening")
     finally:
         session.close()

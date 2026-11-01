@@ -538,6 +538,22 @@
     }
   };
 
+  /**
+   * Another of the bot's sounds -- a reply to a button, played by the page's
+   * own player -- through the same output as the live replies, so the
+   * service hears how loud it is and does not take its echo for the caller.
+   */
+  LiveClient.prototype.route = function (element) {
+    if (!this.context || !this.output || !this.context.createMediaElementSource) {
+      return;
+    }
+    try {
+      this.context.createMediaElementSource(element).connect(this.output);
+    } catch (error) {
+      // Already routed, or a browser that refuses: it plays as it was.
+    }
+  };
+
   /** True while any of the bot's audio is sounding. */
   LiveClient.prototype.sounding = function () {
     return Boolean(this.active);

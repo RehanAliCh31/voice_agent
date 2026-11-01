@@ -81,6 +81,7 @@ function liveClient() {
 function onLiveState(name) {
   if (name === "idle") {
     state.live = false;
+    state.route = null;
     // The page's own barge-in detector is for push-to-talk; it comes back.
     if (state.vad) {
       state.vad.enabled = el.vadToggle.checked;
@@ -92,6 +93,11 @@ function onLiveState(name) {
     return;
   }
   state.live = true;
+  state.route = function (element) {
+    if (live) {
+      live.route(element);
+    }
+  };
   if (state.vad) {
     state.vad.enabled = false; // the service decides barge-in now
   }
