@@ -303,12 +303,23 @@ Urdu), the settings, and how to find out why a call failed are in
 
 ---
 
+## Hands-free
+
+One click on the microphone starts a conversation: the bot answers when you
+stop speaking, stops when you talk over it, and asks after a long silence.
+Another click ends it. Browsers without AudioWorklet keep push-to-talk. How
+it works and how to tune it are in [HANDS_FREE.md](HANDS_FREE.md); what it
+was measured to do, and what needs deciding, in [REPORT.md](REPORT.md).
+
+---
+
 ## The API
 
 | Endpoint | Purpose |
 |---|---|
 | `POST /v1/converse` | Audio in, a whole turn out. |
 | `POST /v1/chat` | The same turn, typed instead of spoken. |
+| `WS /v1/live` | A hands-free conversation: microphone audio in; its state, transcripts and reply audio out. |
 | `POST /v1/confirm` | Agree to the pending action. |
 | `POST /v1/cancel` | Decline it. |
 | `POST /v1/reset` | Restore the demo balances; keep the audit log. |
@@ -340,7 +351,8 @@ means the model is reaching for figures it was not given.
 | `src/voicebot/bank/` | The bank in PostgreSQL and in SQLite, the ledger, the audit log, the seed data |
 | `src/voicebot/bank/migrations/` | The PostgreSQL schema, as numbered SQL files applied in order |
 | `src/voicebot/assistant/` | The hands-free assistant: wake word, VAD, both recognisers, the model, both voices, the state machine |
-| `scripts/` | `migrate_sqlite_to_postgres.py`: copies the SQLite bank across and proves the copy; `voice_turn.py`: a full assistant turn per language |
+| `src/voicebot/live/` | The page's hands-free session over a WebSocket: endpointing, barge-in, its state machine |
+| `scripts/` | `migrate_sqlite_to_postgres.py`: copies the SQLite bank across and proves the copy; `voice_turn.py`: a full assistant turn per language; `live_benchmark.py`: the hands-free session measured end to end; `barge_in_eval.py`: barge-in measured offline, with the real VAD and recorded speech |
 | `src/voicebot/asr/` | The office recognisers, English and Urdu; the Whisper engine |
 | `src/voicebot/tts/` | The office voices, English and Urdu; VITS, and the null engine that hands synthesis to the browser |
 | `src/voicebot/pipeline/` | Orchestrator, audio plumbing, per-stage timing |
