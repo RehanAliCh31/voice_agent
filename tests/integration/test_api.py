@@ -13,6 +13,7 @@ import re
 import threading
 import time
 from collections.abc import Iterator
+from datetime import date, timedelta
 
 import numpy as np
 import pytest
@@ -669,8 +670,20 @@ def test_an_ordinary_turn_files_no_dispute(client: TestClient) -> None:
 # --- the transactions screen -------------------------------------------------
 
 
+def _last_month() -> dict[str, int]:
+    """The month the seed's "last month" charges fall in, whatever today is.
+
+    Not the current month, which the statement shows by default: the seed
+    places its other charges "this week" and "yesterday", and on the first
+    days of a month both can belong to the month before -- leaving this
+    month's statement empty.
+    """
+    end_of_last_month = date.today().replace(day=1) - timedelta(days=1)
+    return {"year": end_of_last_month.year, "month": end_of_last_month.month}
+
+
 def test_the_statement_endpoint_returns_a_month(client: TestClient) -> None:
-    body = client.get("/v1/statement").json()
+    body = client.get("/v1/statement", params=_last_month()).json()
 
     assert body["rows"]
     assert body["month_label"]
@@ -678,8 +691,16 @@ def test_the_statement_endpoint_returns_a_month(client: TestClient) -> None:
     assert body["outgoing_cents"] > 0
 
 
+def test_with_no_month_asked_for_the_statement_is_this_months(client: TestClient) -> None:
+    today = date.today()
+    body = client.get("/v1/statement").json()
+
+    assert (body["year"], body["month"]) == (today.year, today.month)
+    assert body["month_label"] == today.strftime("%B %Y")
+
+
 def test_a_statement_row_carries_what_the_screen_shows(client: TestClient) -> None:
-    row = client.get("/v1/statement").json()["rows"][0]
+    row = client.get("/v1/statement", params=_last_month()).json()["rows"][0]
 
     shown = {"id", "merchant", "account", "amount", "amount_cents", "direction", "occurred_at"}
     assert shown <= set(row)
