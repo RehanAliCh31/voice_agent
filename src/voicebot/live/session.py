@@ -402,6 +402,8 @@ class LiveSession:
             try:
                 item = self._audio.get(timeout=0.25)
             except queue.Empty:
+                if self.state is State.ENDED:
+                    return  # stopped, its last word lost to a full queue: done all the same
                 self._safe_tick()
                 continue
             if item is None or self.state is State.ENDED:
