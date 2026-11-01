@@ -520,10 +520,15 @@ class LiveSession:
         return (cfg.barge_in_neg_threshold + cfg.barge_in_threshold) / 2
 
     def _echo_level(self) -> float:
-        """How loud the bot's voice comes back, as a share of how loud it plays."""
-        if len(self._echo) < ECHO_MIN_FRAMES:
-            return float(10 ** (self.config.barge_in_echo_prior_db / 20))
-        return 2 * float(np.median(np.fromiter(self._echo, dtype=np.float64)))
+        """How loud the bot's voice comes back, as a share of how loud it plays.
+
+        Read by the turn's metrics as well as the audio thread, so under the lock.
+        """
+        with self._lock:
+            if len(self._echo) < ECHO_MIN_FRAMES:
+                return float(10 ** (self.config.barge_in_echo_prior_db / 20))
+            heard = np.fromiter(self._echo, dtype=np.float64)
+        return 2 * float(np.median(heard))
 
     def _tick(self) -> None:
         """Timers: a reply nobody said had finished, and the session's own limit."""
