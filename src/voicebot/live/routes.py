@@ -39,6 +39,7 @@ import math
 import struct
 from typing import Any
 
+import anyio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 
@@ -125,7 +126,11 @@ async def live(websocket: WebSocket) -> None:
         report(InternalError("the live connection failed", cause=exc))
     finally:
         if session is not None:
-            await run_in_threadpool(session.close)
+            # Shielded: a cancelled connection -- a server shutting down, a
+            # socket torn down before its disconnect is read -- cancels every
+            # await under it, this one too, and the session would never stop.
+            with anyio.CancelScope(shield=True):
+                await run_in_threadpool(session.close)
         # After whatever is already queued -- an error, "ended" -- which the
         # page must still be sent.
         loop.call_soon(_put, outbox, None)

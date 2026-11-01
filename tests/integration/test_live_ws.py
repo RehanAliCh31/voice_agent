@@ -8,6 +8,7 @@ import time
 from collections.abc import Iterator
 from typing import Any
 
+import anyio
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -188,6 +189,61 @@ def test_a_caller_who_drops_off_mid_turn_leaves_nothing_running(client: TestClie
         _until(ws, "state")  # listening -> user_speaking ...
     # The socket closed without a stop: the session is stopped all the same,
     # and its threads -- audio, turn, voice -- all finish.
+    finish = time.monotonic() + 5
+    while _live_threads() and time.monotonic() < finish:
+        time.sleep(0.05)
+    assert _live_threads() == []
+
+
+class _Socket:
+    """Just enough of a WebSocket for the route: a start, then nothing, for ever."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+        self.sent: list[Any] = []
+        self.started = threading.Event()
+        self._first = True
+
+    async def accept(self) -> None:
+        pass
+
+    async def receive(self) -> dict[str, Any]:
+        if self._first:
+            self._first = False
+            return {"type": "websocket.receive", "text": json.dumps({"type": "start"})}
+        self.started.set()
+        await anyio.sleep(3600)  # the caller says nothing more; the task is cancelled
+        return {"type": "websocket.disconnect"}
+
+    async def send_text(self, text: str) -> None:
+        self.sent.append(text)
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    async def close(self, code: int = 1000) -> None:
+        pass
+
+
+def test_a_connection_cancelled_mid_session_still_stops_it(client: TestClient) -> None:
+    # A server shutting down, or a connection torn down before its
+    # disconnect is read, cancels the route's task -- in a cancel scope, as
+    # Starlette and its test client do, which cancels every await under it,
+    # those in a `finally` too. Its clean-up must run all the same: before,
+    # the session was never stopped, and its audio thread waited for audio
+    # for ever.
+    from voicebot.live.routes import live
+
+    socket = _Socket(client.app)
+
+    async def run() -> None:
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(live, socket)
+            while not socket.started.is_set():
+                await anyio.sleep(0.01)
+            tasks.cancel_scope.cancel()
+
+    anyio.run(run)
     finish = time.monotonic() + 5
     while _live_threads() and time.monotonic() < finish:
         time.sleep(0.05)
