@@ -166,10 +166,13 @@ class LiveConfig(_Strict):
     # chunk of microphone audio. While it plays, speech counts only if the
     # microphone is this many dB louder than the bot's own voice coming back
     # -- what the echo was measured to be on this call, or `echo_prior_db`
-    # below the playback until it has been.
+    # below the playback until it has been -- and 6 dB more when the browser
+    # says it is not cancelling echo. Chosen on real speech and the real VAD
+    # (scripts/barge_in_eval.py): no false stop in 30 replies down to -20 dB
+    # of echo; a caller as loud as the bot, or 10 dB quieter, stops it.
     barge_in_echo_gate: bool = True
-    barge_in_echo_margin_db: float = Field(default=10.0, ge=0, le=40)
-    barge_in_echo_prior_db: float = Field(default=-20.0, ge=-60, le=0)
+    barge_in_echo_margin_db: float = Field(default=6.0, ge=0, le=40)
+    barge_in_echo_prior_db: float = Field(default=-25.0, ge=-60, le=0)
     # An interruption no longer than this whose words are only "mm-hmm",
     # "ok", "جی" ... was not one: the reply carries on where it stopped. So
     # does one with no words at all, however long, and one whose words are

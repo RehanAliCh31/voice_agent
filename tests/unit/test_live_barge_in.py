@@ -26,7 +26,7 @@ from voicebot.agent.loop import HEARD_ONLY
 from voicebot.llm.base import Reply
 
 SENTENCE = (tone(900), quiet(700))
-PLAYING = 0.5  # how loud the page says it plays the bot (RMS, full scale 1)
+PLAYING = 0.9  # how loud the page says it plays the bot (RMS, full scale 1)
 ECHO = 4500  # the bot coming back through the microphone: sure speech, and quiet
 CALLER = 30000  # the caller speaking over it
 

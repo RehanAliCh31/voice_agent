@@ -90,8 +90,10 @@ FAR_WINDOW_CHUNKS = 25
 # Below this (RMS, full scale 1) the page is playing nothing.
 FAR_SILENT = 1e-3
 # How the bot's voice comes back on this call: mic loudness over playback
-# loudness, for the frames of the last ~10 s of its speech that nobody spoke
-# over. Their 90th percentile is the echo the gate expects.
+# loudness, for the frames of the last ~10 s of its speech that the gate held
+# back -- never those loud enough to be the caller, who would otherwise teach
+# the gate to ignore them. Twice their median is the echo the gate expects: a
+# middle that a burst of the caller's own voice cannot drag up.
 ECHO_FRAMES = 300
 ECHO_MIN_FRAMES = 30
 # However loud the echo, speech as loud as the playback itself counts.
@@ -500,20 +502,27 @@ class LiveSession:
             return prob  # nothing is playing: nothing to come back
         mic = float(np.sqrt(np.mean((frame.astype(np.float64) / 32768) ** 2)))
         ratio = mic / far
-        if self._barge.phase == "waiting" and self._barge.speech_ms == 0:
-            self._echo.append(ratio)  # nobody is speaking over it: this is how it comes back
-        margin = 10 ** (self.config.barge_in_echo_margin_db / 20)
-        if ratio < min(ECHO_CAP, self._echo_level() * margin):
-            if prob >= self.config.barge_in_threshold:
-                self.echo_gated += 1
-            return 0.0
-        return prob
+        margin_db = self.config.barge_in_echo_margin_db
+        if self.mic.get("echoCancellation") is False:
+            margin_db += 6  # the browser is not cancelling it: it comes back louder, and less evenly
+        if ratio >= min(ECHO_CAP, self._echo_level() * 10 ** (margin_db / 20)):
+            return prob  # clearly louder than the bot coming back: it may be the caller
+        self._echo.append(ratio)  # held back: this is how the bot comes back
+        cfg = self.config
+        if prob < cfg.barge_in_neg_threshold:
+            return prob  # not speech either way: counts as the pause it is
+        if prob >= cfg.barge_in_threshold:
+            self.echo_gated += 1
+        # Speech, but no louder than the echo: it neither counts towards an
+        # interruption nor ends one being counted -- the caller's softer
+        # syllables, under the bot's voice, must not start their count again.
+        return (cfg.barge_in_neg_threshold + cfg.barge_in_threshold) / 2
 
     def _echo_level(self) -> float:
         """How loud the bot's voice comes back, as a share of how loud it plays."""
         if len(self._echo) < ECHO_MIN_FRAMES:
             return float(10 ** (self.config.barge_in_echo_prior_db / 20))
-        return float(np.percentile(np.fromiter(self._echo, dtype=np.float64), 90))
+        return 2 * float(np.median(np.fromiter(self._echo, dtype=np.float64)))
 
     def _tick(self) -> None:
         """Timers: a reply nobody said had finished, and the session's own limit."""
