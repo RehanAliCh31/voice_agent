@@ -323,7 +323,9 @@ def test_a_recording_the_backup_made_is_not_kept_as_the_main_voice() -> None:
 def test_a_reply_is_cut_short_first_then_into_sentences() -> None:
     engine = EndpointsTTSEngine({"en": _Voice(), "ur": _Voice()})  # type: ignore[arg-type]
     pieces = engine.pieces("Your savings balance is $19,020.00. Anything else today?", "en")
-    assert pieces[0] == "Your savings balance is"  # the voice's first_chunk_words: 4
+    # Short -- near the voice's first_chunk_words, 4 -- and ending where a
+    # phrase does: not on "is", which was said as the end of a sentence.
+    assert pieces[0] == "Your savings balance"
     assert " ".join(pieces) == "Your savings balance is $19,020.00. Anything else today?"
 
 
