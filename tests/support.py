@@ -20,13 +20,43 @@ import os
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from datetime import datetime, tzinfo
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from voicebot.bank.base import Bank
 from voicebot.bank.sqlite_bank import SqliteBank
 
 TESTING_POSTGRES = os.environ.get("VOICEBOT_TEST_DATABASE", "sqlite").lower() == "postgres"
+
+# Wednesday 17 June 2026, noon: inside its week and inside its month, so every
+# period the seed names holds exactly what the seed put in it -- "last month"
+# only last month's charges, "today" none of them. Neither is true on the
+# calendar: early in a month "this week" and "yesterday" can belong to the
+# month before, and on a Monday "this week" begins today.
+MID_MONTH = datetime(2026, 6, 17, 12, 0)
+
+
+def pin_the_clock(monkeypatch: pytest.MonkeyPatch, now: datetime) -> None:
+    """Make the seed and the bank read `now` as the time, for one test.
+
+    Both ask datetime.now(): the seed to date its spending, the bank to stamp
+    a new row and to work out what a period covers. Pinned before the bank is
+    opened, they agree on a moment the test chose rather than the calendar.
+    """
+
+    class Pinned(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:  # type: ignore[override]
+            return now
+
+    modules = ["voicebot.bank.seed", "voicebot.bank.sqlite_bank"]
+    if TESTING_POSTGRES:
+        modules.append("voicebot.bank.postgres_bank")
+    for module in modules:
+        monkeypatch.setattr(f"{module}.datetime", Pinned)
 
 
 def _test_conninfo(**overrides: str) -> str:

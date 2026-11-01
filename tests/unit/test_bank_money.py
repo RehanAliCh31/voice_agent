@@ -31,6 +31,8 @@ def test_the_seeded_cards_and_bills_are_listed(bank: SqliteBank) -> None:
     assert "electricity" in {bill.name for bill in bank.bills()}
 
 
+# Mid-month because on a Monday the seed's "this week" charges are today's.
+@pytest.mark.mid_month
 def test_transfer_moves_money_and_writes_a_ledger_row(bank: SqliteBank) -> None:
     remaining = bank.transfer(5_000, "sarah", "checking")
     assert remaining == 243_350
@@ -290,23 +292,28 @@ def test_a_transfer_to_a_known_payee_still_works(bank: SqliteBank) -> None:
 # reads what was actually said.
 
 
+# Mid-month because on the first days of a month everything the seed spent
+# can be last month's, and this month's statement is empty.
+@pytest.mark.mid_month
 def test_a_statement_holds_the_months_movements(bank: SqliteBank) -> None:
-    now = datetime.now()
+    now = support.MID_MONTH
     statement = bank.statement(now.year, now.month)
 
     assert statement.rows
     assert all(row.occurred_at.startswith(now.strftime("%Y-%m")) for row in statement.rows)
 
 
+@pytest.mark.mid_month
 def test_a_statement_is_newest_first(bank: SqliteBank) -> None:
-    now = datetime.now()
+    now = support.MID_MONTH
     stamps = [row.occurred_at for row in bank.statement(now.year, now.month).rows]
 
     assert stamps == sorted(stamps, reverse=True)
 
 
+@pytest.mark.mid_month
 def test_a_statement_totals_both_directions(bank: SqliteBank) -> None:
-    now = datetime.now()
+    now = support.MID_MONTH
     bank.deposit(25_000, "checking", "manual top-up")
 
     statement = bank.statement(now.year, now.month)
@@ -343,18 +350,23 @@ def test_an_impossible_month_is_refused(bank: SqliteBank) -> None:
 # disagreed about the same account.
 
 
+# Mid-month because early in a month "this week" and "yesterday" can be part
+# of last month, and then last month holds every charge the seed made.
+@pytest.mark.mid_month
 def test_transactions_can_be_limited_to_a_period(bank: SqliteBank) -> None:
     last_month = {t.merchant for t in bank.transactions(limit=20, period="last month")}
     this_week = {t.merchant for t in bank.transactions(limit=20, period="this week")}
 
     assert last_month == {"amazon", "tesco"}
     # Seeded into this week by name. Yesterday's charge is deliberately not
-    # asserted either way: whether it falls in this week depends on what day
-    # the suite runs, and a test that fails on Mondays is not a test.
+    # asserted either way: whether it falls in this week depends on the day
+    # of the week, which is not what this test is about.
     assert {"netflix", "uber"} <= this_week
     assert not last_month & this_week
 
 
+# Mid-month because on a Monday the seed's "this week" charges are today's.
+@pytest.mark.mid_month
 def test_a_period_with_nothing_in_it_is_empty_rather_than_wrong(bank: SqliteBank) -> None:
     # Nothing was charged today in the seed. An empty list is the honest
     # answer; falling back to "the newest five" would put last month's

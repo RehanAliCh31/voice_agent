@@ -70,7 +70,10 @@ testpaths = ["tests"]
 # They are deselected by default so the suite runs anywhere, offline, in
 # seconds. Run them deliberately with: pytest -m live
 addopts = "-q -m 'not live'"
-markers = ["live: needs the real LLM endpoint; deselected by default"]
+markers = [
+    "live: needs the real LLM endpoint; deselected by default",
+    "mid_month: the bank's clock reads tests.support.MID_MONTH, not the calendar",
+]
 
 [tool.ruff]
 line-length = 100

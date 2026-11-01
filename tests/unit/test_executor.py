@@ -319,6 +319,8 @@ def test_a_card_confirmation_sources_no_amount(executor: ToolExecutor) -> None:
 # --- reading the ledger ------------------------------------------------------
 
 
+# Mid-month because early in a month last month can hold every seeded charge.
+@pytest.mark.mid_month
 def test_list_transactions_reports_rows(executor: ToolExecutor) -> None:
     out = executor.execute(call("list_transactions", period="last month", limit=5))
 
@@ -1014,6 +1016,8 @@ def test_a_refusal_to_list_sources_no_figures(executor: ToolExecutor) -> None:
     assert out.sourced_cents == ()
 
 
+# Mid-month because early in a month last month can hold every seeded charge.
+@pytest.mark.mid_month
 def test_listing_a_period_returns_only_that_period(executor: ToolExecutor) -> None:
     out = executor.execute(call("list_transactions", account="checking", period="last month"))
 
@@ -1034,6 +1038,8 @@ def test_an_unknown_period_lists_the_ones_that_work(executor: ToolExecutor) -> N
     assert "this week" in out.result["error"]
 
 
+# Mid-month because on a Monday the seed's "this week" charges are today's.
+@pytest.mark.mid_month
 def test_a_period_with_nothing_in_it_still_names_itself(executor: ToolExecutor) -> None:
     out = executor.execute(call("list_transactions", account="checking", period="today"))
 
