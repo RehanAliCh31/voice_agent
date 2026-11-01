@@ -69,6 +69,38 @@ def test_turn_after_turn_with_no_button_pressed() -> None:
         session.close()
 
 
+def test_the_words_are_recognised_while_the_end_is_still_being_waited_for() -> None:
+    services = services_for([("what is my balance", "en")], [Reply(text="Which account?")])
+    page = Page()
+    session = open_session(services, page)
+    try:
+        speak(session, *SENTENCE)
+        assert page.wait(lambda p: bool(p.of("reply")))
+        # One request, begun once the silence was as long as the turn keeps
+        # of it, on exactly the audio the turn ended with.
+        assert len(services.asr.calls) == 1 and session.early_heard == 1
+        assert page.of("transcript")[0]["text"] == "what is my balance"
+    finally:
+        session.close()
+
+
+def test_words_recognised_early_are_thrown_away_when_more_is_said() -> None:
+    services = services_for(
+        [("what is", "en"), ("what is my savings balance", "en")], [Reply(text="Fine.")]
+    )
+    page = Page()
+    session = open_session(services, page)
+    try:
+        # A pause long enough to start on the words, too short to end the turn.
+        speak(session, tone(600), quiet(320), tone(600), quiet(700))
+        assert page.wait(lambda p: bool(p.of("reply")))
+        assert [e["text"] for e in page.of("transcript")] == ["what is my savings balance"]
+        first, second = services.asr.calls
+        assert second > first  # the whole of it, not the half heard early
+    finally:
+        session.close()
+
+
 def test_every_turn_is_measured() -> None:
     services = services_for([("hello", "en")], [Reply(text="Hi.")])
     page = Page()

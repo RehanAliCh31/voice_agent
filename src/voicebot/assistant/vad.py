@@ -30,7 +30,7 @@ from voicebot.assistant.config import VadConfig
 FRAME = 512  # samples: 32 ms at 16 kHz, the window Silero was trained on
 FRAME_MS = 32
 _CONTEXT = 64  # samples of the previous frame Silero sees with each new one
-_KEEP_TRAILING_MS = 200  # of the silence that ended an utterance
+KEEP_TRAILING_MS = 200  # of the silence that ended an utterance
 
 
 class SileroVad:
@@ -129,6 +129,12 @@ class Endpointer:
         """How long the silence after the last voiced frame has lasted."""
         return self._silence_ms
 
+    def heard_so_far(self) -> np.ndarray:
+        """The utterance so far, pre-roll and silence included, while it goes on."""
+        if self._phase != "speech" or not self._audio:
+            return np.zeros(0, dtype=np.int16)
+        return np.concatenate(self._audio).astype(np.int16)
+
     def start(self, wait_s: float | None = None, min_speech_ms: int | None = None) -> None:
         """Begin listening for speech. `wait_s` None waits for ever."""
         self._phase = "waiting"
@@ -186,7 +192,7 @@ class Endpointer:
         elif prob < cfg.neg_threshold:
             self._silence_ms += FRAME_MS
         if self._silence_ms >= cfg.end_silence_ms:
-            drop = max(0, (self._silence_ms - _KEEP_TRAILING_MS) // FRAME_MS)
+            drop = max(0, (self._silence_ms - KEEP_TRAILING_MS) // FRAME_MS)
             return self._finish("silence", drop)
         if len(self._audio) * FRAME_MS >= cfg.max_utterance_s * 1000:
             return self._finish("max_length", 0)

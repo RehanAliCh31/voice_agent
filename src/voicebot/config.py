@@ -149,6 +149,11 @@ class LiveConfig(_Strict):
     # people off mid-thought; speech that resumes before the reply is heard
     # joins the same turn whatever this is (see HANDS_FREE.md).
     end_silence_ms: int = Field(default=500, ge=200, le=2000)
+    # Recognition starts once the silence is as long as an utterance keeps of
+    # it (~0.2 s), on what will be the utterance if nothing more is said: by
+    # the time the end is certain, the words are mostly in. Said more, and it
+    # is thrown away.
+    speculative_asr: bool = True
     max_utterance_s: float = Field(default=20.0, gt=1)
     # While the bot is speaking, what may interrupt it is surer, so its own
     # voice coming back through the microphone, a cough or a chair do not:

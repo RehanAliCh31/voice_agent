@@ -39,6 +39,7 @@ what the caller has and has not been told.
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import contextvars
 import dataclasses
 import queue
@@ -58,6 +59,7 @@ from voicebot.asr.base import ASRUnavailable
 from voicebot.assistant.config import VadConfig
 from voicebot.assistant.vad import (
     FRAME,
+    KEEP_TRAILING_MS,
     Endpointer,
     NoSpeech,
     SpeechStarted,
@@ -150,6 +152,9 @@ class _Turn:
     # The reply it interrupted, if it began by interrupting one.
     interrupted: _Playing | None = None
     produced_audio: bool = False
+    # Its words, recognised while the silence that ended it was still being
+    # waited out, on exactly this audio.
+    heard: concurrent.futures.Future[Any] | None = None
 
 
 @dataclass
@@ -225,6 +230,9 @@ class LiveSession:
         self._far: deque[float] = deque(maxlen=FAR_WINDOW_CHUNKS)
         self._echo: deque[float] = deque(maxlen=ECHO_FRAMES)
         self.echo_gated = 0  # frames of speech over the bot taken for its echo
+        # Recognition started early, on the utterance as it would end now.
+        self._early: tuple[np.ndarray, concurrent.futures.Future[Any]] | None = None
+        self.early_heard = 0  # turns whose words were in before their end was certain
         self.false_barge_ins = 0
         self.mic: dict[str, Any] = {}  # what the browser says it applied
         self._turns = 0
@@ -425,6 +433,8 @@ class LiveSession:
             if self.state is State.AGENT_SPEAKING and self._active is self._barge:
                 prob = self._echo_gate(frame, prob)
             event = self._active.process(frame, prob)
+            if self.state is State.USER_SPEAKING:
+                self._recognise_early()
             if event is None:
                 return
             if isinstance(event, SpeechStarted):
@@ -433,6 +443,44 @@ class LiveSession:
                 self._utterance_ended(event.utterance)
             elif isinstance(event, NoSpeech):
                 self._no_speech()
+
+    def _recognise_early(self) -> None:
+        """Start on the words before the end is certain. Under the lock.
+
+        Once the silence is as long as an utterance keeps of it, what has
+        been heard is exactly what the utterance will be if nothing more is
+        said. Recognised now, its words are mostly in by the time the end is
+        certain; if more is said, they are thrown away.
+        """
+        silence = self._active.silence_ms
+        if self._early is not None and silence < KEEP_TRAILING_MS:
+            self._early = None  # they went on: that was not the end
+        if (
+            self._early is not None
+            or not self.config.speculative_asr
+            or self._merge is not None
+            or self._active.phase != "speech"
+            or silence < KEEP_TRAILING_MS
+        ):
+            return
+        audio = self._active.heard_so_far()
+        future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        language = self.services.sessions.get(self.session_id).conversation.language
+
+        def recognise() -> None:
+            if not future.set_running_or_notify_cancel():
+                return
+            try:
+                future.set_result(
+                    self.services.asr.transcribe(
+                        AudioBuffer(audio.astype(np.float32) / 32768, RATE), language=language
+                    )
+                )
+            except BaseException as exc:  # handed to the turn, which says what it means
+                future.set_exception(exc)
+
+        self._early = (audio, future)
+        self._spawn(lambda: _in_context(self.session_id, recognise), "live-hear")
 
     def _echo_gate(self, frame: np.ndarray, prob: float) -> float:
         """Speech over the bot counts only if louder than the bot coming back. Under the lock.
@@ -570,6 +618,8 @@ class LiveSession:
             audio = np.concatenate([self._merge, gap, audio])
             self._merge = None
         interrupted, self._interrupted = self._interrupted, None
+        early, self._early = self._early, None
+        heard = early[1] if early is not None and np.array_equal(early[0], audio) else None
         self._turns += 1
         turn = _Turn(
             number=self._turns,
@@ -579,6 +629,7 @@ class LiveSession:
             silence_ms=silence,
             interrupted=interrupted,
             started_at=self.clock(),
+            heard=heard,
         )
         self._turn = turn
         self._to(State.THINKING)
@@ -626,10 +677,14 @@ class LiveSession:
         conversation = services.sessions.get(self.session_id).conversation
         started = self.clock()
         try:
-            transcript = services.asr.transcribe(
-                AudioBuffer(turn.audio.astype(np.float32) / 32768, RATE),
-                language=conversation.language,
-            )
+            if turn.heard is not None:
+                self.early_heard += 1
+                transcript = turn.heard.result()
+            else:
+                transcript = services.asr.transcribe(
+                    AudioBuffer(turn.audio.astype(np.float32) / 32768, RATE),
+                    language=conversation.language,
+                )
         except ASRUnavailable:
             with self._lock:
                 if self._current(turn):
@@ -1041,6 +1096,11 @@ class LiveSession:
                     connect()
                 except Exception as exc:  # warming is a nicety; the turn connects anyway
                     log.info("could not warm a connection: %s", type(exc).__name__)
+
+
+def _in_context(session_id: str, work: Callable[[], None]) -> None:
+    with call_context(session_id):
+        work()
 
 
 def _payload_audio(payload: Any) -> AudioBuffer | None:
