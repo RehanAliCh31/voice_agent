@@ -299,6 +299,55 @@ def test_the_first_chunk_goes_after_a_few_words_when_there_is_no_break() -> None
     ]
 
 
+@pytest.mark.parametrize(
+    ("first_words", "text", "first"),
+    [
+        # From a test call: cut after five words, the first piece ended on
+        # "is" and was spoken as a sentence of its own.
+        (
+            5,
+            "Your checking account balance is $2,443.50. Let me know if you need anything else! ",
+            "Your checking account balance",
+        ),
+        # Never on "the", "your", "of", "to": a piece ends where a phrase does,
+        # here before "for" -- the card goes with what names it.
+        (
+            5,
+            "I can freeze the card ending 4417 for you right away if you like. ",
+            "I can freeze the card ending 4417",
+        ),
+        (
+            5,
+            "The internet bill of forty dollars is due on the fifth of next month. ",
+            "The internet bill of forty dollars",
+        ),
+        # Urdu: never before a postposition or an auxiliary, never after the
+        # genitive کا / کی / کے.
+        (
+            8,
+            "میرے پاس آپ کے دو اکاؤنٹس کی تفصیل موجود ہے اور میں ابھی بتا سکتی ہوں۔ ",
+            "میرے پاس آپ کے دو اکاؤنٹس کی تفصیل موجود ہے",
+        ),
+        (
+            8,
+            "پاکستان کا دارالحکومت اسلام آباد ہے جو ایک خوبصورت شہر ہے۔ ",
+            "پاکستان کا دارالحکومت اسلام آباد ہے",
+        ),
+        # Nowhere to break it near its eighth word: said whole, not cut on کی.
+        (
+            8,
+            "کریڈٹ اسکور آپ کے قرض کی واپسی کی صلاحیت کا نمبر ہے۔ میں اسے سمجھ سکتی ہوں۔ ",
+            "کریڈٹ اسکور آپ کے قرض کی واپسی کی صلاحیت کا نمبر ہے۔",
+        ),
+    ],
+)
+def test_the_first_piece_ends_where_a_phrase_does(first_words: int, text: str, first: str) -> None:
+    stream = SentenceStream(first_words=first_words)
+    pieces = stream.feed(text) + stream.flush()
+    assert pieces[0] == first
+    assert " ".join(pieces) == text.strip()
+
+
 def test_early_pieces_grow_so_each_is_ready_before_the_last_one_ends() -> None:
     stream = SentenceStream(first_words=4, growth=2)
     words = " ".join(f"w{n}" for n in range(40)) + " "

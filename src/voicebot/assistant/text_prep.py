@@ -385,6 +385,45 @@ _CLAUSE_BREAK = re.compile(r"[,،;؛:](?=\s)")
 _WORD = re.compile(r"\S+(?=\s)")
 _EARLY_MAX_WORDS = 24  # beyond this an early piece is no shorter than a sentence
 
+# Where an early piece may end. Each piece is spoken as an utterance of its
+# own, falling at its end, so one cut mid-phrase sounds broken: in a test call
+# "Your checking account balance is" was said as a sentence, then the amount.
+# An early piece ends within _EARLY_SLACK words of its target, at the best
+# phrase break there: before a new clause, before a verb or a preposition,
+# after an Urdu postposition or verb -- never on a word that cannot end a
+# phrase, and never before one that cannot begin one.
+_EARLY_SLACK = 3
+_NEVER_LAST = frozenset(
+    """
+    the a an your my his her its our their this these those of to for with in on at by
+    from about into onto and or but nor is are was were be been am will would can could
+    should shall may might must has have had do does did not no very so than as if
+    because which who whose that
+    کا کی کے اور یا کہ جو جس جب اگر تو ایک یہ وہ اس ان بہت
+    """.split()
+)
+_NEVER_FIRST = frozenset("کا کی کے میں سے پر کو نے تک ہے ہیں تھا تھی تھے گا گی گے ہوں ہو".split())
+_STARTS_CLAUSE = frozenset(
+    """
+    and but or so because which who whose where when while if although though unless
+    until since
+    اور لیکن مگر کیونکہ تاکہ جو جس جب اگر کہ
+    """.split()
+)
+_STARTS_PHRASE = frozenset(
+    """
+    to for with in on at by from about into after before during is are was were will
+    would can could should has have had
+    """.split()
+)
+_ENDS_PHRASE = frozenset(
+    """
+    میں سے پر کو نے تک ہے ہیں تھا تھی تھے گا گی گے ہوں ہو گیا گئی گئے رہا رہی رہے
+    سکتا سکتی سکتے چاہیے
+    """.split()
+)
+_ENDS_SENTENCE = tuple(".?!۔؟")
+
 
 class SentenceStream:
     """Cuts streamed text into sentences as soon as each one is complete.
@@ -452,9 +491,27 @@ class SentenceStream:
             if len(text[: mark.start()].split()) >= 3:
                 return mark.end()
         words = list(_WORD.finditer(text))
-        if len(words) >= limit:
-            return words[limit - 1].end()
-        return None
+        ends = [
+            i for i, w in enumerate(words) if w.group().rstrip(_CLOSERS).endswith(_ENDS_SENTENCE)
+        ]
+        if ends and ends[0] + 1 <= limit:
+            return None  # a sentence short enough to go whole: its end cuts it
+        if not ends and len(words) <= limit + _EARLY_SLACK:
+            return None  # what comes next decides where the phrase ends
+        last = ends[0] if ends else len(words) - 1  # leave at least a word of the sentence
+        best: tuple[float, int] | None = None
+        for n in range(max(3, limit - _EARLY_SLACK), min(limit + _EARLY_SLACK, last) + 1):
+            rank = _break_rank(words[n - 1].group(), words[n].group())
+            if rank is None:
+                continue
+            score = rank - 0.5 * abs(n - limit)
+            if best is None or score > best[0]:
+                best = (score, n)
+        if best is None:
+            if ends and ends[0] + 1 <= limit + 2 * _EARLY_SLACK:
+                return None  # nowhere to break it: a sentence this long goes whole
+            return words[limit - 1].end() if len(words) >= limit else None
+        return words[best[1] - 1].end()
 
     def flush(self) -> list[str]:
         out: list[str] = []
@@ -523,6 +580,22 @@ class SentenceStream:
         if token in _TITLES or (len(token) == 1 and token.isalpha()):
             return "title"  # an initial, like a title, comes before a name
         return "abbreviation" if token in _ABBREVIATIONS else None
+
+
+def _break_rank(before: str, after: str) -> int | None:
+    """How good a place to end a piece between two words is; None if it must not be."""
+    a, b = _bare(before), _bare(after)
+    if a in _NEVER_LAST or b in _NEVER_FIRST:
+        return None
+    if b in _STARTS_CLAUSE:
+        return 3
+    if b in _STARTS_PHRASE or a in _ENDS_PHRASE:
+        return 2
+    return 0
+
+
+def _bare(word: str) -> str:
+    return word.strip(".,;:!?\"'()[]،؛۔؟”’»").lower()
 
 
 def _speakable(sentence: str) -> bool:
