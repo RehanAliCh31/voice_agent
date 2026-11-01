@@ -240,6 +240,9 @@ function sentence(key, language) {
 
 /** Which of the bot's own sentences a failed request is told in. */
 function failureKey(error) {
+  if (error && error.key) {
+    return error.key; // the failure names its own sentence
+  }
   var kind = error && error.kind;
   if (kind === "timeout") {
     return "timed_out";
@@ -263,7 +266,16 @@ function explain(error) {
 // The sentences the page may have to say when the service cannot, recorded
 // by the service in the bot's own voice and kept here in advance -- a lost
 // connection is exactly when they cannot be fetched.
-var KEPT_CLIPS = ["connection_lost", "timed_out", "internal", "voice_unavailable"];
+var KEPT_CLIPS = [
+  "connection_lost",
+  "timed_out",
+  "internal",
+  "voice_unavailable",
+  "speech_unavailable",
+  "microphone_refused",
+  "microphone_unavailable",
+  "microphone_lost",
+];
 
 function loadClips() {
   KEPT_CLIPS.forEach(function (key) {

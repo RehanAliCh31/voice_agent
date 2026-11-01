@@ -174,6 +174,21 @@ connection_lost:
   en: "Sorry — I've lost the connection. Please check your network and try again."
   ur: "معذرت، رابطہ منقطع ہو گیا ہے۔ براہِ کرم اپنا نیٹ ورک دیکھیں اور دوبارہ کوشش کریں۔"
 
+# Said by the page itself when the browser would not give it the microphone.
+microphone_refused:
+  en: "The microphone wasn't allowed, so your voice isn't reaching me. You can still type below."
+  ur: "مائیکروفون کی اجازت نہیں ملی، اس لیے آواز نہیں آ رہی۔ آپ نیچے لکھ کر بات کر سکتے ہیں۔"
+
+# Said by the page itself when there is no microphone it can open.
+microphone_unavailable:
+  en: "The microphone isn't available just now. You can still type below."
+  ur: "اس وقت مائیکروفون دستیاب نہیں ہے۔ آپ نیچے لکھ کر بات کر سکتے ہیں۔"
+
+# Said by the page itself when the microphone went away mid-conversation.
+microphone_lost:
+  en: "The microphone was disconnected. Tap the microphone to start again."
+  ur: "مائیکروفون منقطع ہو گیا ہے۔ دوبارہ شروع کرنے کے لیے مائیکروفون دبائیں۔"
+
 # Said by the page itself when a reply takes too long to arrive.
 timed_out:
   en: "Sorry — that took too long. Please try again."

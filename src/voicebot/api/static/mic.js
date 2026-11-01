@@ -146,7 +146,7 @@ function onLiveEvent(event) {
       }
       break;
     case "error":
-      fail(event.message);
+      fail(event.key ? { kind: "service", key: event.key } : event.message);
       break;
     default:
       break;
@@ -157,16 +157,15 @@ function onLiveLevel(level) {
   el.levelFill.style.width = Math.min(100, Math.round(level * 400)) + "%";
 }
 
+// Each in the conversation's language, said in the bot's own recorded voice.
+var LIVE_ERRORS = {
+  connection_lost: "connection_lost",
+  microphone_refused: "microphone_refused",
+  microphone_lost: "microphone_lost",
+};
+
 function onLiveError(kind) {
-  if (kind === "connection_lost") {
-    fail({ kind: "network" });
-  } else if (kind === "microphone_refused") {
-    fail("The microphone was refused. You can still type below.");
-  } else if (kind === "microphone_lost") {
-    fail("The microphone was disconnected. Tap to start again.");
-  } else {
-    fail("The microphone could not be opened. You can still type below.");
-  }
+  fail({ kind: kind, key: LIVE_ERRORS[kind] || "microphone_unavailable" });
 }
 
 /** End the live conversation, if one is running: on reset, or when the page goes. */

@@ -144,7 +144,13 @@ async def _start(services: Any, control: dict[str, Any], send: Any) -> LiveSessi
         log.error("no VAD for the live session: %s", exc)
         report(InternalError("the live session has no VAD", cause=exc))
         language = services.sessions.get(session_id).conversation.language
-        send({"type": "error", "message": say("speech_unavailable", language)})
+        send(
+            {
+                "type": "error",
+                "key": "speech_unavailable",
+                "message": say("speech_unavailable", language),
+            }
+        )
         send({"type": "ended", "reason": "no voice detection"})
         return None
     session = LiveSession(services, session_id, send, vad)

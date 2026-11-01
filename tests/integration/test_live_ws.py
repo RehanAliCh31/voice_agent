@@ -232,4 +232,5 @@ def test_no_vad_model_says_so_and_ends(client: TestClient) -> None:
     with client.websocket_connect("/v1/live") as ws:
         ws.send_text(json.dumps({"type": "start"}))
         seen = _until(ws, "ended")
-        assert _events(seen, "error")[0]["message"]
+        error = _events(seen, "error")[0]
+        assert error["message"] and error["key"] == "speech_unavailable"

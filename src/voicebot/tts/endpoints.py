@@ -64,6 +64,9 @@ FIRST_KEYS = (
     "internal",
     "connection_lost",
     "timed_out",
+    "microphone_refused",
+    "microphone_unavailable",
+    "microphone_lost",
 )
 
 
