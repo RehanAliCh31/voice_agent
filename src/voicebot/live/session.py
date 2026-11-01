@@ -504,7 +504,8 @@ class LiveSession:
         ratio = mic / far
         margin_db = self.config.barge_in_echo_margin_db
         if self.mic.get("echoCancellation") is False:
-            margin_db += 6  # the browser is not cancelling it: it comes back louder, and less evenly
+            # The browser is not cancelling it: it comes back louder, and less evenly.
+            margin_db += 6
         if ratio >= min(ECHO_CAP, self._echo_level() * 10 ** (margin_db / 20)):
             return prob  # clearly louder than the bot coming back: it may be the caller
         self._echo.append(ratio)  # held back: this is how the bot comes back
