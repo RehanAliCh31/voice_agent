@@ -383,6 +383,7 @@ _LATIN_ENDERS = ".?!"
 _CLOSERS = "\"')]”’»"
 _CLAUSE_BREAK = re.compile(r"[,،;؛:](?=\s)")
 _WORD = re.compile(r"\S+(?=\s)")
+_WORD_OR_URDU_END = re.compile(r"\S+(?=\s|$)")
 _EARLY_MAX_WORDS = 24  # beyond this an early piece is no shorter than a sentence
 
 # Where an early piece may end. Each piece is spoken as an utterance of its
@@ -487,13 +488,24 @@ class SentenceStream:
 
     def _early_cut(self, limit: int) -> int | None:
         text = self._buffer
-        for mark in _CLAUSE_BREAK.finditer(text):
-            if len(text[: mark.start()].split()) >= 3:
-                return mark.end()
-        words = list(_WORD.finditer(text))
+        # An Urdu full stop ends its sentence at once, without waiting for the
+        # next character; its word counts at once too, or a reply still being
+        # written would be cut at that full stop and the whole one before it.
+        counted = _WORD_OR_URDU_END if text.endswith(tuple(_URDU_ENDERS)) else _WORD
+        words = list(counted.finditer(text))
         ends = [
             i for i, w in enumerate(words) if w.group().rstrip(_CLOSERS).endswith(_ENDS_SENTENCE)
         ]
+        # A comma in this sentence, near enough: what follows it cannot change
+        # that, so a reply still being written is cut where the whole one is.
+        # (One in a later sentence once decided where this one was cut.)
+        reach = words[ends[0]].end() if ends else len(text)
+        for mark in _CLAUSE_BREAK.finditer(text, 0, reach):
+            before = len(text[: mark.start()].split())
+            if before > limit + _EARLY_SLACK:
+                break
+            if before >= 3:
+                return mark.end()
         if ends and ends[0] + 1 <= limit:
             return None  # a sentence short enough to go whole: its end cuts it
         if not ends and len(words) <= limit + _EARLY_SLACK:

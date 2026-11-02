@@ -350,3 +350,45 @@ def test_a_caller_who_never_finishes_does_not_stop_the_recordings_for_ever() -> 
     voices = {"en": _Voice(), "ur": _Voice()}
     engine = EndpointsTTSEngine(voices)  # type: ignore[arg-type]
     assert engine.warm(("unavailable",), busy=lambda: True, give_way_s=0.5) == 2
+
+
+@pytest.mark.parametrize(
+    ("reply", "language"),
+    [
+        ("Your savings balance is $19,020.00. Anything else today?", "en"),
+        ("I can freeze the card ending 4417 for you right away if you like.", "en"),
+        ("Yes, of course. Your checking account is open.", "en"),
+        # From the real model: the comma in its second sentence settled where
+        # the first was cut, before that sentence had been written.
+        (
+            "Pakistan was founded by Muhammad Ali Jinnah. He is known as the "
+            "Quaid-e-Azam, or Great Leader.",
+            "en",
+        ),
+        ("آپ کے چیکنگ اکاؤنٹ میں $2,483.50 ہیں اور آپ کی بچت بھی ٹھیک ہے۔ کچھ اور؟", "ur"),
+        ("پاکستان کا دارالحکومت اسلام آباد ہے جو ایک خوبصورت شہر ہے۔", "ur"),
+        # Ending just at its Urdu full stop, it was once cut there, and the whole
+        # reply before it.
+        ("میں آپ کے لیے آن لائن نیا اکاؤنٹ نہیں کھول سکتی۔ کیا میں کچھ اور کر سکتی ہوں؟", "ur"),
+    ],
+)
+def test_the_first_piece_known_early_is_the_first_piece_of_the_whole(
+    reply: str, language: str
+) -> None:
+    # The voice starts on the first piece while the model is still writing:
+    # whenever the words so far settle it, it is the piece the whole reply
+    # gives -- or the audio made for it is not used.
+    engine = EndpointsTTSEngine({"en": _Voice(), "ur": _Voice()})  # type: ignore[arg-type]
+    whole = engine.pieces(reply, language)[0]
+    settled = [
+        piece
+        for end in range(1, len(reply) + 1)
+        if (piece := engine.first_piece(reply[:end], language)) is not None
+    ]
+    assert settled, "settled before the end of the reply"
+    assert set(settled) == {whole}
+
+
+def test_nothing_is_known_of_the_first_piece_from_a_word_or_two() -> None:
+    engine = EndpointsTTSEngine({"en": _Voice(), "ur": _Voice()})  # type: ignore[arg-type]
+    assert engine.first_piece("Your savings", "en") is None
