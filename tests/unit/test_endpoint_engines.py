@@ -100,6 +100,34 @@ def test_a_stock_phrase_from_a_moment_of_noise_is_nothing_said() -> None:
     assert (heard.text, heard.segments) == ("", ())
 
 
+@pytest.mark.parametrize(
+    ("qwen", "whisper", "logprob"),
+    [
+        # Measured on two to four seconds of noise: whisper writes a full stop
+        # and doubts it; qwen3-asr makes up a word or a phrase of its own.
+        ("Okay.", ".", -0.88),
+        ("I'm not sure.", "ملتا ہے", -1.57),
+    ],
+)
+def test_noise_whisper_doubts_is_nothing_said_however_long(
+    qwen: str, whisper: str, logprob: float
+) -> None:
+    engine = EndpointsASREngine(
+        _router(Heard(qwen, "en", 200), Heard(whisper, "ur", 200, "en", logprob)), CONFIG.asr
+    )
+
+    assert engine.transcribe(_speech(seconds=2.5)).text == ""
+
+
+def test_a_long_english_sentence_is_kept_even_when_whisper_doubts_it() -> None:
+    said = "Can you show me my transactions for last week please"
+    engine = EndpointsASREngine(
+        _router(Heard(said, "en", 200), Heard(".", "ur", 200, "en", -0.9)), CONFIG.asr
+    )
+
+    assert engine.transcribe(_speech(seconds=3.0)).text == said
+
+
 def test_the_same_words_said_at_length_are_kept() -> None:
     engine = EndpointsASREngine(
         _router(Heard("Okay.", "en", 200), Heard("", "ur", 200, "en", -0.3)), CONFIG.asr
