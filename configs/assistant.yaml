@@ -59,6 +59,11 @@ asr:
 # a longer one is parted only between sentences, into parts that play far
 # longer than the next takes to make. Its answer starts ~1-2 s later than with
 # a short first piece: smoothness was asked for over that.
+# But where a reply's first sentence plays longer than its rest takes to make,
+# it is split there (request_s, request_word_s and spoken_word_s, as measured:
+# ~3.0 s a request and ~0.1 s a word to make; a word lasts ~0.365 s at speed
+# 1.15): it starts once the first sentence alone is made, and the rest is
+# ready before that ends, so nothing stops.
 # What each voice is, and where it came from: LANGUAGE_VOICE_CONFIG.md.
 agent:
   gender: female
@@ -83,6 +88,9 @@ agent:
         label: OmniVoice assistant-pk
         first_chunk_words: 0
         rest_max_words: 60
+        request_s: 3.0
+        request_word_s: 0.1
+        spoken_word_s: 0.365
         chunk_growth: 1.6
     male:
       en:
@@ -94,6 +102,9 @@ agent:
         label: OmniVoice urdu_male5, in English
         first_chunk_words: 0
         rest_max_words: 60
+        request_s: 3.0
+        request_word_s: 0.1
+        spoken_word_s: 0.365
         chunk_growth: 1.6
       ur:
         url: http://localhost:8091/v1/audio/speech
@@ -104,6 +115,9 @@ agent:
         label: OmniVoice urdu_male5
         first_chunk_words: 0
         rest_max_words: 60
+        request_s: 3.0
+        request_word_s: 0.1
+        spoken_word_s: 0.365
         chunk_growth: 1.6
   # Tried when the main voice fails, before a kept recording. The English
   # backup is on the other server, so it survives the main one going down.
@@ -119,6 +133,9 @@ agent:
         label: OmniVoice assistant-en
         first_chunk_words: 0
         rest_max_words: 60
+        request_s: 3.0
+        request_word_s: 0.1
+        spoken_word_s: 0.365
         chunk_growth: 1.6
       ur:
         url: http://localhost:8091/v1/audio/speech
@@ -129,6 +146,9 @@ agent:
         label: OmniVoice assistant-ur
         first_chunk_words: 0
         rest_max_words: 60
+        request_s: 3.0
+        request_word_s: 0.1
+        spoken_word_s: 0.365
         chunk_growth: 1.6
 
 # tts.en and tts.ur come from agent.voices above.

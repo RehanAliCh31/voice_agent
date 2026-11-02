@@ -469,3 +469,39 @@ def test_nothing_is_begun_early_for_a_reply_spoken_whole() -> None:
     # Its one piece is the whole reply, known only once the reply is: a piece
     # begun early would only hold up the voice, which makes one at a time.
     assert _whole_urdu_engine().first_piece(URDU_REPLY + " ", "ur") is None
+
+
+def _timed_urdu_engine() -> EndpointsTTSEngine:
+    # What OmniVoice was measured to cost: ~3 s a request and ~0.1 s a word
+    # to make; at speed 1.15 a word lasts ~0.365 s.
+    urdu = _Voice()
+    urdu.endpoint = TtsEndpoint(
+        url="http://t/x",
+        model="m",
+        voice="test",
+        first_chunk_words=0,
+        rest_max_words=60,
+        request_s=3.0,
+        request_word_s=0.1,
+        spoken_word_s=0.365,
+    )
+    return EndpointsTTSEngine({"en": _Voice(), "ur": urdu})  # type: ignore[arg-type]
+
+
+def test_an_urdu_reply_starts_sooner_where_its_first_sentence_covers_the_rest() -> None:
+    first = "آپ کے چیکنگ اکاؤنٹ میں دو ہزار چار سو ڈالر ہیں اور آپ کی بچت بھی بالکل ٹھیک ہے۔"
+    rest = "کیا میں کوئی اور مدد کروں؟"
+    pieces = _timed_urdu_engine().pieces(f"{first} {rest}", "ur")
+
+    # The first sentence plays longer than the rest takes to make: split
+    # there, and the reply starts once the first sentence alone is made.
+    assert pieces == [first, rest]
+
+
+def test_an_urdu_reply_stays_whole_where_a_split_would_stop_between_sentences() -> None:
+    first = "جی ہاں۔"
+    rest = "آپ کے چیکنگ اکاؤنٹ میں دو ہزار چار سو ڈالر ہیں اور آپ کی بچت بھی ٹھیک ہے۔"
+
+    pieces = _timed_urdu_engine().pieces(f"{first} {rest}", "ur")
+
+    assert pieces == [f"{first} {rest}"]

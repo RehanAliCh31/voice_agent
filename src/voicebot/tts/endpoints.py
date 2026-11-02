@@ -80,6 +80,33 @@ def _spoken_whole(endpoint: TtsEndpoint) -> bool:
     return endpoint.first_chunk_words == 0 and endpoint.rest_max_words > 0
 
 
+# How much longer the first part must play than the rest is expected to take
+# to make: the voice's time varies from request to request.
+GAPLESS_MARGIN = 1.2
+
+
+def _gapless_split(
+    sentences: list[str], language: Language, endpoint: TtsEndpoint
+) -> list[str] | None:
+    """A reply said whole, split after its first sentence(s) if nothing would stop.
+
+    The first part is heard as soon as it alone is made; the rest is made
+    while it plays. Only where it plays for longer than the rest takes to
+    make (with a margin) -- so the rest is ready before it ends -- and the
+    earliest such split, which starts the reply soonest. None: keep it whole.
+    """
+    if not (endpoint.request_s and endpoint.request_word_s and endpoint.spoken_word_s):
+        return None
+    sizes = [len(prepare_for_speech(s, language).split()) for s in sentences]
+    for k in range(1, len(sentences)):
+        plays = endpoint.spoken_word_s * sum(sizes[:k])
+        rest = sum(sizes[k:])
+        making = endpoint.request_s + endpoint.request_word_s * rest
+        if rest <= endpoint.rest_max_words and plays >= GAPLESS_MARGIN * making:
+            return [" ".join(sentences[:k]), " ".join(sentences[k:])]
+    return None
+
+
 def _sentences_joined(sentences: list[str], language: Language, max_words: int) -> list[str]:
     """Whole sentences, joined into pieces of up to `max_words` spoken words.
 
@@ -145,7 +172,10 @@ class EndpointsTTSEngine(TTSEngine):
         if _spoken_whole(endpoint):
             # No first piece cut short: the reply in one go, parted only
             # between sentences when it is long, so nothing waits at a join.
-            whole = _sentences_joined(split_sentences(text), language, endpoint.rest_max_words)
+            sentences = split_sentences(text)
+            whole = _sentences_joined(sentences, language, endpoint.rest_max_words)
+            if len(whole) == 1:
+                whole = _gapless_split(sentences, language, endpoint) or whole
             return [p for p in whole if prepare_for_speech(p, language)] or [text]
         stream = SentenceStream(
             first_words=endpoint.first_chunk_words, growth=endpoint.chunk_growth

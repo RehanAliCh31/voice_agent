@@ -22,7 +22,7 @@ from voicebot.live.session import State
 from voicebot.llm.base import Reply, ToolCall
 from voicebot.messages import say
 
-# A sentence: speech, then the silence that ends it (end_silence_ms is 500).
+# A sentence: speech, then the silence that ends it (end_silence_ms is 400).
 SENTENCE = (tone(900), quiet(700))
 
 
@@ -118,7 +118,7 @@ def test_every_turn_is_measured() -> None:
             "interruptions",
         ):
             assert key in metrics, key
-        assert metrics["vad_to_endpoint_ms"] >= 500
+        assert metrics["vad_to_endpoint_ms"] >= 400
     finally:
         session.close()
 

@@ -148,7 +148,7 @@ class LiveConfig(_Strict):
     # The silence that ends a turn. Shorter answers sooner and cuts more
     # people off mid-thought; speech that resumes before the reply is heard
     # joins the same turn whatever this is (see HANDS_FREE.md).
-    end_silence_ms: int = Field(default=500, ge=200, le=2000)
+    end_silence_ms: int = Field(default=400, ge=200, le=2000)
     # Recognition starts once the silence is as long as an utterance keeps of
     # it (~0.2 s), on what will be the utterance if nothing more is said: by
     # the time the end is certain, the words are mostly in. Said more, and it

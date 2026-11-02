@@ -96,6 +96,14 @@ class TtsEndpoint(_Strict):
     # a voice whose every request costs seconds before any sound (OmniVoice),
     # each cut was a silence at that comma or full stop. 0 cuts as above.
     rest_max_words: int = Field(default=0, ge=0)
+    # What the voice costs, as measured: seconds per request before any sound,
+    # seconds per spoken word to make, and seconds a spoken word lasts. With
+    # all three, a reply said whole is split after its first sentence(s) when
+    # those play longer than the rest takes to make -- it starts sooner, and
+    # the rest is ready before they end, so nothing stops. 0: never split.
+    request_s: float = Field(default=0.0, ge=0)
+    request_word_s: float = Field(default=0.0, ge=0)
+    spoken_word_s: float = Field(default=0.0, ge=0)
     # A recording to clone the voice from, sent inline with every request
     # (OmniVoice's ref_audio and ref_text), so nothing has to be uploaded to
     # the server: a path to a WAV, and exactly what it says.
