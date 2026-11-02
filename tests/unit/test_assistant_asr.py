@@ -193,6 +193,12 @@ def test_the_language_of_some_text_is_its_script() -> None:
         ("savings account ka balance batao", "ur"),
         ("haan", "ur"),
         ("میرا بیلنس کیا ہے؟", "ur"),
+        # The greeting, typed in Latin letters: it had no small words to count.
+        ("assalam o alaikum", "ur"),
+        ("Assalamualaikum!", "ur"),
+        ("walaikum assalam, mera card block kar do", "ur"),
+        # English with an Urdu courtesy in it is still English.
+        ("tell me my balance, shukriya", "en"),
         # English, including English words Urdu also has.
         ("hey jarvis", "en"),
         ("Is the main branch open?", "en"),

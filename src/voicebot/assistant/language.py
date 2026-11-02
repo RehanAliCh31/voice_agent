@@ -80,6 +80,8 @@ _ROMAN_URDU = frozenset("""
     nahi nahin nai nhi haan ji jee theek thik theak acha accha achha bohat bahut bht
     zyada abhi phir bhi aur lekin magar agar toh tou shukriya meherbani bhai yaar
     kuch koi wala wali wale paise pese paisay aaj kal haal pata baat
+    assalam asalam assalamu assalamualaikum asalamualaikum alaikum alaykum walaikum
+    walaikumassalam salaam khuda hafiz allah inshallah mashallah jazakallah
     """.split())
 _LATIN_WORD = re.compile(r"[a-z]+")
 
