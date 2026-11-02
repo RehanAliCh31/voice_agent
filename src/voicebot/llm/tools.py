@@ -176,7 +176,8 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
         "reference. Call this as soon as one of the reasons applies -- "
         "especially fraud, a complaint, or money trouble. Do not try to "
         "settle those yourself, and never ask the customer to confirm that "
-        "they want a human.",
+        "they want a human. Never call it to answer a question -- what you can "
+        "do, how this works, anything general: answer those yourself.",
         {
             "reason": {
                 "type": "string",
