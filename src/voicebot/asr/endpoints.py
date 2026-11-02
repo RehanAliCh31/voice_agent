@@ -20,7 +20,7 @@ from voicebot.asr.base import ASREngine, ASRUnavailable
 from voicebot.assistant.asr_client import AsrClient, AsrError, is_phantom, normalise, to_wav
 from voicebot.assistant.asr_client import Transcript as Heard
 from voicebot.assistant.config import AsrConfig, AssistantConfig, Language
-from voicebot.assistant.language import Decision, LanguageRouter
+from voicebot.assistant.language import Decision, LanguageRouter, has_devanagari
 from voicebot.assistant.player import to_rate
 from voicebot.schemas import AudioBuffer, Segment, Transcript
 from voicebot.utils.logging import get_logger
@@ -59,6 +59,7 @@ class EndpointsASREngine(ASREngine):
         except AsrError as exc:
             raise ASRUnavailable(str(exc), code=exc.code, cause=exc) from exc
 
+        decision = self._english_if_whisper_doubts(decision)
         language = decision.language
         heard = decision.heard.get(language) or Heard(decision.text, language, 0)
         checked = Heard(
@@ -88,6 +89,29 @@ class EndpointsASREngine(ASREngine):
             segments=(Segment(text=text, start_s=0.0, end_s=audio.duration_s),) if text else (),
             language=language,
         )
+
+    def _english_if_whisper_doubts(self, decision: Decision) -> Decision:
+        """qwen3-asr's English sentence, when whisper's Urdu one is doubted.
+
+        In the live benchmark whisper wrote an English question as an Urdu
+        sentence and doubted it; its grammar words won it the language, then
+        its doubt had it discarded, and qwen3-asr's English went with it --
+        "nothing to answer". A doubted whisper transcript is no evidence of
+        Urdu: if qwen3-asr heard a real sentence, that is what was said.
+        """
+        whisper, qwen = decision.heard.get("ur"), decision.heard.get("en")
+        if (
+            decision.language != "ur"
+            or whisper is None
+            or whisper.avg_logprob is None
+            or whisper.avg_logprob >= self.config.min_avg_logprob
+            or qwen is None
+            or has_devanagari(qwen.text)  # Urdu that qwen3-asr wrote as Hindi
+            or len(normalise(qwen.text).split()) <= NOISE_MAX_WORDS
+        ):
+            return decision
+        log.info("whisper doubted its Urdu; qwen3-asr heard an English sentence")
+        return Decision("en", qwen.text, "whisper doubted its Urdu", decision.heard)
 
     def _noise(self, decision: Decision) -> bool:
         """Noise that qwen3-asr put a few words to, whatever its length.

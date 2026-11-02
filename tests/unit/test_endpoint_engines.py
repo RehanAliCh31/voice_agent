@@ -128,6 +128,21 @@ def test_a_long_english_sentence_is_kept_even_when_whisper_doubts_it() -> None:
     assert engine.transcribe(_speech(seconds=3.0)).text == said
 
 
+def test_english_whisper_doubts_and_spells_as_urdu_is_heard_in_english() -> None:
+    # From the live benchmark: whisper wrote English speech as an Urdu
+    # sentence and doubted it; it won the language on its grammar words and
+    # was then discarded for its doubt, and qwen3-asr's English with it.
+    said = "What are your branch opening hours?"
+    engine = EndpointsASREngine(
+        _router(Heard(said, "en", 200), Heard("وہ آپ کی برانچ کب کھلتی ہے", "ur", 200, "ur", -1.1)),
+        CONFIG.asr,
+    )
+
+    heard = engine.transcribe(_speech(seconds=2.7), "en")
+
+    assert (heard.text, heard.language) == (said, "en")
+
+
 def test_the_same_words_said_at_length_are_kept() -> None:
     engine = EndpointsASREngine(
         _router(Heard("Okay.", "en", 200), Heard("", "ur", 200, "en", -0.3)), CONFIG.asr
