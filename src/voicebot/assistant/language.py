@@ -135,9 +135,11 @@ _ENGLISH_IN_URDU_LETTERS = frozenset(
 # Urdu's small words that are also how whisper-urdu spells a short English
 # word: in a live test call "Hey, can you hear me?" came back as "ہی، کن یو
 # ہی مینگ" and "ہے کہ یوں ہی میں" -- three Urdu grammar words, so Urdu -- and
-# was answered in Urdu. One whose English twin qwen3-asr heard in the same
-# utterance is English spelled in Urdu letters, not Urdu grammar. Replayed on
-# the 90 benchmark clips this changes none of their decisions.
+# was answered in Urdu. When every Urdu grammar word in the utterance has its
+# English twin in what qwen3-asr heard, they are English spelled in Urdu
+# letters, not Urdu grammar. (Only every one: qwen3-asr also translates Urdu,
+# and its "or" and "me" beside a کیا and a ہے are not English.) Replayed on the
+# 90 benchmark clips this changes none of their decisions.
 _ENGLISH_TWINS: dict[str, frozenset[str]] = {
     "ہی": frozenset({"he", "hi", "hear", "here"}),
     "ہے": frozenset({"hey", "hay", "hai"}),
@@ -170,7 +172,12 @@ def _weigh(en_text: str, ur: Transcript) -> tuple[int, int, str]:
         words = [w for w in _WORD.findall(ur.text) if _ARABIC.search(w)]
         heard_in_english = set(_LATIN_WORD.findall(en_text.lower()))
         twins = [w for w in words if _ENGLISH_TWINS.get(w, frozenset()) & heard_in_english]
-        grammar = sum(w in _URDU_GRAMMAR for w in words) - len(twins)
+        grammar = sum(w in _URDU_GRAMMAR for w in words)
+        if twins and len(twins) < grammar:
+            # Other Urdu grammar is there too: qwen3-asr translated Urdu, and
+            # its "or" or "me" says nothing ("... اور ... میں کیا فرق ہے").
+            twins = []
+        grammar -= len(twins)
         spelled = sum(w in _ENGLISH_IN_URDU_LETTERS for w in words) + len(twins)
         urdu += min(grammar, 3)
         english += min(spelled, 3)

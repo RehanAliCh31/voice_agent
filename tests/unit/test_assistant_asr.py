@@ -289,6 +289,12 @@ URDU_WITH_QWEN_GUESSING = [
     ("My checking account balance is high.", "میرا چیکنگ اکاؤنٹ بالنس کیا ہے۔"),
     # A goodbye with no grammar in it at all, from the held-out set.
     ("Very much, thank you, Huda Hafiz.", "بہت شکریہ خدا حافظ"),
+    # Translated by qwen3-asr, with "or" and "me" in it: twins of اور and میں,
+    # but کیا and ہے are Urdu all the same (from the live benchmark).
+    (
+        "Savings or checking account? Me, what's the difference?",
+        "سیونگز اور چیکنگ اکاؤنٹ میں کیا فرق ہے؟",
+    ),
 ]
 
 
