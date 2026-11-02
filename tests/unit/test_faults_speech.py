@@ -472,8 +472,8 @@ def test_nothing_is_begun_early_for_a_reply_spoken_whole() -> None:
 
 
 def _timed_urdu_engine() -> EndpointsTTSEngine:
-    # What OmniVoice was measured to cost: ~3 s a request and ~0.1 s a word
-    # to make; at speed 1.15 a word lasts ~0.365 s.
+    # What OmniVoice was measured to cost: ~1.8 s a request and ~0.12 s a
+    # word to make; at speed 1.15 a word lasts ~0.32 s.
     urdu = _Voice()
     urdu.endpoint = TtsEndpoint(
         url="http://t/x",
@@ -481,9 +481,9 @@ def _timed_urdu_engine() -> EndpointsTTSEngine:
         voice="test",
         first_chunk_words=0,
         rest_max_words=60,
-        request_s=3.0,
-        request_word_s=0.1,
-        spoken_word_s=0.365,
+        request_s=1.8,
+        request_word_s=0.12,
+        spoken_word_s=0.32,
     )
     return EndpointsTTSEngine({"en": _Voice(), "ur": urdu})  # type: ignore[arg-type]
 
@@ -505,3 +505,17 @@ def test_an_urdu_reply_stays_whole_where_a_split_would_stop_between_sentences() 
     pieces = _timed_urdu_engine().pieces(f"{first} {rest}", "ur")
 
     assert pieces == [f"{first} {rest}"]
+
+
+def test_a_long_urdu_reply_starts_with_its_first_sentence_where_it_covers_the_next_piece() -> None:
+    first = "آپ کے چیکنگ اکاؤنٹ میں دو ہزار چار سو ڈالر ہیں اور آپ کی بچت بھی بالکل ٹھیک ہے۔"
+    middle = "آپ کا اگلا بل بجلی کا ہے اور وہ اگلے ہفتے پیر کے دن ادا کرنا ہے۔"
+    later = " ".join(["آپ کی پچھلی ادائیگی کل گیس کمپنی کو کی گئی تھی۔"] * 6)
+
+    pieces = _timed_urdu_engine().pieces(f"{first} {middle} {later}", "ur")
+
+    # Too long for one piece: it once started with as many sentences as fit
+    # in 60 words. Now its first sentence goes alone, as it plays longer than
+    # the next piece takes to make, and nothing after it is cut at a comma.
+    assert pieces[0] == first
+    assert " ".join(pieces) == f"{first} {middle} {later}"

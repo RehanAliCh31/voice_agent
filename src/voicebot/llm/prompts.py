@@ -191,11 +191,14 @@ accounts, through the tools.\
 # short sentences, under 20 words" was not enough: Urdu replies ran to 25
 # words at the median and up to 85 (36 s of speech), and every word is model
 # time, a voice request's worth of time, and the caller's time listening.
+# Without the word count here it still ran to 44 words (a bank's hours, in
+# Urdu): ~2 s of writing and ~5 s of voice before the first sound.
 LANGUAGE_NOTE = {
     "en": (
         "Reply ONLY in English, and never mix languages: the customer's latest "
         "message is in English. Answer questions about the world from what you know. "
-        "Answer in one or two short sentences."
+        "Answer in one or two short sentences, under 20 words, unless the customer "
+        "asks for more."
     ),
     "ur": (
         "Reply ONLY in Urdu, written in Urdu script, with every amount in digits and its "
@@ -203,7 +206,8 @@ LANGUAGE_NOTE = {
         "the customer's latest message is in Urdu, even if it was typed in Latin letters. "
         "Look up what they ask with your tools, as you would in English; never ask them "
         "for a bank, an account number or a card number. Answer questions about the "
-        "world from what you know. Answer in one or two short sentences."
+        "world from what you know. Answer in one or two short sentences, under 20 "
+        "words, unless the customer asks for more."
     ),
 }
 

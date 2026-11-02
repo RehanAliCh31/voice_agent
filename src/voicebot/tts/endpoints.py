@@ -80,31 +80,59 @@ def _spoken_whole(endpoint: TtsEndpoint) -> bool:
     return endpoint.first_chunk_words == 0 and endpoint.rest_max_words > 0
 
 
-# How much longer the first part must play than the rest is expected to take
-# to make: the voice's time varies from request to request.
-GAPLESS_MARGIN = 1.2
+def _spoken_words(text: str, language: Language) -> int:
+    return len(prepare_for_speech(text, language).split())
 
 
-def _gapless_split(
+# How much longer a piece must play than the next is expected to take
+# to make: OmniVoice's time varied by under 4% between the same requests.
+GAPLESS_MARGIN = 1.1
+
+
+def _gapless_pieces(
     sentences: list[str], language: Language, endpoint: TtsEndpoint
 ) -> list[str] | None:
-    """A reply said whole, split after its first sentence(s) if nothing would stop.
+    """A reply said whole, in pieces each made while the one before it plays.
 
-    The first part is heard as soon as it alone is made; the rest is made
-    while it plays. Only where it plays for longer than the rest takes to
-    make (with a margin) -- so the rest is ready before it ends -- and the
-    earliest such split, which starts the reply soonest. None: keep it whole.
+    The first piece is the fewest sentences that play longer than the next
+    sentence takes to make (with a margin), so the reply starts as soon as
+    they alone are made. Each next piece is as many sentences as can be made
+    while the one before plays, so pieces grow and none is waited for. None
+    -- one sentence, or one that could not be ready in time -- leaves the
+    reply to `_sentences_joined`.
     """
     if not (endpoint.request_s and endpoint.request_word_s and endpoint.spoken_word_s):
         return None
-    sizes = [len(prepare_for_speech(s, language).split()) for s in sentences]
-    for k in range(1, len(sentences)):
-        plays = endpoint.spoken_word_s * sum(sizes[:k])
-        rest = sum(sizes[k:])
-        making = endpoint.request_s + endpoint.request_word_s * rest
-        if rest <= endpoint.rest_max_words and plays >= GAPLESS_MARGIN * making:
-            return [" ".join(sentences[:k]), " ".join(sentences[k:])]
-    return None
+    sizes = [_spoken_words(s, language) for s in sentences]
+
+    def covers(playing: int, made: int) -> bool:
+        plays = endpoint.spoken_word_s * playing
+        return plays >= GAPLESS_MARGIN * (endpoint.request_s + endpoint.request_word_s * made)
+
+    for first in range(1, len(sentences)):
+        words = sum(sizes[:first])
+        if words > endpoint.rest_max_words:
+            return None
+        if covers(words, sizes[first]):
+            break
+    else:
+        return None
+    pieces = [" ".join(sentences[:first])]
+    index = first
+    while index < len(sentences):
+        start, taken = index, 0
+        while (
+            index < len(sentences)
+            and taken + sizes[index] <= endpoint.rest_max_words
+            and covers(words, taken + sizes[index])
+        ):
+            taken += sizes[index]
+            index += 1
+        if index == start:
+            return None
+        pieces.append(" ".join(sentences[start:index]))
+        words = taken
+    return pieces
 
 
 def _sentences_joined(sentences: list[str], language: Language, max_words: int) -> list[str]:
@@ -117,7 +145,7 @@ def _sentences_joined(sentences: list[str], language: Language, max_words: int) 
     current: list[str] = []
     words = 0
     for sentence in sentences:
-        size = len(prepare_for_speech(sentence, language).split())
+        size = _spoken_words(sentence, language)
         if current and words + size > max_words:
             pieces.append(" ".join(current))
             current, words = [], 0
@@ -172,10 +200,12 @@ class EndpointsTTSEngine(TTSEngine):
         if _spoken_whole(endpoint):
             # No first piece cut short: the reply in one go, parted only
             # between sentences when it is long, so nothing waits at a join.
+            # Its first sentence(s) go alone where every piece after them is
+            # made before the one before it ends: the reply starts sooner.
             sentences = split_sentences(text)
-            whole = _sentences_joined(sentences, language, endpoint.rest_max_words)
-            if len(whole) == 1:
-                whole = _gapless_split(sentences, language, endpoint) or whole
+            whole = _gapless_pieces(sentences, language, endpoint) or _sentences_joined(
+                sentences, language, endpoint.rest_max_words
+            )
             return [p for p in whole if prepare_for_speech(p, language)] or [text]
         stream = SentenceStream(
             first_words=endpoint.first_chunk_words, growth=endpoint.chunk_growth

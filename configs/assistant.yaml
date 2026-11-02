@@ -59,11 +59,12 @@ asr:
 # a longer one is parted only between sentences, into parts that play far
 # longer than the next takes to make. Its answer starts ~1-2 s later than with
 # a short first piece: smoothness was asked for over that.
-# But where a reply's first sentence plays longer than its rest takes to make,
-# it is split there (request_s, request_word_s and spoken_word_s, as measured:
-# ~3.0 s a request and ~0.1 s a word to make; a word lasts ~0.365 s at speed
-# 1.15): it starts once the first sentence alone is made, and the rest is
-# ready before that ends, so nothing stops.
+# But where a reply's first sentence(s) play longer than the next piece takes
+# to make, they go alone (request_s, request_word_s and spoken_word_s, as
+# measured on 2026-11-02: ~1.8 s a request and ~0.12 s a word to make, within
+# 4% from one request to the next; a word lasts ~0.32 s at speed 1.15): the
+# reply starts once they alone are made, and the next piece is ready before
+# they end, so nothing stops. OmniVoice makes one clip at a time.
 # What each voice is, and where it came from: LANGUAGE_VOICE_CONFIG.md.
 agent:
   gender: female
@@ -88,9 +89,9 @@ agent:
         label: OmniVoice assistant-pk
         first_chunk_words: 0
         rest_max_words: 60
-        request_s: 3.0
-        request_word_s: 0.1
-        spoken_word_s: 0.365
+        request_s: 1.8
+        request_word_s: 0.12
+        spoken_word_s: 0.32
         chunk_growth: 1.6
     male:
       en:
@@ -102,9 +103,9 @@ agent:
         label: OmniVoice urdu_male5, in English
         first_chunk_words: 0
         rest_max_words: 60
-        request_s: 3.0
-        request_word_s: 0.1
-        spoken_word_s: 0.365
+        request_s: 1.8
+        request_word_s: 0.12
+        spoken_word_s: 0.32
         chunk_growth: 1.6
       ur:
         url: http://localhost:8091/v1/audio/speech
@@ -115,9 +116,9 @@ agent:
         label: OmniVoice urdu_male5
         first_chunk_words: 0
         rest_max_words: 60
-        request_s: 3.0
-        request_word_s: 0.1
-        spoken_word_s: 0.365
+        request_s: 1.8
+        request_word_s: 0.12
+        spoken_word_s: 0.32
         chunk_growth: 1.6
   # Tried when the main voice fails, before a kept recording. The English
   # backup is on the other server, so it survives the main one going down.
@@ -133,9 +134,9 @@ agent:
         label: OmniVoice assistant-en
         first_chunk_words: 0
         rest_max_words: 60
-        request_s: 3.0
-        request_word_s: 0.1
-        spoken_word_s: 0.365
+        request_s: 1.8
+        request_word_s: 0.12
+        spoken_word_s: 0.32
         chunk_growth: 1.6
       ur:
         url: http://localhost:8091/v1/audio/speech
@@ -146,9 +147,9 @@ agent:
         label: OmniVoice assistant-ur
         first_chunk_words: 0
         rest_max_words: 60
-        request_s: 3.0
-        request_word_s: 0.1
-        spoken_word_s: 0.365
+        request_s: 1.8
+        request_word_s: 0.12
+        spoken_word_s: 0.32
         chunk_growth: 1.6
 
 # tts.en and tts.ur come from agent.voices above.
