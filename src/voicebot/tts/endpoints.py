@@ -33,7 +33,12 @@ from voicebot import profile
 from voicebot.assistant.asr_client import to_wav
 from voicebot.assistant.config import AssistantConfig, Language
 from voicebot.assistant.language import spoken_language
-from voicebot.assistant.text_prep import SentenceStream, prepare_for_speech, split_long
+from voicebot.assistant.text_prep import (
+    SentenceStream,
+    prepare_for_speech,
+    split_long,
+    split_sentences,
+)
 from voicebot.assistant.tts_client import (
     BackedUpVoice,
     TtsClient,
@@ -68,6 +73,27 @@ FIRST_KEYS = (
     "microphone_unavailable",
     "microphone_lost",
 )
+
+
+def _sentences_joined(sentences: list[str], language: Language, max_words: int) -> list[str]:
+    """Whole sentences, joined into pieces of up to `max_words` spoken words.
+
+    One sentence longer than that is a piece by itself: cut only between
+    sentences, so the voice speaks across every comma and full stop in one go.
+    """
+    pieces: list[str] = []
+    current: list[str] = []
+    words = 0
+    for sentence in sentences:
+        size = len(prepare_for_speech(sentence, language).split())
+        if current and words + size > max_words:
+            pieces.append(" ".join(current))
+            current, words = [], 0
+        current.append(sentence)
+        words += size
+    if current:
+        pieces.append(" ".join(current))
+    return pieces
 
 
 @register("tts", "endpoints")
@@ -116,7 +142,11 @@ class EndpointsTTSEngine(TTSEngine):
         )
         found = [*stream.feed(text), *stream.flush()]
         cut = [short for piece in found for short in split_long(piece, language)]
-        return [piece for piece in cut if prepare_for_speech(piece, language)] or [text]
+        pieces = [piece for piece in cut if prepare_for_speech(piece, language)] or [text]
+        if endpoint.rest_max_words and len(pieces) > 2:
+            rest = split_sentences(" ".join(pieces[1:]))
+            pieces = [pieces[0], *_sentences_joined(rest, language, endpoint.rest_max_words)]
+        return pieces
 
     def first_piece(self, text: str, voice: str | None = None) -> str | None:
         """What `pieces` would start with, as soon as a reply's opening words settle it.

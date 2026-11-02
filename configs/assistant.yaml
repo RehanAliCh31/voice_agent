@@ -53,6 +53,12 @@ asr:
 # at speed 1.0 and 2.9 s at 1.15, and Urdu turns with a silence between
 # pieces went from 9 in 20 to 14. Ten words last 3.6 s again, for ~0.2 s more
 # before the first word.
+# After it, the rest goes to OmniVoice as whole sentences in one request (up
+# to 40 spoken words, ~7 s to make, well inside its 12 s limit): it was cut at
+# every full stop and long sentences at their commas, each piece a request
+# costing ~3 s before any sound, so the reply stopped at a comma or full stop
+# whenever one piece ran out before the next was made. Now it is spoken across
+# them, with at most one join.
 # What each voice is, and where it came from: LANGUAGE_VOICE_CONFIG.md.
 agent:
   gender: female
@@ -76,6 +82,7 @@ agent:
         gender: female
         label: OmniVoice assistant-pk
         first_chunk_words: 10
+        rest_max_words: 40
         chunk_growth: 1.6
     male:
       en:
@@ -86,6 +93,7 @@ agent:
         gender: male
         label: OmniVoice urdu_male5, in English
         first_chunk_words: 10
+        rest_max_words: 40
         chunk_growth: 1.6
       ur:
         url: http://localhost:8091/v1/audio/speech
@@ -95,6 +103,7 @@ agent:
         gender: male
         label: OmniVoice urdu_male5
         first_chunk_words: 10
+        rest_max_words: 40
         chunk_growth: 1.6
   # Tried when the main voice fails, before a kept recording. The English
   # backup is on the other server, so it survives the main one going down.
@@ -109,6 +118,7 @@ agent:
         gender: female
         label: OmniVoice assistant-en
         first_chunk_words: 10
+        rest_max_words: 40
         chunk_growth: 1.6
       ur:
         url: http://localhost:8091/v1/audio/speech
@@ -118,6 +128,7 @@ agent:
         gender: female
         label: OmniVoice assistant-ur
         first_chunk_words: 10
+        rest_max_words: 40
         chunk_growth: 1.6
 
 # tts.en and tts.ur come from agent.voices above.

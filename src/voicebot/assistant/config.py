@@ -91,6 +91,11 @@ class TtsEndpoint(_Strict):
     # English synthesises at 0.6x real time, Urdu with ~1.1 s per request.
     first_chunk_words: int = 8
     chunk_growth: float = 0.0
+    # After the first piece, the rest of the reply as whole sentences joined
+    # into pieces of up to this many spoken words, never cut at a comma: for
+    # a voice whose every request costs seconds before any sound (OmniVoice),
+    # each cut was a silence at that comma or full stop. 0 cuts as above.
+    rest_max_words: int = Field(default=0, ge=0)
     # A recording to clone the voice from, sent inline with every request
     # (OmniVoice's ref_audio and ref_text), so nothing has to be uploaded to
     # the server: a path to a WAV, and exactly what it says.

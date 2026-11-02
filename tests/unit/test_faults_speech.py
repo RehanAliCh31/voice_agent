@@ -23,6 +23,7 @@ from voicebot.assistant.asr_client import AsrClient, AsrError
 from voicebot.assistant.asr_client import Transcript as Heard
 from voicebot.assistant.config import AsrEndpoint, TtsEndpoint, load_assistant_config
 from voicebot.assistant.language import LanguageRouter
+from voicebot.assistant.text_prep import prepare_for_speech
 from voicebot.assistant.tts_client import Speech, TtsClient, TtsError
 from voicebot.errors import ErrorCode
 from voicebot.messages import say
@@ -392,3 +393,47 @@ def test_the_first_piece_known_early_is_the_first_piece_of_the_whole(
 def test_nothing_is_known_of_the_first_piece_from_a_word_or_two() -> None:
     engine = EndpointsTTSEngine({"en": _Voice(), "ur": _Voice()})  # type: ignore[arg-type]
     assert engine.first_piece("Your savings", "en") is None
+
+
+def _urdu_engine(rest_max_words: int) -> EndpointsTTSEngine:
+    urdu = _Voice()
+    urdu.endpoint = TtsEndpoint(
+        url="http://t/x",
+        model="m",
+        voice="test",
+        first_chunk_words=10,
+        chunk_growth=1.6,
+        rest_max_words=rest_max_words,
+    )
+    return EndpointsTTSEngine({"en": _Voice(), "ur": urdu})  # type: ignore[arg-type]
+
+
+URDU_REPLY = (
+    "آپ کے چیکنگ اکاؤنٹ میں $2,483.50 ہیں، اور آپ کی بچت میں $19,020.00 ہیں۔ "
+    "اس مہینے آپ کے نو بل ہیں، جن میں سب سے بڑا کرایہ ہے۔ "
+    "کیا میں آپ کی کوئی اور مدد کر سکتی ہوں؟"
+)
+
+
+def test_the_urdu_voice_says_the_rest_of_a_reply_in_one_breath_not_at_every_comma() -> None:
+    # Each request to the Urdu voice costs ~3 s before any sound, so every
+    # piece after the first left a silence at its comma or full stop.
+    old = _urdu_engine(rest_max_words=0).pieces(URDU_REPLY, "ur")
+    new = _urdu_engine(rest_max_words=40).pieces(URDU_REPLY, "ur")
+
+    assert len(old) > 2  # how it was: a request at every comma and full stop
+    assert new[0] == old[0]  # the first piece, heard first, is unchanged
+    assert len(new) == 2
+    assert " ".join(new) == URDU_REPLY
+
+
+def test_a_long_urdu_reply_is_parted_only_between_sentences() -> None:
+    sentence = "یہ ایک لمبا جملہ ہے جس میں بہت سارے الفاظ ہیں اور یہ ختم ہوتا ہے۔"
+    reply = " ".join([sentence] * 8)
+
+    pieces = _urdu_engine(rest_max_words=40).pieces(reply, "ur")
+
+    assert " ".join(pieces) == reply
+    for piece in pieces[1:]:
+        assert piece.endswith("۔")  # never cut mid-sentence
+        assert len(prepare_for_speech(piece, "ur").split()) <= 40
