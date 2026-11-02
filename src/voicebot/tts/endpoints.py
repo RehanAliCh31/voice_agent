@@ -31,7 +31,7 @@ import numpy as np
 
 from voicebot import profile
 from voicebot.assistant.asr_client import to_wav
-from voicebot.assistant.config import AssistantConfig, Language
+from voicebot.assistant.config import AssistantConfig, Language, TtsEndpoint
 from voicebot.assistant.language import spoken_language
 from voicebot.assistant.text_prep import (
     SentenceStream,
@@ -73,6 +73,11 @@ FIRST_KEYS = (
     "microphone_unavailable",
     "microphone_lost",
 )
+
+
+def _spoken_whole(endpoint: TtsEndpoint) -> bool:
+    """A voice that says each reply whole: no first piece, and no cut but between sentences."""
+    return endpoint.first_chunk_words == 0 and endpoint.rest_max_words > 0
 
 
 def _sentences_joined(sentences: list[str], language: Language, max_words: int) -> list[str]:
@@ -137,6 +142,11 @@ class EndpointsTTSEngine(TTSEngine):
         them longer than a voice makes quickly (split_long)."""
         language = self._language(text, voice)
         endpoint = self.voices[language].endpoint
+        if _spoken_whole(endpoint):
+            # No first piece cut short: the reply in one go, parted only
+            # between sentences when it is long, so nothing waits at a join.
+            whole = _sentences_joined(split_sentences(text), language, endpoint.rest_max_words)
+            return [p for p in whole if prepare_for_speech(p, language)] or [text]
         stream = SentenceStream(
             first_words=endpoint.first_chunk_words, growth=endpoint.chunk_growth
         )
@@ -156,6 +166,8 @@ class EndpointsTTSEngine(TTSEngine):
         """
         language = self._language(text, voice)
         endpoint = self.voices[language].endpoint
+        if _spoken_whole(endpoint):
+            return None  # its one piece is the whole reply, known only at the end
         stream = SentenceStream(
             first_words=endpoint.first_chunk_words, growth=endpoint.chunk_growth
         )

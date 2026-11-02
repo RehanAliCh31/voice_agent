@@ -437,3 +437,35 @@ def test_a_long_urdu_reply_is_parted_only_between_sentences() -> None:
     for piece in pieces[1:]:
         assert piece.endswith("۔")  # never cut mid-sentence
         assert len(prepare_for_speech(piece, "ur").split()) <= 40
+
+
+def _whole_urdu_engine() -> EndpointsTTSEngine:
+    urdu = _Voice()
+    urdu.endpoint = TtsEndpoint(
+        url="http://t/x", model="m", voice="test", first_chunk_words=0, rest_max_words=60
+    )
+    return EndpointsTTSEngine({"en": _Voice(), "ur": urdu})  # type: ignore[arg-type]
+
+
+def test_an_ordinary_urdu_reply_is_spoken_whole_with_no_join_at_all() -> None:
+    # Any cut meant a join, and at the join the next piece was still being
+    # made: ~3 s a request before any sound, longer than the first piece lasts.
+    assert _whole_urdu_engine().pieces(URDU_REPLY, "ur") == [URDU_REPLY]
+
+
+def test_a_long_urdu_reply_is_parted_between_sentences_into_long_pieces() -> None:
+    sentence = "یہ ایک لمبا جملہ ہے جس میں بہت سارے الفاظ ہیں اور یہ ختم ہوتا ہے۔"
+    reply = " ".join([sentence] * 8)
+
+    pieces = _whole_urdu_engine().pieces(reply, "ur")
+
+    assert len(pieces) > 1 and " ".join(pieces) == reply
+    assert all(p.endswith("۔") for p in pieces)
+    # Each part plays for far longer than the next takes to make.
+    assert all(len(prepare_for_speech(p, "ur").split()) > 20 for p in pieces[:-1])
+
+
+def test_nothing_is_begun_early_for_a_reply_spoken_whole() -> None:
+    # Its one piece is the whole reply, known only once the reply is: a piece
+    # begun early would only hold up the voice, which makes one at a time.
+    assert _whole_urdu_engine().first_piece(URDU_REPLY + " ", "ur") is None

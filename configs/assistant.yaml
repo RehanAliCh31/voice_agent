@@ -49,16 +49,16 @@ asr:
 # 1.15 says the same in 13% less time, made just as fast, and as clear (five
 # Urdu sentences through whisper-urdu: 8.6% word errors at 1.0 and at 1.15).
 # qwen3-tts takes the field but ignores it, so English is left as it is.
-# Faster speech covers less of the next piece's making: 8 words lasted 3.4 s
-# at speed 1.0 and 2.9 s at 1.15, and Urdu turns with a silence between
-# pieces went from 9 in 20 to 14. Ten words last 3.6 s again, for ~0.2 s more
-# before the first word.
-# After it, the rest goes to OmniVoice as whole sentences in one request (up
-# to 40 spoken words, ~7 s to make, well inside its 12 s limit): it was cut at
-# every full stop and long sentences at their commas, each piece a request
-# costing ~3 s before any sound, so the reply stopped at a comma or full stop
-# whenever one piece ran out before the next was made. Now it is spoken across
-# them, with at most one join.
+# OmniVoice says each reply whole (first_chunk_words 0, rest_max_words 60).
+# Every request to it costs ~3 s before any sound, so any cut was a join, and
+# at the join the next piece was still being made: tested by hand, the Urdu
+# assistant stopped between sentences and at commas -- with a first piece cut
+# short, in 14 turns of 20, and still after the first piece when the rest was
+# sent whole. Now an ordinary reply is one request (60 spoken words take ~9 s,
+# inside the 12 s limit), spoken as one utterance with the voice's own pauses;
+# a longer one is parted only between sentences, into parts that play far
+# longer than the next takes to make. Its answer starts ~1-2 s later than with
+# a short first piece: smoothness was asked for over that.
 # What each voice is, and where it came from: LANGUAGE_VOICE_CONFIG.md.
 agent:
   gender: female
@@ -81,8 +81,8 @@ agent:
         voice: assistant-pk          # FLEURS ur_pk reference, CC-BY-4.0: attribution required
         gender: female
         label: OmniVoice assistant-pk
-        first_chunk_words: 10
-        rest_max_words: 40
+        first_chunk_words: 0
+        rest_max_words: 60
         chunk_growth: 1.6
     male:
       en:
@@ -92,8 +92,8 @@ agent:
         voice: urdu_male5
         gender: male
         label: OmniVoice urdu_male5, in English
-        first_chunk_words: 10
-        rest_max_words: 40
+        first_chunk_words: 0
+        rest_max_words: 60
         chunk_growth: 1.6
       ur:
         url: http://localhost:8091/v1/audio/speech
@@ -102,8 +102,8 @@ agent:
         voice: urdu_male5
         gender: male
         label: OmniVoice urdu_male5
-        first_chunk_words: 10
-        rest_max_words: 40
+        first_chunk_words: 0
+        rest_max_words: 60
         chunk_growth: 1.6
   # Tried when the main voice fails, before a kept recording. The English
   # backup is on the other server, so it survives the main one going down.
@@ -117,8 +117,8 @@ agent:
         voice: assistant-en
         gender: female
         label: OmniVoice assistant-en
-        first_chunk_words: 10
-        rest_max_words: 40
+        first_chunk_words: 0
+        rest_max_words: 60
         chunk_growth: 1.6
       ur:
         url: http://localhost:8091/v1/audio/speech
@@ -127,8 +127,8 @@ agent:
         voice: assistant-ur
         gender: female
         label: OmniVoice assistant-ur
-        first_chunk_words: 10
-        rest_max_words: 40
+        first_chunk_words: 0
+        rest_max_words: 60
         chunk_growth: 1.6
 
 # tts.en and tts.ur come from agent.voices above.
