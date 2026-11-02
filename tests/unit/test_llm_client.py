@@ -228,3 +228,125 @@ def test_the_fake_refuses_a_history_with_nobody_in_it() -> None:
 def test_the_fake_still_allows_an_empty_history() -> None:
     """Client tests call it with nothing at all, which is not the same bug."""
     assert FakeLLMClient([Reply(text="hello")]).complete([], []).text == "hello"
+
+
+# --- streamed, when someone is listening ---------------------------------------
+
+
+class _Heard:
+    """A listener: what it was told, as it was told it."""
+
+    def __init__(self, fails: bool = False) -> None:
+        self.began = 0
+        self.words: list[str] = []
+        self.fails = fails
+
+    def begin(self) -> None:
+        self.began += 1
+
+    def feed(self, text: str) -> None:
+        if self.fails:
+            raise RuntimeError("the listener broke")
+        self.words.append(text)
+
+
+def _sse(*events: dict[str, Any]) -> list[str]:
+    import json
+
+    return [f"data: {json.dumps(e)}\n" for e in events] + ["\n", "data: [DONE]\n"]
+
+
+def test_a_streamed_reply_is_heard_as_it_comes_and_read_as_a_whole() -> None:
+    heard = _Heard()
+    body = openai_client._read_stream(
+        _sse(
+            {"choices": [{"delta": {"role": "assistant", "content": "Your savings "}}]},
+            {"choices": [{"delta": {"content": "are $19,020.00."}, "finish_reason": "stop"}]},
+        ),
+        heard,
+    )
+
+    assert heard.words == ["Your savings ", "are $19,020.00."]
+    assert OpenAIClient._parse(body) == Reply(text="Your savings are $19,020.00.")
+
+
+def test_a_streamed_tool_call_is_joined_from_its_pieces() -> None:
+    body = openai_client._read_stream(
+        _sse(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "c1",
+                                    "function": {"name": "get_balance", "arguments": '{"acc'},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": 'ount": "savings"}'}}
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            },
+        ),
+        _Heard(),
+    )
+
+    reply = OpenAIClient._parse(body)
+    assert reply.text is None
+    assert reply.tool_calls == (ToolCall("c1", "get_balance", {"account": "savings"}),)
+
+
+def test_a_listener_that_fails_does_not_cost_the_reply() -> None:
+    body = openai_client._read_stream(
+        _sse({"choices": [{"delta": {"content": "Hello."}, "finish_reason": "stop"}]}),
+        _Heard(fails=True),
+    )
+
+    assert OpenAIClient._parse(body) == Reply(text="Hello.")
+
+
+def test_an_error_in_the_stream_is_an_error() -> None:
+    body = openai_client._read_stream(_sse({"error": {"message": "overloaded"}}), _Heard())
+
+    with pytest.raises(LLMUnavailable):
+        OpenAIClient._parse(body)
+
+
+def test_the_client_streams_only_while_someone_listens(monkeypatch: pytest.MonkeyPatch) -> None:
+    from voicebot.llm.base import listening
+
+    used: list[str] = []
+    answer = {"choices": [{"message": {"content": "Hi."}, "finish_reason": "stop"}]}
+
+    def whole(*args: Any) -> Any:
+        used.append("whole")
+        return answer
+
+    def streamed(*args: Any) -> Any:
+        used.append("streamed")
+        return answer
+
+    monkeypatch.setattr(openai_client, "_post", whole)
+    monkeypatch.setattr(openai_client, "_post_stream", streamed)
+    client = OpenAIClient("http://model.test/v1", "m")
+    heard = _Heard()
+
+    assert client.complete([{"role": "user", "content": "hi"}], []) == Reply(text="Hi.")
+    with listening(heard):
+        assert client.complete([{"role": "user", "content": "hi"}], []) == Reply(text="Hi.")
+
+    assert used == ["whole", "streamed"]
+    assert heard.began == 1  # each attempt starts the listener afresh

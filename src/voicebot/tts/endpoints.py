@@ -118,6 +118,23 @@ class EndpointsTTSEngine(TTSEngine):
         cut = [short for piece in found for short in split_long(piece, language)]
         return [piece for piece in cut if prepare_for_speech(piece, language)] or [text]
 
+    def first_piece(self, text: str, voice: str | None = None) -> str | None:
+        """What `pieces` would start with, as soon as a reply's opening words settle it.
+
+        Fed only what has been written so far, the cutter gives a piece only
+        once it is complete -- the same piece it gives the whole reply.
+        """
+        language = self._language(text, voice)
+        endpoint = self.voices[language].endpoint
+        stream = SentenceStream(
+            first_words=endpoint.first_chunk_words, growth=endpoint.chunk_growth
+        )
+        for found in stream.feed(text):
+            for piece in split_long(found, language):
+                if prepare_for_speech(piece, language):
+                    return piece
+        return None
+
     def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
         """`voice` may name the language; otherwise the text's script decides."""
         language = self._language(text, voice)

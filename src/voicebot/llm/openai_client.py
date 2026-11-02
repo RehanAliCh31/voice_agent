@@ -23,10 +23,19 @@ import socket
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterable, Iterator
 from typing import Any
 
 from voicebot.errors import ErrorCode, code_for_status, retry_after_seconds
-from voicebot.llm.base import ContextOverflow, LLMClient, LLMUnavailable, Reply, ToolCall
+from voicebot.llm.base import (
+    ContextOverflow,
+    LLMClient,
+    LLMUnavailable,
+    Reply,
+    TextListener,
+    ToolCall,
+    text_listener,
+)
 from voicebot.utils.logging import get_logger
 from voicebot.utils.resilience import RetryPolicy, breaker, call_with_retry
 
@@ -105,6 +114,83 @@ def _http_error(exc: urllib.error.HTTPError, url: str) -> LLMUnavailable:
     )
 
 
+def _post_stream(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    timeout: float,
+    listener: TextListener,
+) -> Any:
+    """The same request, streamed: the listener hears the words as they come.
+
+    Returns the answer in the shape `_post` does, so it is read the same way.
+    `timeout` bounds the whole exchange, as for `_post`.
+    """
+    request = urllib.request.Request(
+        url,
+        data=json.dumps({**payload, "stream": True}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "text/event-stream", **headers},
+        method="POST",
+    )
+    finish = time.monotonic() + timeout
+
+    def lines() -> Iterator[str]:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            for raw in response:
+                if time.monotonic() > finish:
+                    raise TimeoutError(f"no complete answer within {timeout:.1f}s")
+                yield raw.decode("utf-8")
+
+    return _read_stream(lines(), listener)
+
+
+def _read_stream(lines: Iterable[str], listener: TextListener) -> dict[str, Any]:
+    """Server-sent chat-completion chunks, put back together as one answer.
+
+    Text is passed to the listener as it arrives; a tool call arrives in
+    pieces, by index, and is joined. A listener that fails is logged and
+    ignored: the reply matters more than an early start on speaking it.
+    """
+    text: list[str] = []
+    calls: dict[int, dict[str, Any]] = {}
+    finish_reason = None
+    for line in lines:
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:") :].strip()
+        if data == "[DONE]":
+            break
+        event = json.loads(data)
+        if isinstance(event.get("error"), dict | str):
+            return {"error": event["error"]}
+        for choice in event.get("choices") or ():
+            delta = choice.get("delta") or {}
+            words = delta.get("content")
+            if isinstance(words, str) and words:
+                text.append(words)
+                try:
+                    listener.feed(words)
+                except Exception as exc:  # the listener's trouble must not cost the reply
+                    log.warning("the reply's listener failed: %s", type(exc).__name__)
+            for part in delta.get("tool_calls") or ():
+                call = calls.setdefault(
+                    int(part.get("index", 0)),
+                    {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                )
+                if part.get("id"):
+                    call["id"] = part["id"]
+                function = part.get("function") or {}
+                call["function"]["name"] += function.get("name") or ""
+                call["function"]["arguments"] += function.get("arguments") or ""
+            if choice.get("finish_reason"):
+                finish_reason = choice["finish_reason"]
+    message: dict[str, Any] = {"content": "".join(text) or None}
+    if calls:
+        message["tool_calls"] = [calls[index] for index in sorted(calls)]
+    return {"choices": [{"message": message, "finish_reason": finish_reason}]}
+
+
 class OpenAIClient(LLMClient):
     """Talks to a chat-completions endpoint."""
 
@@ -156,9 +242,15 @@ class OpenAIClient(LLMClient):
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         url = f"{self.base_url}/chat/completions"
 
+        listener = text_listener()
+
         def attempt(timeout: float) -> Reply:
             try:
-                body = _post(url, payload, headers, timeout)
+                if listener is None:
+                    body = _post(url, payload, headers, timeout)
+                else:
+                    listener.begin()
+                    body = _post_stream(url, payload, headers, timeout, listener)
             except urllib.error.HTTPError as exc:
                 raise _http_error(exc, url) from exc
             except TimeoutError as exc:

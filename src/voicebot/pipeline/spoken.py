@@ -19,13 +19,16 @@ import contextvars
 import secrets
 import threading
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import TypeVar
 
 from voicebot.errors import Cancelled, InternalError
 from voicebot.schemas import AudioBuffer
 from voicebot.utils.logging import get_logger
 from voicebot.utils.observability import report
 from voicebot.utils.resilience import CancelToken, cancel_context
+
+T = TypeVar("T")
 
 log = get_logger("pipeline.spoken")
 
@@ -43,6 +46,11 @@ def _pool() -> ThreadPoolExecutor:
         if _POOL is None:
             _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="voice")
         return _POOL
+
+
+def in_background(work: Callable[[], T]) -> Future[T]:
+    """`work` on the voice pool, in the caller's context: its call id, its cancel token."""
+    return _pool().submit(contextvars.copy_context().run, work)
 
 
 def shutdown() -> None:

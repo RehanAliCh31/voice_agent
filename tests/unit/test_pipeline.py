@@ -378,3 +378,98 @@ def test_nothing_added_after_the_voice_failed_is_spoken(bank: Bank) -> None:
     result.rest.add("Bye.")
     assert result.rest.wait(3, timeout=5) is None
     assert "Bye." not in [text for text, _ in tts.said]
+
+
+# --- the first piece begun while the model writes ---------------------------------
+
+
+class _Streaming(FakeLLMClient):
+    """A scripted model that tells the listener its words as it 'writes' them.
+
+    `written` is what streams; the reply returned is the scripted one, as a
+    real client returns what it was sent -- unless a test makes them differ.
+    """
+
+    def __init__(self, replies: list[Reply], written: str | None = None) -> None:
+        super().__init__(replies)
+        self.written = written
+
+    def complete(self, messages, tools, tool_choice="auto"):  # type: ignore[no-untyped-def]
+        from voicebot.llm.base import text_listener
+
+        reply = super().complete(messages, tools, tool_choice)
+        listener = text_listener()
+        if listener is not None:
+            listener.begin()
+            for word in (self.written or reply.text or "").split(" "):
+                listener.feed(word + " ")
+        return reply
+
+
+class _SentenceVoice(FakeTTSEngine):
+    """Cuts a reply at its full stops, knows the first piece once a second begins."""
+
+    def __init__(self) -> None:
+        super().__init__(seconds_per_char=0.01)
+        self.said: list[str] = []
+
+    def pieces(self, text: str, voice: str | None = None) -> list[str]:
+        return [p.strip() + "." for p in text.split(".") if p.strip()] or [text]
+
+    def first_piece(self, text: str, voice: str | None = None) -> str | None:
+        head, dot, tail = text.partition(". ")
+        return head.strip() + "." if dot and tail.strip() else None
+
+    def synthesize(self, text: str, voice: str | None = None) -> AudioBuffer:
+        self.said.append(text)
+        return super().synthesize(text, voice)
+
+
+def _streaming_pipeline(
+    bank: Bank, reply: str, written: str | None = None
+) -> tuple[VoicePipeline, _SentenceVoice]:
+    voice = _SentenceVoice()
+    agent = Agent(_Streaming([Reply(text=reply)], written), ToolExecutor(bank))
+    pipeline = VoicePipeline(asr=FakeASREngine(fixed_text="hello"), agent=agent, tts=voice)
+    return pipeline, voice
+
+
+def test_the_first_piece_is_made_while_the_model_writes_and_made_once(bank: Bank) -> None:
+    pipeline, voice = _streaming_pipeline(bank, "Hello there. How can I help today.")
+
+    result = pipeline.respond_to_text("hello", Conversation("s1"))
+
+    assert result.pieces == ("Hello there.", "How can I help today.")
+    assert voice.said.count("Hello there.") == 1  # begun early, and not made again
+    assert len(result.audio.samples) == len(voice.synthesize("Hello there.").samples)
+
+
+def test_a_first_piece_begun_early_is_not_heard_if_the_checked_reply_differs(bank: Bank) -> None:
+    # What streamed began "You owe $99.00." -- the reply that came through the
+    # guards starts otherwise, and only that is spoken.
+    pipeline, voice = _streaming_pipeline(
+        bank, "Hello there. How can I help today.", written="You owe nothing. Bye now."
+    )
+
+    result = pipeline.respond_to_text("hello", Conversation("s1"))
+
+    import time
+
+    finish = time.monotonic() + 2
+    while "You owe nothing." not in voice.said and time.monotonic() < finish:
+        time.sleep(0.01)
+    assert "You owe nothing." in voice.said  # begun early, in the background...
+    assert "Hello there." in voice.said  # ...and the checked reply made all the same
+    # What is heard is the checked reply's first piece, not the one begun early.
+    assert result.pieces[0] == "Hello there."
+    assert len(result.audio.samples) == len(voice.synthesize("Hello there.").samples)
+
+
+def test_nothing_is_begun_early_when_the_page_speaks_for_itself(bank: Bank) -> None:
+    voice = _SentenceVoice()
+    agent = Agent(_Streaming([Reply(text="Hello there. Bye.")]), ToolExecutor(bank))
+    pipeline = VoicePipeline(asr=FakeASREngine(), agent=agent, tts=voice, speak=False)
+
+    pipeline.respond_to_text("hello", Conversation("s1"))
+
+    assert voice.said == []

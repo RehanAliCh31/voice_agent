@@ -12,9 +12,12 @@ model, and stripping them would be deliberate damage.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import re
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future
 from dataclasses import dataclass
 
 import numpy as np
@@ -23,10 +26,11 @@ from voicebot.agent.loop import Agent, AgentResult, Conversation
 from voicebot.asr.base import ASREngine, ASRUnavailable
 from voicebot.assistant.language import typed_language
 from voicebot.errors import Cancelled, InternalError
+from voicebot.llm.base import listening
 from voicebot.messages import say
 from voicebot.pipeline.audio_io import is_silent, trim_silence
 from voicebot.pipeline.latency import LatencyBreakdown, LatencyTracker
-from voicebot.pipeline.spoken import SpokenReply
+from voicebot.pipeline.spoken import SpokenReply, in_background
 from voicebot.schemas import AudioBuffer, Transcript
 from voicebot.tts.base import TTSEngine
 from voicebot.utils.logging import get_logger
@@ -74,6 +78,60 @@ def _hear_language(transcript: Transcript, conversation: Conversation) -> None:
     )
 
 
+class _EarlyFirstPiece:
+    """A reply's first piece, made by the voice while the model is still writing.
+
+    Fed the model's words as they come (a TextListener). The first piece the
+    voice would cut from them, once they settle it, is synthesised in the
+    background. `take` gives that audio only for the very same piece of the
+    reply that passed the guards; anything else -- the guard changed the
+    reply, the language was asked for again, a round started over -- and it
+    is not used, and the piece is made as it always was.
+    """
+
+    def __init__(
+        self, tts: TTSEngine, language: str, speak: Callable[[str, str], AudioBuffer]
+    ) -> None:
+        self._tts = tts
+        self._language = language
+        self._speak = speak
+        self._lock = threading.Lock()
+        self._text = ""
+        self._piece: str | None = None
+        self._audio: Future[AudioBuffer] | None = None
+
+    def begin(self) -> None:
+        with self._lock:
+            self._text, self._piece, self._audio = "", None, None
+
+    def feed(self, text: str) -> None:
+        with self._lock:
+            if self._audio is not None:
+                return
+            self._text += text
+            piece = self._tts.first_piece(self._text, self._language)
+            if piece is None:
+                return
+            self._piece = piece
+            language, speak = self._language, self._speak
+            self._audio = in_background(lambda: speak(piece, language))
+
+    def take(self, piece: str) -> AudioBuffer | None:
+        """The audio made early, if it was made for exactly `piece`."""
+        with self._lock:
+            audio, early = self._audio, self._piece
+        if audio is None:
+            return None
+        if early != piece:
+            log.info("the reply's first piece changed after it was begun; making it again")
+            return None
+        try:
+            return audio.result()
+        except Exception as exc:  # made again below, the usual way, and reported there if it fails
+            log.warning("the first piece begun early failed: %s", type(exc).__name__)
+            return None
+
+
 class VoicePipeline:
     """Runs one conversational turn end to end."""
 
@@ -88,6 +146,7 @@ class VoicePipeline:
         self.agent = agent
         self.tts = tts
         self.speak = speak
+        self._early: _EarlyFirstPiece | None = None
 
     def converse(self, audio: AudioBuffer, conversation: Conversation) -> TurnResult:
         """Audio in, audio out."""
@@ -175,7 +234,7 @@ class VoicePipeline:
         tracker: LatencyTracker,
     ) -> TurnResult:
         checkpoint("the model")
-        with tracker.stage("agent"):
+        with tracker.stage("agent"), self._speaking_early(conversation.language):
             result = self._safely(lambda: self.agent.handle(text, conversation), conversation)
 
         checkpoint("speaking")
@@ -199,7 +258,7 @@ class VoicePipeline:
         tracker = LatencyTracker()
         transcript = Transcript(text="yes" if confirmed else "no", confidence=1.0, duration_s=0.0)
 
-        with tracker.stage("agent"):
+        with tracker.stage("agent"), self._speaking_early(conversation.language):
             result = self._safely(
                 lambda: self.agent.resolve_pending(confirmed, conversation), conversation
             )
@@ -219,6 +278,22 @@ class VoicePipeline:
         )
         self._log(turn, conversation.language)
         return turn
+
+    @contextlib.contextmanager
+    def _speaking_early(self, language: str) -> Iterator[None]:
+        """While the model writes, its reply's first piece goes to the voice.
+
+        The model's words are streamed, and once they settle the first piece
+        it is synthesised while the rest is still being written. It is heard
+        only if the reply that passes every guard starts with exactly that
+        piece (`_speak_reply`): nothing is spoken before all of it is checked.
+        """
+        if not self.speak:
+            yield
+            return
+        self._early = _EarlyFirstPiece(self.tts, language, self._speak)
+        with listening(self._early):
+            yield
 
     def _safely(self, work: Callable[[], AgentResult], conversation: Conversation) -> AgentResult:
         """Run the agent; anything it did not expect ends the turn in a sentence.
@@ -258,7 +333,9 @@ class VoicePipeline:
         except Exception as exc:  # cutting it up failed: say it whole
             report(InternalError(f"the reply could not be cut: {type(exc).__name__}", cause=exc))
             pieces = [text]
-        first = self._speak(pieces[0], language)
+        early, self._early = self._early, None
+        made = early.take(pieces[0]) if early is not None else None
+        first = made if made is not None else self._speak(pieces[0], language)
         if not len(first.samples) and text.strip():
             kept = self.tts.kept("voice_unavailable", language)
             if kept is not None:

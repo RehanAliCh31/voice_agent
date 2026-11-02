@@ -34,6 +34,14 @@ class TTSEngine(ABC):
         """
         return [text]
 
+    def first_piece(self, text: str, voice: str | None = None) -> str | None:
+        """The first of `pieces`, once the beginning of a reply settles what it is.
+
+        `text` is a reply still being written. None until enough of it has
+        come; an engine that says replies whole never knows before the end.
+        """
+        return None
+
     def kept(self, key: str, language: str) -> AudioBuffer | None:
         """A recording of one of the bot's own sentences, made earlier, if there is one."""
         return None

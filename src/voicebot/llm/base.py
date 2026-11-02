@@ -8,10 +8,12 @@ more than it added.
 
 from __future__ import annotations
 
+import contextlib
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from voicebot.errors import ErrorCode, ProviderUnavailable
 
@@ -58,8 +60,40 @@ class Reply:
     tool_calls: tuple[ToolCall, ...] = ()
 
 
+class TextListener(Protocol):
+    """Told the words of a reply as the model writes them.
+
+    `begin` starts each attempt at a round afresh: a retried request, or the
+    next round of a turn, writes its words from the beginning again.
+    """
+
+    def begin(self) -> None: ...
+    def feed(self, text: str) -> None: ...
+
+
+_LISTENER: ContextVar[TextListener | None] = ContextVar("text_listener", default=None)
+
+
+@contextlib.contextmanager
+def listening(listener: TextListener) -> Iterator[TextListener]:
+    """While inside, a client that can stream tells `listener` the words it is sent."""
+    reset = _LISTENER.set(listener)
+    try:
+        yield listener
+    finally:
+        _LISTENER.reset(reset)
+
+
+def text_listener() -> TextListener | None:
+    return _LISTENER.get()
+
+
 class LLMClient(ABC):
-    """Sends a conversation to a model and returns what it said."""
+    """Sends a conversation to a model and returns what it said.
+
+    A client may stream: when `text_listener()` is set it tells it the words
+    as they arrive. What `complete` returns is the same either way.
+    """
 
     @abstractmethod
     def complete(
