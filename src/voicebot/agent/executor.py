@@ -79,6 +79,27 @@ class ToolOutcome:
 TOOL_FAILED = "tool_failed"
 OUTCOME_UNKNOWN = "outcome_unknown"
 
+# More rows than this are not read out one by one. Told in the prompt to say
+# how many there are and name a few, the model read all nine bills aloud in
+# Urdu seven times in nine; so a long list carries, worked out here from the
+# bank, what to say instead (`too_many_to_read`). The whole list stays in the
+# result, for the screen and for the next question.
+READ_ALOUD_MAX = 3
+
+
+def _too_many(
+    count: int, mention: list[dict[str, str]], which: str, **extra: int
+) -> dict[str, Any]:
+    """What to say of a list too long to read aloud: its size, and the few that matter."""
+    return {
+        "count": count,
+        **extra,
+        "mention": mention,
+        "which": which,
+        "say": "Say how many there are, name only those in mention, and offer to "
+        "read the rest. Do not read the whole list aloud.",
+    }
+
 
 @dataclass
 class PendingAction:
@@ -623,20 +644,26 @@ class ToolExecutor:
 
     def _list_bills(self, _: dict[str, Any]) -> ToolOutcome:
         bills = self.bank.bills()
-        return ToolOutcome(
-            {
-                "bills": [
-                    {
-                        "name": b.name,
-                        "amount": format_money(b.amount_cents),
-                        "amount_cents": b.amount_cents,
-                        "paid": b.paid,
-                    }
-                    for b in bills
-                ]
-            },
-            sourced_cents=tuple(b.amount_cents for b in bills),
-        )
+        result: dict[str, Any] = {
+            "bills": [
+                {
+                    "name": b.name,
+                    "amount": format_money(b.amount_cents),
+                    "amount_cents": b.amount_cents,
+                    "paid": b.paid,
+                }
+                for b in bills
+            ]
+        }
+        if len(bills) > READ_ALOUD_MAX:
+            unpaid = sorted((b for b in bills if not b.paid), key=lambda b: -b.amount_cents)
+            result["too_many_to_read"] = _too_many(
+                len(bills),
+                [{"name": b.name, "amount": format_money(b.amount_cents)} for b in unpaid[:2]],
+                "the largest of those still to pay",
+                unpaid=len(unpaid),
+            )
+        return ToolOutcome(result, sourced_cents=tuple(b.amount_cents for b in bills))
 
     def _list_cards(self, _: dict[str, Any]) -> ToolOutcome:
         return ToolOutcome(
@@ -703,33 +730,37 @@ class ToolExecutor:
             merchant=_optional_text(arguments.get("merchant")),
             period=period,
         )
-        return ToolOutcome(
-            {
-                # Named back so the reply can say which stretch of time it
-                # covers, and so an empty list reads as "nothing this week"
-                # rather than as "nothing, ever".
-                "period": period,
-                "transactions": [
-                    {
-                        # The handle a dispute refers to. Two $10.99 charges
-                        # are not interchangeable, and a merchant and amount
-                        # cannot tell them apart.
-                        "id": row.id,
-                        "merchant": row.merchant,
-                        "account": row.account,
-                        "amount": format_money(abs(row.cents)),
-                        "amount_cents": abs(row.cents),
-                        "direction": "out" if row.spent else "in",
-                        "occurred_at": row.occurred_at,
-                    }
-                    for row in rows
-                ],
-            },
-            # Absolute, because that is what gets spoken. The ledger keeps the
-            # sign and the reply states the direction in words; a guard
-            # comparing against a negative would suppress every figure here.
-            sourced_cents=tuple(abs(row.cents) for row in rows),
-        )
+        result: dict[str, Any] = {
+            # Named back so the reply can say which stretch of time it
+            # covers, and so an empty list reads as "nothing this week"
+            # rather than as "nothing, ever".
+            "period": period,
+            "transactions": [
+                {
+                    # The handle a dispute refers to. Two $10.99 charges
+                    # are not interchangeable, and a merchant and amount
+                    # cannot tell them apart.
+                    "id": row.id,
+                    "merchant": row.merchant,
+                    "account": row.account,
+                    "amount": format_money(abs(row.cents)),
+                    "amount_cents": abs(row.cents),
+                    "direction": "out" if row.spent else "in",
+                    "occurred_at": row.occurred_at,
+                }
+                for row in rows
+            ],
+        }
+        if len(rows) > READ_ALOUD_MAX:
+            result["too_many_to_read"] = _too_many(
+                len(rows),
+                [{"name": r.merchant, "amount": format_money(abs(r.cents))} for r in rows[:2]],
+                "the most recent",
+            )
+        # Absolute, because that is what gets spoken. The ledger keeps the
+        # sign and the reply states the direction in words; a guard
+        # comparing against a negative would suppress every figure here.
+        return ToolOutcome(result, sourced_cents=tuple(abs(row.cents) for row in rows))
 
     @staticmethod
     def _row_count(value: Any) -> int:

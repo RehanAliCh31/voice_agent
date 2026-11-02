@@ -1065,3 +1065,34 @@ def test_listing_transactions_offers_the_periods_spending_already_uses(
         return schema["function"]["parameters"]["properties"]["period"]["enum"]
 
     assert periods("list_transactions") == periods("get_spending")
+
+
+# --- a list too long to read aloud --------------------------------------------
+
+
+def test_a_long_bill_list_says_how_to_read_it_aloud(executor: ToolExecutor) -> None:
+    # Nine bills: read out in full, an answer is half a minute of figures.
+    out = executor.execute(call("list_bills"))
+
+    short = out.result["too_many_to_read"]
+    assert (short["count"], short["unpaid"]) == (9, 9)
+    # The two largest unpaid ones, from the bank: rent, then groceries.
+    assert short["mention"] == [
+        {"name": "rent", "amount": "$1,200.00"},
+        {"name": "groceries", "amount": "$450.00"},
+    ]
+    assert len(out.result["bills"]) == 9  # the whole list is still there, for the screen
+
+
+def test_a_long_bill_list_counts_only_what_is_left_to_pay(executor: ToolExecutor) -> None:
+    executor.bank.pay_bill("rent")
+
+    short = executor.execute(call("list_bills")).result["too_many_to_read"]
+
+    assert (short["count"], short["unpaid"]) == (9, 8)
+    assert short["mention"][0] == {"name": "groceries", "amount": "$450.00"}
+
+
+def test_a_short_list_is_read_as_it_is(executor: ToolExecutor) -> None:
+    assert "too_many_to_read" not in executor.execute(call("list_cards")).result
+    assert "too_many_to_read" not in executor.execute(call("list_accounts")).result
