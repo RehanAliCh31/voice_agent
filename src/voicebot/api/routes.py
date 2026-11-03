@@ -9,24 +9,22 @@ reports about its own work comes back with the turn itself.
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextvars
 import json
 import secrets
 from collections.abc import Callable
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
 
-from voicebot import __version__, profile
+from voicebot import __version__
 from voicebot.api.audit import TurnRecord
 from voicebot.api.deps import Services, get_services
 from voicebot.api.payloads import (
     ActionPayload,
     ActionRequest,
-    AudioPayload,
     CardDetailsPayload,
     CardsPayload,
     ConfirmRequest,
@@ -37,10 +35,8 @@ from voicebot.api.payloads import (
     PinRequest,
     ReadyPayload,
     SessionRequest,
-    SpeakRequest,
     StatementPayload,
     TextRequest,
-    TranscriptPayload,
     TurnPayload,
     card_details_payload,
     cards_payload,
@@ -49,14 +45,12 @@ from voicebot.api.payloads import (
     statement_payload,
 )
 from voicebot.api.sessions import Session, SessionStore
-from voicebot.asr.base import ASRUnavailable
 from voicebot.bank.base import PIN_LENGTH, BankError, Card
 from voicebot.errors import Cancelled, call_context
 from voicebot.llm.base import ToolCall
-from voicebot.messages import messages, say
-from voicebot.pipeline.audio_io import decode_wav, encode_wav
+from voicebot.messages import messages
+from voicebot.pipeline.audio_io import encode_wav
 from voicebot.pipeline.orchestrator import TurnResult, VoicePipeline
-from voicebot.schemas import AudioBuffer
 from voicebot.utils.logging import get_logger
 from voicebot.utils.observability import count, metrics_lines
 from voicebot.utils.resilience import CancelToken, cancel_context
@@ -68,28 +62,6 @@ router = APIRouter()
 # How long the page may wait for one piece of a reply's audio: a voice's own
 # limit, its one retry and its backup, with a margin.
 PIECE_WAIT_S = 45.0
-
-MAX_AUDIO_BYTES = 10 * 1024 * 1024  # ~5 minutes of 16 kHz mono
-
-
-def _read_audio(data: bytes) -> AudioBuffer:
-    """Decode an uploaded WAV, refusing anything unusable with a clear reason."""
-    if not data:
-        raise HTTPException(status_code=400, detail="No audio was uploaded.")
-    if len(data) > MAX_AUDIO_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Audio is {len(data) // 1024} kB; the limit is {MAX_AUDIO_BYTES // 1024} kB.",
-        )
-    try:
-        return decode_wav(data)
-    except Exception as exc:  # any decoder failure is the same refusal
-        # The decoder's own words ("file does not start with RIFF id") are
-        # for the log, not for the page.
-        log.warning("an upload could not be decoded: %s", type(exc).__name__)
-        raise HTTPException(
-            status_code=400, detail="That recording could not be read. Please try again."
-        ) from exc
 
 
 def _session_id(store: SessionStore, given: str | None) -> str:
@@ -164,7 +136,6 @@ def ready(response: Response, services: Services = Depends(get_services)) -> Rea
         asr=described["asr"],
         llm=described["llm"],
         tts=described["tts"],
-        device=services.device,
         sessions=len(services.sessions),
         checks=checks,
     )
@@ -213,21 +184,6 @@ def metrics(services: Services = Depends(get_services)) -> str:
         ]
     lines += metrics_lines()
     return "\n".join(lines) + "\n"
-
-
-@router.get("/v1/voice", tags=["ops"])
-def voice(services: Services = Depends(get_services)) -> dict[str, object]:
-    """Who is speaking, and whether the page does the speaking itself.
-
-    The page reads this once: with the office voices it never speaks in the
-    browser's own voice, which may be the other gender and has no Urdu.
-    """
-    me = profile.current()
-    return {
-        "speaks_client_side": services.speaks_client_side,
-        "gender": me.gender,
-        "name": {"en": me.name("en"), "ur": me.name("ur")},
-    }
 
 
 @router.get("/v1/messages/{key}/audio", tags=["ops"])
@@ -282,47 +238,6 @@ def fallback_messages() -> dict[str, dict[str, str]]:
     the same one file as everything else the bot says when something fails.
     """
     return messages()
-
-
-# --- single stages, for debugging -------------------------------------------
-
-
-@router.post("/v1/transcribe", response_model=TranscriptPayload, tags=["stages"])
-async def transcribe(
-    audio: UploadFile = File(..., description="16-bit PCM WAV"),
-    services: Services = Depends(get_services),
-) -> TranscriptPayload:
-    """Audio to text. The ASR stage on its own."""
-    buffer = _read_audio(await audio.read())
-    try:
-        # A worker thread: recognition blocks, and the event loop is everyone's.
-        transcript = await run_in_threadpool(services.asr.transcribe, buffer)
-    except ASRUnavailable as exc:
-        raise HTTPException(
-            status_code=503, detail="Speech recognition is unavailable just now."
-        ) from exc
-    return TranscriptPayload(
-        text=transcript.text,
-        confidence=transcript.confidence,
-        duration_s=transcript.duration_s,
-    )
-
-
-@router.post("/v1/speak", response_model=AudioPayload, tags=["stages"])
-def speak(request: SpeakRequest, services: Services = Depends(get_services)) -> AudioPayload:
-    """Text to audio. The TTS stage on its own.
-
-    Returns empty audio when the page is doing the speaking, which is the
-    honest answer rather than an error.
-    """
-    if not request.text.strip():
-        raise HTTPException(status_code=400, detail="Nothing to say.")
-    buffer = services.tts.synthesize(request.text)
-    return AudioPayload(
-        audio_b64=base64.b64encode(encode_wav(buffer)).decode("ascii"),
-        sample_rate=buffer.sample_rate,
-        duration_s=buffer.duration_s,
-    )
 
 
 # --- a whole turn ------------------------------------------------------------
@@ -508,37 +423,6 @@ def statement(
         return statement_payload(services.bank, year or today.year, month or today.month)
     except BankError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/v1/converse", response_model=TurnPayload, tags=["conversation"])
-async def converse(
-    request: Request,
-    audio: UploadFile = File(..., description="16-bit PCM WAV"),
-    session_id: str | None = Form(default=None),
-    services: Services = Depends(get_services),
-) -> TurnPayload | Response:
-    """Audio in, audio out. The whole pipeline, with conversation state."""
-    data = await audio.read()
-    sid = _session_id(services.sessions, session_id)
-    try:
-        buffer = _read_audio(data)
-    except HTTPException as refused:
-        # A recording that cannot be used is still a turn: the customer spoke,
-        # and hears a sentence saying so, not an error box.
-        detail = refused.detail
-
-        def unusable(session: Session, pipeline: VoicePipeline) -> TurnResult:
-            log.info("answering an unusable recording: %s", detail)
-            return pipeline.say(say("bad_audio", session.conversation.language), key="bad_audio")
-
-        return await _turn(request, services, sid, unusable)
-
-    return await _turn(
-        request,
-        services,
-        sid,
-        lambda session, pipeline: pipeline.converse(buffer, session.conversation),
-    )
 
 
 @router.post("/v1/chat", response_model=TurnPayload, tags=["conversation"])

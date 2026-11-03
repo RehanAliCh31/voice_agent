@@ -10,13 +10,7 @@
 var state = {
   phase: "idle", // idle | listening | thinking | speaking
   sessionId: null,
-  stream: null,
-  recorder: null,
-  chunks: [],
   playing: null,
-  vad: null,
-  voice: null,
-  toldAboutVoices: false,
   balances: {}, // account name -> cents, as of the last turn
   lastTotalMs: null,
   view: "assistant",
@@ -29,10 +23,6 @@ var state = {
   turnRequest: null, // the turn being waited for, so it can be abandoned
   playGeneration: 0, // moved on by every interruption: a reply still playing stops
   clips: {}, // the bot's own recordings of its failure sentences, "key:language" -> Blob
-  // Whether the page speaks with the browser's own voice. Only when the
-  // service says so: with the office voices it never does, because the
-  // browser's voice may be the other gender and has no Urdu.
-  clientVoice: false,
 };
 
 var el = {};
@@ -49,15 +39,6 @@ var api = {
     });
   },
 
-  converse: function (wavBlob) {
-    var form = new FormData();
-    form.append("audio", wavBlob, "turn.wav");
-    if (state.sessionId) {
-      form.append("session_id", state.sessionId);
-    }
-    return request("/v1/converse", { method: "POST", body: form }, TURN);
-  },
-
   chat: function (text) {
     return request(
       "/v1/chat",
@@ -72,10 +53,6 @@ var api = {
 
   messages: function () {
     return request("/v1/messages", { method: "GET" });
-  },
-
-  voice: function () {
-    return request("/v1/voice", { method: "GET" });
   },
 
   /** A WAV the service has, as a Blob; null for 204 or 404. */
@@ -295,14 +272,6 @@ function loadClips() {
 }
 
 function loadSentences() {
-  api
-    .voice()
-    .then(function (voice) {
-      state.clientVoice = Boolean(voice && voice.speaks_client_side);
-    })
-    .catch(function () {
-      // Unknown: the browser's voice stays unused, which is never wrong.
-    });
   loadClips();
   return api
     .messages()

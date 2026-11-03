@@ -10,7 +10,6 @@ asr:
   engine: fake
 
 tts:
-  # `browser` hands synthesis to the page; `vits` synthesises here.
   engine: fake
 
 llm:

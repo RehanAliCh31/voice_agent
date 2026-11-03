@@ -11,7 +11,7 @@
  */
 
 import { abortTurn, api, el, loadSentences, state } from "./core.js";
-import { loadVoices, stopPlayback } from "./audio.js";
+import { stopPlayback } from "./audio.js";
 import { fail, onTurn, resolvePending, send, setPhase, setStatus } from "./conversation.js";
 import {
   cardNamed,
@@ -32,7 +32,7 @@ import {
   renderBills,
   showView,
 } from "./screens.js";
-import { onBargeIn, onMicClick, stopLive, wakeLive } from "./mic.js";
+import { onMicClick, stopLive, wakeLive } from "./mic.js";
 
 // The screens that redraw after a turn. Saying it here, once, is what lets
 // the conversation stay ignorant of them: a new screen is a line in this
@@ -127,11 +127,7 @@ window.addEventListener("unhandledrejection", function (event) {
 });
 
 function boot() {
-  loadVoices();
   loadSentences();
-  if (window.speechSynthesis) {
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-  }
 
   // Which engines are loaded was a builder's question, not a customer's.
   // Whether the server answers at all still matters, and the dock is where
@@ -147,7 +143,6 @@ document.addEventListener("DOMContentLoaded", function () {
     "conversation", "empty", "confirm", "confirmYes", "confirmNo",
     "micButton", "statusLabel", "statusHint", "levelFill",
     "sayForm", "sayInput", "resetButton",
-    "vadToggle", "vadSensitivity", "vadValue", "vadNote",
     "screens", "statement", "statementTotal", "statementMonth",
     "statementIn", "statementOut", "cardPicker", "cardPane",
     "monthlyPlans", "monthlyCommitted", "monthlyMonth", "monthlyPaid",
@@ -163,25 +158,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
   el.views = document.getElementById("views");
   el.confirmText = document.querySelector(".confirm__text");
-  el.bargein = document.querySelector(".bargein");
-
-  state.vad = new window.VoiceActivity({
-    onSpeech: onBargeIn,
-    onLevel: function (rms, trigger) {
-      // While listening, the meter is just loudness. While the bot is
-      // speaking, it is loudness against the line barge-in has to clear --
-      // which moves with the room -- so you can see why it did or did not
-      // fire, and set the slider by looking rather than by guessing.
-      if (state.phase === "listening") {
-        el.levelFill.style.width = Math.min(100, Math.round(rms * 400)) + "%";
-        el.levelFill.removeAttribute("data-over");
-      } else if (state.phase === "speaking") {
-        var share = trigger > 0 ? rms / trigger : 0;
-        el.levelFill.style.width = Math.min(100, Math.round(share * 90)) + "%";
-        el.levelFill.setAttribute("data-over", share >= 1 ? "true" : "false");
-      }
-    },
-  });
 
   el.pinGo.addEventListener("click", onPinGo);
   el.pinCancel.addEventListener("click", closePin);
@@ -243,19 +219,6 @@ document.addEventListener("DOMContentLoaded", function () {
   el.confirmNo.addEventListener("click", function () {
     el.confirm.hidden = true;
     resolvePending(api.cancel());
-  });
-
-  el.vadToggle.addEventListener("change", function () {
-    state.vad.enabled = el.vadToggle.checked;
-    el.bargein.setAttribute("data-enabled", String(el.vadToggle.checked));
-    el.vadNote.textContent = el.vadToggle.checked
-      ? "Speak while the bot is talking and it will stop and listen."
-      : "The bot will finish speaking before it listens again.";
-  });
-
-  el.vadSensitivity.addEventListener("input", function () {
-    el.vadValue.textContent = el.vadSensitivity.value;
-    state.vad.setSensitivity(el.vadSensitivity.value);
   });
 
   boot();

@@ -1,6 +1,6 @@
 """Which language was spoken, and so which transcript to believe.
 
-Neither recogniser can be told the language in advance in auto mode, so both
+Neither recogniser can be told the language in advance, so both
 hear every utterance at once (0.5-0.6 s for both, measured, against 0.3 and
 0.6 s apart) and the evidence is weighed:
 
@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import contextvars
 import re
-import threading
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -247,34 +246,13 @@ class LanguageRouter:
     # recogniser before deciding without it.
     wait_margin_s = 2.0
 
-    def __init__(self, mode: str, en: AsrClient, ur: AsrClient) -> None:
-        self.mode = mode
+    def __init__(self, en: AsrClient, ur: AsrClient) -> None:
         self.en = en
         self.ur = ur
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="asr")
-        self._jobs: set[Future[Transcript]] = set()
-        self._jobs_lock = threading.Lock()
-
-    def cancel_pending(self) -> int:
-        """Drop the jobs still queued for a recogniser, for a turn that was interrupted.
-
-        A job already running cannot be stopped -- its client's own timeout
-        ends it -- but one still waiting would otherwise hold up the next
-        turn's. Returns how many were dropped.
-        """
-        with self._jobs_lock:
-            jobs = list(self._jobs)
-        return sum(job.cancel() for job in jobs)
 
     def transcribe(self, wav: bytes, session_language: Language) -> Decision:
         """Raises AsrError only when no recogniser could be used at all."""
-        if self.mode == "en":
-            transcript = self.en.transcribe(wav, "en")
-            return Decision("en", transcript.text, "English only", {"en": transcript})
-        if self.mode == "ur":
-            transcript = self.ur.transcribe(wav, "ur")
-            return Decision("ur", transcript.text, "Urdu only", {"ur": transcript})
-
         # Whisper is not told a language, so that it says which one it heard.
         # Each job runs in the caller's context, so its log lines carry the
         # caller's call id.
@@ -284,26 +262,22 @@ class LanguageRouter:
         }
         results: dict[str, Transcript | None] = {}
         errors = []
-        try:
-            for name, job in jobs.items():
-                try:
-                    # The clients bound their own requests; this bounds the
-                    # wait for them too, so a recogniser that hangs past its
-                    # timeout cannot hold the turn.
-                    results[name] = job.result(timeout=self._wait_s(name))
-                except AsrError as exc:
-                    results[name] = None
-                    errors.append(str(exc))
-                except FutureTimeout:
-                    job.cancel()
-                    results[name] = None
-                    errors.append(f"the {name} recogniser did not finish in time")
-                except CancelledError:
-                    results[name] = None
-                    errors.append(f"the {name} recogniser's job was cancelled")
-        finally:
-            with self._jobs_lock:
-                self._jobs.difference_update(jobs.values())
+        for name, job in jobs.items():
+            try:
+                # The clients bound their own requests; this bounds the
+                # wait for them too, so a recogniser that hangs past its
+                # timeout cannot hold the turn.
+                results[name] = job.result(timeout=self._wait_s(name))
+            except AsrError as exc:
+                results[name] = None
+                errors.append(str(exc))
+            except FutureTimeout:
+                job.cancel()
+                results[name] = None
+                errors.append(f"the {name} recogniser did not finish in time")
+            except CancelledError:
+                results[name] = None
+                errors.append(f"the {name} recogniser's job was cancelled")
         if all(t is None for t in results.values()):
             raise AsrError("; ".join(errors))
         for error in errors:
@@ -318,10 +292,7 @@ class LanguageRouter:
         wav: bytes,
         language: str | None,
     ) -> Future[Transcript]:
-        job = self._pool.submit(contextvars.copy_context().run, transcribe, wav, language)
-        with self._jobs_lock:
-            self._jobs.add(job)
-        return job
+        return self._pool.submit(contextvars.copy_context().run, transcribe, wav, language)
 
     def _wait_s(self, name: str) -> float:
         client = self.en if name == "en" else self.ur

@@ -47,6 +47,20 @@ class Transcript:
     avg_logprob: float | None = None
 
 
+def to_rate(samples: np.ndarray, source: int, target: int) -> np.ndarray:
+    """16-bit samples at `source` Hz, resampled to `target` Hz."""
+    if source == target:
+        return samples
+    from math import gcd
+
+    from scipy.signal import resample_poly
+
+    g = gcd(source, target)
+    return np.clip(
+        resample_poly(samples.astype(np.float32), target // g, source // g), -32768, 32767
+    ).astype(np.int16)
+
+
 def to_wav(audio: np.ndarray, sample_rate: int = 16000) -> bytes:
     """16-bit mono PCM samples as a WAV file in memory. Nothing touches the disk."""
     buffer = io.BytesIO()

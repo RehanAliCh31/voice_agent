@@ -13,8 +13,6 @@ dependencies = [
     "numpy>=1.26",
     "pyyaml>=6.0",
     "pydantic>=2.6",
-    "torch>=2.2",
-    "transformers>=4.40",
 ]
 
 [project.optional-dependencies]
@@ -35,7 +33,6 @@ dev = [
 serve = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
-    "python-multipart>=0.0.9",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
     # The live voice session: uvicorn serves WebSockets only with this (or
@@ -44,11 +41,9 @@ serve = [
     # Silero VAD on the server, for the live session's endpointing and barge-in.
     "onnxruntime>=1.18",
 ]
-# The hands-free assistant: the microphone and speaker, and onnxruntime for
-# the wake word and voice activity models. Not the openwakeword package: on
-# Linux it needs tflite-runtime, which has no build for Python 3.12.
+# The office recognisers and voices are reached with httpx, the page's audio
+# is resampled with scipy, and the voice activity model runs on onnxruntime.
 assistant = [
-    "sounddevice>=0.5",
     "onnxruntime>=1.18",
     "scipy>=1.11",
     "httpx>=0.27",

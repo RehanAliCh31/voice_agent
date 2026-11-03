@@ -53,7 +53,6 @@ class Services:
     tts: TTSEngine
     bank: Bank
     sessions: SessionStore
-    device: str = "cpu"
     turns: int = 0
     tool_calls: dict[str, int] = field(default_factory=dict)
     audit: AuditWriter | None = None
@@ -90,10 +89,6 @@ class Services:
             turn_budget_s=self.config.resilience.turn_budget_s,
         )
         return VoicePipeline(asr=self.asr, agent=agent, tts=self.tts)
-
-    @property
-    def speaks_client_side(self) -> bool:
-        return bool(getattr(self.tts, "speaks_client_side", False))
 
     @property
     def in_flight(self) -> int:
@@ -176,7 +171,6 @@ class Services:
         return turn_payload(
             session_id,
             result,
-            self.speaks_client_side,
             awaiting_confirmation=session.executor.pending is not None,
             bank=self.bank,
         )
@@ -346,9 +340,9 @@ def build_services(config: AppConfig | None = None) -> Services:
     # Config is strict about unknown keys; it has to be strict about unknown
     # values too. A single typo would otherwise start cleanly and answer every
     # question with "the model isn't configured yet".
-    _check_engine("asr", config.asr.engine, {"whisper", "endpoints", "fake"})
+    _check_engine("asr", config.asr.engine, {"endpoints", "fake"})
     _check_engine("llm", config.llm.engine, {"openai", "fake"})
-    _check_engine("tts", config.tts.engine, {"vits", "browser", "endpoints", "fake"})
+    _check_engine("tts", config.tts.engine, {"endpoints", "fake"})
     _check_engine("database", config.database.engine, {"sqlite", "postgres"})
 
     # Who the bot is -- its gender, its name, its voices -- comes from the
@@ -374,15 +368,7 @@ def build_services(config: AppConfig | None = None) -> Services:
     log.info("the agent is %s, %s", profile.current().name("en"), profile.current().gender)
 
     asr: ASREngine
-    if config.asr.engine == "whisper":
-        from voicebot.asr.whisper_engine import WhisperASREngine
-
-        asr = WhisperASREngine.load(
-            model_name=config.asr.model_name,
-            device=config.asr.device,
-            language=config.asr.language,
-        )
-    elif config.asr.engine == "endpoints":
+    if config.asr.engine == "endpoints":
         from voicebot.asr.endpoints import EndpointsASREngine
         from voicebot.assistant.config import load_assistant_config
 
@@ -424,15 +410,7 @@ def build_services(config: AppConfig | None = None) -> Services:
         llm = FakeLLMClient([Reply(text="The model isn't configured yet.")] * 10_000)
 
     tts: TTSEngine
-    if config.tts.engine == "vits":
-        from voicebot.tts.vits_engine import VitsTTSEngine
-
-        tts = VitsTTSEngine.load(model_name=config.tts.model_name, device=config.tts.device)
-    elif config.tts.engine == "browser":
-        from voicebot.tts.browser import BrowserTTSEngine
-
-        tts = BrowserTTSEngine()
-    elif config.tts.engine == "endpoints":
+    if config.tts.engine == "endpoints":
         from voicebot.assistant.config import load_assistant_config
         from voicebot.tts.endpoints import EndpointsTTSEngine
 
@@ -442,9 +420,6 @@ def build_services(config: AppConfig | None = None) -> Services:
 
     bank = open_bank(config.database)
 
-    import torch
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     services = Services(
         config=config,
         asr=asr,
@@ -456,7 +431,6 @@ def build_services(config: AppConfig | None = None) -> Services:
             ttl_seconds=config.session.ttl_s,
             max_sessions=config.session.max_sessions,
         ),
-        device=device,
         limits=ConversationLimits(config.session),
     )
     # Told how to find the bank rather than given one: records go wherever
@@ -467,7 +441,7 @@ def build_services(config: AppConfig | None = None) -> Services:
         retries=config.audit.retries,
         queue_size=config.audit.queue_size,
     )
-    log.info("services ready: %s on %s", services.describe(), device)
+    log.info("services ready: %s", services.describe())
     return services
 
 

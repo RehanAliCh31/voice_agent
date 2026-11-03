@@ -10,17 +10,14 @@ reaching another caller.
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import logging
 import threading
 import time
-import wave
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -66,18 +63,6 @@ def logged() -> Iterator[list[logging.LogRecord]]:
     logging.getLogger("voicebot").removeHandler(handler)
 
 
-def _wav(seconds: float = 1.0) -> bytes:
-    t = np.linspace(0, seconds, int(16_000 * seconds), endpoint=False)
-    samples = (0.4 * np.sin(2 * np.pi * 220 * t) * 32767).astype("<i2")
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as out:
-        out.setnchannels(1)
-        out.setsampwidth(2)
-        out.setframerate(16_000)
-        out.writeframes(samples.tobytes())
-    return buffer.getvalue()
-
-
 class Faulty:
     """The bank, with the named methods failing like a lost database."""
 
@@ -103,17 +88,14 @@ class Down(LLMClient):
 # --- one caller's turn must not hold up, or break, another's ------------------------
 
 
-def test_a_slow_voice_turn_does_not_freeze_the_server(client: TestClient) -> None:
-    class Slow(ASREngine):
-        def transcribe(self, audio: AudioBuffer, language: str | None = None) -> Transcript:
+def test_a_slow_turn_does_not_freeze_the_server(client: TestClient) -> None:
+    class Slow(LLMClient):
+        def complete(self, messages: Any, tools: Any, tool_choice: str = "auto") -> Reply:
             time.sleep(1.0)
-            return Transcript(text="hello", confidence=1.0, duration_s=audio.duration_s)
+            return Reply(text="Hi.")
 
-    services_of(client).asr = Slow()
-    services_of(client).llm = FakeLLMClient([Reply(text="Hi.")])
-    turn = threading.Thread(
-        target=lambda: client.post("/v1/converse", files={"audio": ("a.wav", _wav(), "audio/wav")})
-    )
+    services_of(client).llm = Slow()
+    turn = threading.Thread(target=lambda: client.post("/v1/chat", json={"text": "hello"}))
     turn.start()
     time.sleep(0.2)
     started = time.monotonic()
@@ -217,16 +199,12 @@ def test_a_ledger_that_cannot_be_read_does_not_undo_the_turn(client: TestClient)
 def test_a_crash_inside_the_turn_is_a_spoken_sentence_with_its_call_id(
     client: TestClient, logged: list[logging.LogRecord]
 ) -> None:
-    class Broken(ASREngine):
-        def transcribe(self, audio: AudioBuffer, language: str | None = None) -> Transcript:
+    class Broken(LLMClient):
+        def complete(self, messages: Any, tools: Any, tool_choice: str = "auto") -> Reply:
             raise RuntimeError("an engine bug")
 
-    services_of(client).asr = Broken()
-    response = client.post(
-        "/v1/converse",
-        files={"audio": ("a.wav", _wav(), "audio/wav")},
-        data={"session_id": "crash-1"},
-    )
+    services_of(client).llm = Broken()
+    response = client.post("/v1/chat", json={"text": "hello", "session_id": "crash-1"})
 
     body = response.json()
     assert response.status_code == 200
@@ -237,15 +215,6 @@ def test_a_crash_inside_the_turn_is_a_spoken_sentence_with_its_call_id(
         for r in logged
         if r.levelno >= logging.ERROR
     ), "the failure is logged with the call it happened in"
-
-
-def test_a_recording_that_cannot_be_read_is_answered_aloud(client: TestClient) -> None:
-    response = client.post(
-        "/v1/converse", files={"audio": ("a.wav", b"not a wav at all", "audio/wav")}
-    )
-    assert response.status_code == 200
-    assert response.json()["fallback"] == "bad_audio"
-    assert "RIFF" not in response.text
 
 
 def test_a_malformed_request_never_echoes_what_was_sent(client: TestClient) -> None:

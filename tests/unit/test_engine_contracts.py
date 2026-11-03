@@ -11,7 +11,6 @@ from voicebot.asr.base import ASREngine, FakeASREngine
 from voicebot.llm.base import FakeLLMClient, LLMClient, Reply, ToolCall
 from voicebot.schemas import AudioBuffer, Transcript
 from voicebot.tts.base import FakeTTSEngine, TTSEngine
-from voicebot.tts.browser import BrowserTTSEngine
 from voicebot.utils.registry import create
 
 
@@ -46,16 +45,6 @@ def test_fake_tts_returns_audio_of_nonzero_length():
     assert buf.duration_s > 0
 
 
-def test_the_browser_engine_returns_no_audio_by_design():
-    # Not a broken engine: the page speaks, so there is nothing to return.
-    assert BrowserTTSEngine().synthesize("hello").duration_s == 0
-
-
-def test_only_the_browser_engine_claims_the_client_speaks():
-    assert BrowserTTSEngine().speaks_client_side is True
-    assert FakeTTSEngine().speaks_client_side is False
-
-
 def test_abstract_engines_cannot_be_instantiated():
     for cls in (ASREngine, TTSEngine, LLMClient):
         with pytest.raises(TypeError):
@@ -66,8 +55,3 @@ def test_abstract_engines_cannot_be_instantiated():
 def test_fakes_are_resolvable_through_the_registry(kind):
     engine = create(kind, "fake")
     assert engine is not None
-
-
-def test_the_browser_engine_is_registered():
-    # `tts.engine: browser` in a config has to resolve to a class.
-    assert isinstance(create("tts", "browser"), BrowserTTSEngine)

@@ -26,7 +26,6 @@ from voicebot.api.sessions import InMemorySessionStore
 from voicebot.bank.sqlite_bank import DEMO_PIN
 from voicebot.config import AppConfig
 from voicebot.llm.base import FakeLLMClient, Reply, ToolCall
-from voicebot.pipeline.audio_io import encode_wav
 from voicebot.schemas import AudioBuffer
 from voicebot.tts.base import FakeTTSEngine
 
@@ -36,12 +35,6 @@ ASSETS = sorted(p.name for p in STATIC_DIR.iterdir() if p.suffix in {".js", ".cs
 
 TRANSFER = {"amount_cents": 5_000, "payee": "sarah", "from_account": "checking"}
 MOVE = {"amount_cents": 5_000, "from_account": "checking", "to_account": "savings"}
-
-
-def _wav(seconds: float = 1.0, rate: int = 16_000, silent: bool = False) -> bytes:
-    t = np.linspace(0, seconds, int(rate * seconds), endpoint=False, dtype=np.float32)
-    samples = np.zeros_like(t) if silent else (0.5 * np.sin(2 * np.pi * 220 * t))
-    return encode_wav(AudioBuffer(samples=samples.astype(np.float32), sample_rate=rate))
 
 
 @pytest.fixture
@@ -65,12 +58,6 @@ def scripted(app_client: TestClient, replies: list[Reply]) -> FakeLLMClient:
     fake = FakeLLMClient(replies)
     app_client.app.state.services.llm = fake
     return fake
-
-
-def browser_tts(app_client: TestClient) -> None:
-    from voicebot.tts.browser import BrowserTTSEngine
-
-    app_client.app.state.services.tts = BrowserTTSEngine()
 
 
 # --- operational -------------------------------------------------------------
@@ -161,23 +148,6 @@ def test_a_tool_call_is_reported_for_the_inspector(client: TestClient) -> None:
     assert call["result"]["balance"] == "$19,020.00"
 
 
-def test_converse_accepts_audio(client: TestClient) -> None:
-    scripted(client, [Reply(text="Hello there.")])
-    response = client.post("/v1/converse", files={"audio": ("turn.wav", _wav(), "audio/wav")})
-    assert response.status_code == 200
-    assert response.json()["reply"] == "Hello there."
-
-
-def test_silence_is_answered_without_calling_the_model(client: TestClient) -> None:
-    fake = scripted(client, [])  # any call raises
-    body = client.post(
-        "/v1/converse", files={"audio": ("turn.wav", _wav(silent=True), "audio/wav")}
-    ).json()
-
-    assert body["reply"]
-    assert fake.calls == []
-
-
 def test_a_session_id_is_issued_when_none_is_given(client: TestClient) -> None:
     scripted(client, [Reply(text="hi")])
     assert len(client.post("/v1/chat", json={"text": "hello"}).json()["session_id"]) == 32
@@ -194,21 +164,11 @@ def test_the_conversation_persists_within_a_session(client: TestClient) -> None:
 # --- speech out --------------------------------------------------------------
 
 
-def test_browser_tts_returns_no_audio_but_asks_the_page_to_speak(client: TestClient) -> None:
-    browser_tts(client)
-    scripted(client, [Reply(text="Hello there.")])
-    body = client.post("/v1/chat", json={"text": "hello"}).json()
-
-    assert body["audio_b64"] is None
-    assert body["speak_client_side"] is True
-
-
-def test_a_server_side_engine_still_returns_audio(client: TestClient) -> None:
+def test_a_reply_comes_with_its_audio(client: TestClient) -> None:
     scripted(client, [Reply(text="Hello there.")])
     body = client.post("/v1/chat", json={"text": "hello"}).json()
 
     assert body["audio_b64"]
-    assert body["speak_client_side"] is False
 
 
 # --- confirmation ------------------------------------------------------------
@@ -472,8 +432,6 @@ def test_the_office_endpoints_build_as_the_engines() -> None:
 
     assert isinstance(services.asr, EndpointsASREngine)
     assert isinstance(services.tts, EndpointsTTSEngine)
-    # The page plays what the office voice made, rather than speaking itself.
-    assert services.speaks_client_side is False
 
 
 def test_the_serving_config_uses_the_office_endpoints() -> None:
@@ -1258,25 +1216,12 @@ def test_a_new_turn_stops_what_was_left_of_the_last_one(client: TestClient) -> N
     assert client.get(stale).status_code == 404
 
 
-def test_a_failed_voice_is_said_in_the_bots_own_voice_never_the_browsers(
-    client: TestClient,
-) -> None:
+def test_a_failed_voice_is_said_in_the_bots_own_voice(client: TestClient) -> None:
     _speaking(client, _PiecesVoice(fail=True), "Your balance is fine.")
     turn = client.post("/v1/chat", json={"text": "hello"}).json()
-    # The kept recording of "my voice isn't working", and no hand-over to a
-    # browser voice that may be the other gender and has no Urdu.
+    # The kept recording of "my voice isn't working".
     assert turn["audio_b64"] and turn["audio_more"] == 0
-    assert turn["speak_client_side"] is False
     assert turn["reply"] == "Your balance is fine."
-
-
-def test_the_page_is_told_who_is_speaking(client: TestClient) -> None:
-    voice = client.get("/v1/voice").json()
-    assert voice == {
-        "speaks_client_side": False,
-        "gender": "female",
-        "name": {"en": "Layla", "ur": "لیلیٰ"},
-    }
 
 
 def test_the_page_can_keep_the_bots_recordings_of_its_failure_sentences(

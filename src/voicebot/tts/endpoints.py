@@ -158,8 +158,6 @@ def _sentences_joined(sentences: list[str], language: Language, max_words: int) 
 
 @register("tts", "endpoints")
 class EndpointsTTSEngine(TTSEngine):
-    speaks_client_side = False
-
     def __init__(
         self,
         voices: Mapping[Language, TtsClient | BackedUpVoice],

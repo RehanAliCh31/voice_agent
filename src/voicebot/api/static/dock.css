@@ -82,9 +82,6 @@
   background: var(--brand-bright);
   transition: width 0.06s linear;
 }
-/* Above the line barge-in has to clear, so the slider can be set by
-   watching rather than by guessing. */
-.level__fill[data-over="true"] { background: var(--warn); }
 
 .say { display: flex; align-items: center; gap: 9px; }
 .say__label {
@@ -109,70 +106,3 @@
 .say__input::placeholder { color: var(--ink-faint); }
 .say__input:focus { outline: none; border-color: var(--brand); background: var(--card); }
 
-/* --- barge-in ------------------------------------------------------------- */
-
-.bargein {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px 20px;
-  align-items: center;
-  background: var(--paper);
-}
-
-@media (max-width: 560px) {
-  .bargein { grid-template-columns: minmax(0, 1fr); }
-}
-
-.bargein[data-enabled="false"] { opacity: 0.72; }
-
-.switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
-.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
-
-.switch__track {
-  width: 40px;
-  height: 23px;
-  border-radius: 999px;
-  background: #CFCBC2;
-  position: relative;
-  transition: background 0.18s;
-  flex-shrink: 0;
-}
-.switch__track::after {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-  transition: transform 0.18s;
-}
-.switch input:checked + .switch__track { background: var(--brand); }
-.switch input:checked + .switch__track::after { transform: translateX(17px); }
-.switch input:focus-visible + .switch__track { outline: 2px solid var(--brand); outline-offset: 2px; }
-
-.switch__label { font-size: 14px; }
-
-.slider { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.slider__label { font-size: 13px; color: var(--ink-faint); flex-shrink: 0; }
-.slider input { flex: 1; min-width: 80px; accent-color: var(--brand); }
-.slider__value {
-  font-family: var(--mono);
-  font-size: 13px;
-  width: 16px;
-  text-align: right;
-  flex-shrink: 0;
-}
-
-.bargein__note {
-  grid-column: 1 / -1;
-  margin: 0;
-  font-size: 12.5px;
-  color: var(--ink-faint);
-  line-height: 1.45;
-}

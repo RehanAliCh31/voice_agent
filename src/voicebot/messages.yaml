@@ -52,13 +52,6 @@ speech_unavailable:
   en: "Sorry — I'm having trouble hearing you just now. You can type your question instead, or try again in a moment."
   ur: "معذرت، اس وقت مجھے آپ کی آواز سننے میں دشواری ہو رہی ہے۔ آپ اپنا سوال لکھ کر بھیج سکتے ہیں، یا تھوڑی دیر بعد دوبارہ کوشش کریں۔"
 
-# The recording that arrived could not be used.
-bad_audio:
-  en: "Sorry, I couldn't use that recording. Could you try again?"
-  ur:
-    female: "معذرت، میں اس ریکارڈنگ کو استعمال نہیں کر سکی۔ کیا آپ دوبارہ کوشش کریں گے؟"
-    male: "معذرت، میں اس ریکارڈنگ کو استعمال نہیں کر سکا۔ کیا آپ دوبارہ کوشش کریں گے؟"
-
 # The customer asked for a person; assembled from the case, so the reference is exact.
 handed_over:
   en: "Of course — I'm passing you to a colleague. Your reference is {reference}, and someone will pick this up shortly."
@@ -193,16 +186,6 @@ microphone_lost:
 timed_out:
   en: "Sorry — that took too long. Please try again."
   ur: "معذرت، اس میں بہت دیر لگ گئی۔ براہِ کرم دوبارہ کوشش کریں۔"
-
-# The hands-free assistant: a turn failed and there is nothing better to say.
-trouble:
-  en: "Sorry, I'm having trouble right now. Please try again in a moment."
-  ur: "معذرت، اس وقت مجھے کچھ دشواری ہو رہی ہے۔ براہِ کرم تھوڑی دیر بعد دوبارہ کوشش کریں۔"
-
-# The hands-free assistant: the customer said goodbye.
-goodbye:
-  en: "Goodbye, and have a good day."
-  ur: "اللہ حافظ۔"
 
 # How the bot speaks of itself in Urdu, shown to the model as examples of
 # the forms to use. Never said aloud.

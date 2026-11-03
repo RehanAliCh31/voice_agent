@@ -35,8 +35,6 @@ data/synthetic/
 checkpoints/
 results/**/*.json
 *.wav
-# The listening samples are the one place recordings are committed.
-!voice_samples/**/*.wav
 
 # Generated at runtime
 *.db
@@ -47,10 +45,9 @@ results/**/*.json
 kaggle.json
 
 # The assistant's model files (fetched by `python -m voicebot.assistant
-# setup`), what its integration script writes, and microphone audio, which
-# is only ever saved with debug.save_audio on.
+# setup`) and microphone audio, which is only ever saved with
+# debug.save_audio on.
 models/
-test-output/
 debug_audio/
 
 # Scratch workspace for plan execution

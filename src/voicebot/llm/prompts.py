@@ -211,16 +211,6 @@ LANGUAGE_NOTE = {
     ),
 }
 
-# The hands-free assistant's language rule, at the end of its system prompt.
-# It has no tools and no amounts to keep in digits, so this is all of it.
-STRICT_LANGUAGE = {
-    "en": "Reply ONLY in English. Never mix languages.",
-    "ur": (
-        "Reply ONLY in Urdu, in Urdu script. Never mix languages: write any English "
-        "word in Urdu letters."
-    ),
-}
-
 # Sent once, in place of the note above, when a reply came back in the wrong
 # language or mixing two: the slip is struck from the history and the round
 # is asked for again with this.
@@ -289,7 +279,6 @@ __all__ = [
     "NOT_LOOKED_UP",
     "PIN_NEEDED",
     "RETRY_NOTE",
-    "STRICT_LANGUAGE",
     "SYSTEM_PROMPT",
     "UNAVAILABLE",
     "UNVERIFIED",

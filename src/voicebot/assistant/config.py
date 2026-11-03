@@ -221,48 +221,16 @@ class AgentConfig(_Strict):
 
 
 class LlmConfig(_Strict):
+    """Where the model is, for `check`; the service's own settings are its config's."""
+
     url: str
     model: str
-    api_key_env: str = "VOICEBOT_LLM_KEY"
-    max_tokens: int = 150
-    temperature: float = 0.4
-    timeout_s: float = 20.0
-    # The whole reply, retries included. `timeout_s` bounds each wait for the
-    # next piece; a server that keeps sending a word every few seconds would
-    # pass that for ever, so the reply as a whole is bounded too.
-    total_timeout_s: float = Field(default=30.0, gt=0)
-    retries: int = 1
-    stream: bool = True
-    # Asked for explicitly, so a change of default on the server cannot
-    # start sending reasoning to be read aloud.
-    disable_thinking: bool = True
-    history_turns: int = 6
-    system_prompts: Bilingual
 
 
-# --- the microphone and the models ----------------------------------------------
+# --- voice activity ---------------------------------------------------------------
 
 
-class AudioConfig(_Strict):
-    sample_rate: Literal[16000] = 16000
-    # A name (any part of it) or an index from `devices`. Empty: the default.
-    input_device: str | int | None = None
-    output_device: str | int | None = None
-    # How many frames the microphone may run ahead of the loop before the
-    # oldest are dropped. 64 frames is two seconds.
-    queue_frames: int = 64
-
-
-class WakeWordConfig(_Strict):
-    phrase: str = "Hey Jarvis"
-    model: str = "hey_jarvis_v0.1"
-    models_dir: str = "models/openwakeword"
-    threshold: float = 0.5
-    # After firing, it ignores the phrase for this long, so the tail of one
-    # "Hey Jarvis" cannot wake it twice.
-    cooldown_ms: int = 1500
-
-
+# The endpointer's settings; the live session makes its own from `live:`.
 class VadConfig(_Strict):
     model_path: str = "models/silero/silero_vad.onnx"
     threshold: float = 0.5
@@ -273,7 +241,6 @@ class VadConfig(_Strict):
     min_speech_ms: int = 250
     end_silence_ms: int = 800
     max_utterance_s: float = 20.0
-    no_speech_timeout_s: float = 6.0
 
     @model_validator(mode="after")
     def _ordered(self) -> VadConfig:
@@ -282,47 +249,10 @@ class VadConfig(_Strict):
         return self
 
 
-# --- the conversation ---------------------------------------------------------
-
-
-class Commands(_Strict):
-    """Words that end the conversation, matched only when said on their own."""
-
-    stop: BilingualList
-    goodbye: BilingualList
-
-
-class SessionConfig(_Strict):
-    language: Literal["auto", "en", "ur"] = "auto"
-    follow_up_s: float = 8.0
-    max_session_s: float = 300.0
-    earcon: bool = True
-    # speakers: the microphone is not listened to while the assistant talks,
-    # so its own voice cannot interrupt it; saying the wake word still does.
-    # headphones: talking over it stops it.
-    echo_mode: Literal["speakers", "headphones"] = "speakers"
-    echo_tail_ms: int = 300
-    barge_in_min_speech_ms: int = 300
-    # Words after the wake phrase are kept, but the phrase itself is not.
-    post_wake_ignore_ms: int = 0
-    commands: Commands
-
-
-class DebugConfig(_Strict):
-    # Off unless asked for: microphone audio is not written to disk.
-    save_audio: bool = False
-    audio_dir: str = "debug_audio"
-
-
 class AssistantConfig(_Strict):
     asr: AsrConfig
     tts: TtsConfig
     llm: LlmConfig
-    audio: AudioConfig = Field(default_factory=AudioConfig)
-    wake_word: WakeWordConfig = Field(default_factory=WakeWordConfig)
-    vad: VadConfig = Field(default_factory=VadConfig)
-    session: SessionConfig
-    debug: DebugConfig = Field(default_factory=DebugConfig)
     # Who the bot is. Without it the default profile stands -- female -- and
     # tts.en and tts.ur must be given directly.
     agent: AgentConfig | None = None

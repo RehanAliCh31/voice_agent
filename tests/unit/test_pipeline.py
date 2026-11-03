@@ -21,7 +21,6 @@ from voicebot.messages import say
 from voicebot.pipeline.orchestrator import VoicePipeline
 from voicebot.schemas import AudioBuffer, Transcript
 from voicebot.tts.base import FakeTTSEngine
-from voicebot.tts.browser import BrowserTTSEngine
 
 
 def _speech(seconds: float = 1.0, rate: int = 16_000) -> AudioBuffer:
@@ -113,15 +112,6 @@ def test_whisper_text_reaches_the_model_unmodified(bank: Bank) -> None:
 
 
 # --- speech out --------------------------------------------------------------
-
-
-def test_the_browser_engine_returns_no_audio() -> None:
-    assert len(BrowserTTSEngine().synthesize("hello").samples) == 0
-
-
-def test_the_browser_engine_declares_that_the_page_speaks() -> None:
-    assert BrowserTTSEngine().speaks_client_side is True
-    assert FakeTTSEngine().speaks_client_side is False
 
 
 def test_speak_false_skips_synthesis(bank: Bank) -> None:

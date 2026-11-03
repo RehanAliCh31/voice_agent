@@ -1,10 +1,9 @@
 """Who the bot is: its name and its gender, for every voice and every sentence.
 
-One profile for the whole process, the web bot and the hands-free assistant
-alike. Its gender chooses the voice in both languages and the way the bot
-speaks of itself in Urdu, where the verb says who is speaking: "میں کر سکتی
-ہوں" is a woman, "میں کر سکتا ہوں" a man. English barely marks it, so English
-sentences are the same for both.
+One profile for the whole process. Its gender chooses the voice in both
+languages and the way the bot speaks of itself in Urdu, where the verb says
+who is speaking: "میں کر سکتی ہوں" is a woman, "میں کر سکتا ہوں" a man.
+English barely marks it, so English sentences are the same for both.
 
 The model is told who it is; it never decides. Nothing it writes can change
 the voice, and what it writes about itself in Urdu is checked and put right

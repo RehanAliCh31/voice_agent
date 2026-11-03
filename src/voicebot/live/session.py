@@ -234,7 +234,6 @@ class LiveSession:
             min_speech_ms=cfg.min_speech_ms,
             end_silence_ms=cfg.end_silence_ms,
             max_utterance_s=cfg.max_utterance_s,
-            no_speech_timeout_s=cfg.idle_prompt_s,
         )
         self._ears = Endpointer(ears)
         self._barge = Endpointer(

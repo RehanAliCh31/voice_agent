@@ -1,6 +1,6 @@
 """What a reply must be before it is spoken: in one language, and in the bot's own gender.
 
-Two checks, for the web bot and the hands-free assistant alike.
+Two checks.
 
 **Language.** The conversation's language is decided from what the customer
 said (voicebot.assistant.language), never from what the model wrote. A reply

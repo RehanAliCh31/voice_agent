@@ -21,8 +21,6 @@ def test_the_committed_config_loads_and_names_every_service() -> None:
         config.llm.url,
     ]
     assert all(u.startswith("http://") for u in urls)
-    assert config.session.language == "auto" and config.session.echo_mode == "speakers"
-    assert config.debug.save_audio is False  # microphone audio is not kept by default
 
 
 def test_another_file_can_be_named_in_the_environment(
@@ -31,21 +29,21 @@ def test_another_file_can_be_named_in_the_environment(
     text = (
         Path("configs/assistant.yaml")
         .read_text(encoding="utf-8")
-        .replace("follow_up_s: 8", "follow_up_s: 3")
+        .replace("trim_silence: true", "trim_silence: false")
     )
     (tmp_path / "other.yaml").write_text(text, encoding="utf-8")
     monkeypatch.setenv(CONFIG_ENV, str(tmp_path / "other.yaml"))
-    assert load_assistant_config().session.follow_up_s == 3
+    assert load_assistant_config().tts.trim_silence is False
 
 
 def test_a_typo_in_the_config_is_refused(tmp_path: Path) -> None:
     text = (
         Path("configs/assistant.yaml")
         .read_text(encoding="utf-8")
-        .replace("follow_up_s:", "folow_up_s:")
+        .replace("trim_silence:", "trim_silense:")
     )
     (tmp_path / "typo.yaml").write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError, match="folow_up_s"):
+    with pytest.raises(ValueError, match="trim_silense"):
         load_assistant_config(tmp_path / "typo.yaml")
 
 

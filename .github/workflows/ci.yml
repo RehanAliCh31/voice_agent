@@ -45,17 +45,14 @@ jobs:
           cache: pip
 
       - name: Install
-        # CPU wheels for torch. The GPU build is an order of magnitude
-        # larger and nothing here uses a GPU.
         run: |
           python -m pip install --upgrade pip
-          pip install --extra-index-url https://download.pytorch.org/whl/cpu \
-            -e ".[dev,serve,assistant]" -c constraints.txt
+          pip install -e ".[dev,serve,assistant]" -c constraints.txt
 
       - name: Assistant models
-        # The wake word and voice activity models, about 6 MB and each
-        # checked against its pinned hash, so their tests run on the real
-        # files rather than being skipped.
+        # The voice activity model, about 2 MB and checked against its
+        # pinned hash, so its tests run on the real file rather than being
+        # skipped.
         run: python -m voicebot.assistant setup
 
       - name: Lint
@@ -84,7 +81,7 @@ jobs:
         run: pytest --cov=voicebot --cov-append --cov-report=term-missing --cov-fail-under=90
 
   javascript:
-    name: the barge-in detector
+    name: the live client
     runs-on: ubuntu-latest
 
     steps:
@@ -94,7 +91,7 @@ jobs:
         with:
           node-version: "22"
 
-      # No dependencies and no package.json: the detector is plain script
+      # No dependencies and no package.json: the live client is plain script
       # and its tests use node's own runner.
       - name: Tests
-        run: node --test tests/js/vad.test.js tests/js/live.test.js tests/js/capture.test.js
+        run: node --test tests/js/live.test.js tests/js/capture.test.js

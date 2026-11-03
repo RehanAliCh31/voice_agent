@@ -8,7 +8,7 @@
  */
 
 import { api, el, explain, failureKey, node, state } from "./core.js";
-import { base64ToBlob, canSpeak, play, playAll, speak, stopPlayback } from "./audio.js";
+import { base64ToBlob, play, playAll, stopPlayback } from "./audio.js";
 
 function clearEmptyState() {
   if (el.empty && el.empty.parentNode) {
@@ -54,7 +54,7 @@ function addTurn(who, text, options) {
     turn.appendChild(case_);
   }
 
-  if (options.audioBlobs || options.replayText) {
+  if (options.audioBlobs) {
     var row = node("div", "turn__audio");
     var replay = node("button", "replay");
     replay.type = "button";
@@ -63,12 +63,8 @@ function addTurn(who, text, options) {
       '<svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">' +
       '<path d="M2 1.5l8 4.5-8 4.5z" fill="currentColor"></path></svg>';
     replay.addEventListener("click", function () {
-      if (options.audioBlobs) {
-        stopPlayback();
-        playAll(options.audioBlobs);
-      } else {
-        speak(options.replayText);
-      }
+      stopPlayback();
+      playAll(options.audioBlobs);
     });
     row.appendChild(replay);
     turn.appendChild(row);
@@ -101,20 +97,6 @@ function hideThinking() {
   }
 }
 
-/** Say once that this browser cannot speak, rather than seeming broken. */
-function noteSilence() {
-  if (state.toldAboutVoices) {
-    return;
-  }
-  state.toldAboutVoices = true;
-  addTurn(
-    "bot",
-    "This browser has no speech voices installed, so replies are shown but " +
-      "not spoken. Everything else works.",
-    { notice: true }
-  );
-}
-
 // --- status ----------------------------------------------------------------
 
 function setStatus(label, hint, tone) {
@@ -130,12 +112,6 @@ function setPhase(phase) {
     "aria-label",
     phase === "listening" ? "Stop recording" : "Start recording"
   );
-}
-
-function bargeHint() {
-  return el.vadToggle.checked
-    ? "Talk over it to interrupt"
-    : "Barge-in is off — wait for it to finish";
 }
 
 function idle() {
@@ -169,15 +145,11 @@ function fail(error) {
   setStatus("Something went wrong", message, "error");
   addTurn("bot", message, { error: true });
   // Said as well as shown: someone listening rather than looking must not be
-  // left in silence. In the bot's own voice, recorded in advance; the
-  // browser's voice only where the service has none of its own.
+  // left in silence. In the bot's own voice, recorded in advance.
   var clip = key && state.clips[key + ":" + state.language];
   if (clip) {
     setPhase("speaking");
     play(clip).then(idle, idle);
-  } else if (state.clientVoice && canSpeak()) {
-    setPhase("speaking");
-    speak(message).then(idle, idle);
   } else {
     setPhase("idle");
   }
@@ -257,20 +229,13 @@ function pendingSummary(turn) {
 function handleTurn(turn) {
   var blob = turn.audio_b64 ? base64ToBlob(turn.audio_b64, "audio/wav") : null;
   var blobs = blob ? [blob] : null;
-  var reply = showTurn(turn, blobs);
+  showTurn(turn, blobs);
 
   if (blob) {
     setPhase("speaking");
-    setStatus("Speaking", bargeHint(), "busy");
+    setStatus("Speaking", "Talk over it to interrupt", "busy");
     playReply(blob, turn, blobs).then(idle, idle);
-  } else if (turn.speak_client_side && canSpeak()) {
-    setPhase("speaking");
-    setStatus("Speaking", bargeHint(), "busy");
-    speak(reply).then(idle);
   } else {
-    if (turn.speak_client_side) {
-      noteSilence();
-    }
     idle();
   }
 }
@@ -295,7 +260,6 @@ function showTurn(turn, blobs) {
 
   addTurn("bot", reply, {
     audioBlobs: blobs || null,
-    replayText: turn.speak_client_side && canSpeak() ? reply : null,
     guardHit: Boolean(turn.guard_hit),
     caseRef: turn.handed_off || turn.dispute_filed || null,
     caseLabel: turn.handed_off ? "Passed to a specialist" : "Dispute filed",

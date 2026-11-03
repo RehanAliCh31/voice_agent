@@ -1,8 +1,7 @@
 """Speech recognition by the office endpoints, in English and in Urdu.
 
-The same recognisers as the hands-free assistant, through the same code:
-both hear every utterance at once, the language is decided from what they
-return, and what they make up from noise is dropped. The endpoints are named
+Both recognisers hear every utterance at once, the language is decided from
+what they return, and what they make up from noise is dropped. The endpoints are named
 in configs/assistant.yaml, the one place they are listed.
 
 Every utterance reports the language it was heard in, so the turn -- and the
@@ -17,11 +16,17 @@ import math
 import numpy as np
 
 from voicebot.asr.base import ASREngine, ASRUnavailable
-from voicebot.assistant.asr_client import AsrClient, AsrError, is_phantom, normalise, to_wav
+from voicebot.assistant.asr_client import (
+    AsrClient,
+    AsrError,
+    is_phantom,
+    normalise,
+    to_rate,
+    to_wav,
+)
 from voicebot.assistant.asr_client import Transcript as Heard
 from voicebot.assistant.config import AsrConfig, AssistantConfig, Language
 from voicebot.assistant.language import Decision, LanguageRouter, has_devanagari
-from voicebot.assistant.player import to_rate
 from voicebot.schemas import AudioBuffer, Segment, Transcript
 from voicebot.utils.logging import get_logger
 from voicebot.utils.registry import register
@@ -42,8 +47,8 @@ class EndpointsASREngine(ASREngine):
     @classmethod
     def from_config(cls, config: AssistantConfig) -> EndpointsASREngine:
         asr = config.asr
+        # Both recognisers hear every turn, and the language is decided from them.
         router = LanguageRouter(
-            config.session.language,
             AsrClient(asr.en, "en", asr.timeout_s, asr.retries),
             AsrClient(asr.ur, "ur", asr.timeout_s, asr.retries),
         )

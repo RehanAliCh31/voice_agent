@@ -114,22 +114,6 @@
         <input class="say__input" id="sayInput" type="text" dir="auto" placeholder="what is my checking balance">
         <button class="button button--quiet" type="submit">Send</button>
       </form>
-
-      <div class="bargein" data-enabled="true">
-        <label class="switch" for="vadToggle">
-          <input type="checkbox" id="vadToggle" checked>
-          <span class="switch__track" aria-hidden="true"></span>
-          <span class="switch__label">Interrupt by speaking</span>
-        </label>
-
-        <div class="slider">
-          <label class="slider__label" for="vadSensitivity">Sensitivity</label>
-          <input type="range" id="vadSensitivity" min="1" max="10" value="5">
-          <output class="slider__value" id="vadValue">5</output>
-        </div>
-
-        <p class="bargein__note" id="vadNote">Speak while the bot is talking and it will stop and listen.</p>
-      </div>
     </div>
 
     </section>
@@ -271,7 +255,6 @@
      and is loaded on its own so it stays testable under Node. The client is
      a module, and so pulls in the rest of itself -- a module script is
      deferred, so the page is built by the time it runs. -->
-<script src="vad.js"></script>
 <script src="live.js"></script>
 <script type="module" src="app.js"></script>
 </body>

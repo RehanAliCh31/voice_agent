@@ -27,9 +27,8 @@ from contextlib import contextmanager
 from enum import StrEnum
 from typing import Any, ClassVar
 
-# The call a log line or an error belongs to. In the web bot a call is one
-# conversation, named by its session id; the hands-free assistant names each
-# conversation it opens. Set at the edge, read everywhere below it.
+# The call a log line or an error belongs to: one conversation, named by its
+# session id. Set at the edge, read everywhere below it.
 CALL_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("call_id", default=None)
 
 
@@ -55,8 +54,6 @@ class ErrorCode(StrEnum):
     AUTH_FAILURE = "auth_failure"
     DATABASE_ERROR = "database_error"
     TOOL_ERROR = "tool_error"
-    AUDIO_ERROR = "audio_error"
-    SESSION_ERROR = "session_error"
     CANCELLED = "cancelled"
     INTERNAL = "internal"
 
@@ -126,16 +123,8 @@ class ProviderUnavailable(VoicebotError):
     default_code = ErrorCode.PROVIDER_UNAVAILABLE
 
 
-class RateLimited(VoicebotError):
-    default_code = ErrorCode.RATE_LIMITED
-
-
 class InvalidInput(VoicebotError):
     default_code = ErrorCode.INVALID_INPUT
-
-
-class AuthFailure(VoicebotError):
-    default_code = ErrorCode.AUTH_FAILURE
 
 
 class DatabaseError(VoicebotError):
@@ -146,16 +135,6 @@ class DatabaseError(VoicebotError):
 class ToolError(VoicebotError):
     default_code = ErrorCode.TOOL_ERROR
     default_component = "tool"
-
-
-class AudioError(VoicebotError):
-    default_code = ErrorCode.AUDIO_ERROR
-    default_component = "audio"
-
-
-class SessionError(VoicebotError):
-    default_code = ErrorCode.SESSION_ERROR
-    default_component = "session"
 
 
 class Cancelled(VoicebotError):

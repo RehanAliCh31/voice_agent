@@ -123,7 +123,7 @@ def test_a_failing_recogniser_is_skipped_and_the_other_decides_alone() -> None:
         )
 
     router = LanguageRouter(
-        "auto", AsrClient(QWEN, "en", 5, 0, _http(down)), AsrClient(WHISPER, "ur", 5, 0, _http(up))
+        AsrClient(QWEN, "en", 5, 0, _http(down)), AsrClient(WHISPER, "ur", 5, 0, _http(up))
     )
     for _ in range(breaker("asr-en").failures):
         assert router.transcribe(b"w", "en").language == "ur"
@@ -151,7 +151,7 @@ def test_a_recogniser_that_hangs_past_its_timeout_cannot_hold_the_turn() -> None
         def transcribe(self, wav: bytes, language: str | None) -> Heard:
             return Heard("آپ کا بیلنس", "ur", 300, "ur", -0.1)
 
-    router = LanguageRouter("auto", Hangs(), Answers())  # type: ignore[arg-type]
+    router = LanguageRouter(Hangs(), Answers())  # type: ignore[arg-type]
     router.wait_margin_s = 0.1
     started = time.monotonic()
     decision = router.transcribe(b"w", "en")
@@ -166,7 +166,6 @@ def test_both_recognisers_down_is_asr_unavailable_with_its_kind() -> None:
         raise httpx.ConnectTimeout("no route", request=request)
 
     router = LanguageRouter(
-        "auto",
         AsrClient(QWEN, "en", 5, 0, _http(timeout)),
         AsrClient(WHISPER, "ur", 5, 0, _http(timeout)),
     )
@@ -180,7 +179,6 @@ def test_the_conversations_language_is_the_tie_break_not_another_callers() -> No
         return httpx.Response(200, json={"text": ""})
 
     router = LanguageRouter(
-        "auto",
         AsrClient(QWEN, "en", 5, 0, _http(nothing)),
         AsrClient(WHISPER, "ur", 5, 0, _http(nothing)),
     )

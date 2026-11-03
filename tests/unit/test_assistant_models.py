@@ -11,38 +11,26 @@ from pathlib import Path
 import pytest
 
 from voicebot.assistant import models
-from voicebot.assistant.config import load_assistant_config
 
 # --- the model files -------------------------------------------------------------------
 
 
-def _config_in(tmp_path: Path):  # type: ignore[no-untyped-def]
-    config = load_assistant_config()
-    config.wake_word.models_dir = str(tmp_path / "oww")
-    config.vad.model_path = str(tmp_path / "silero" / "silero_vad.onnx")
-    return config
-
-
 def test_missing_and_damaged_files_are_told_apart(tmp_path: Path) -> None:
-    config = _config_in(tmp_path)
-    (tmp_path / "oww").mkdir()
-    (tmp_path / "oww" / "melspectrogram.onnx").write_bytes(b"not the real file")
-    found = {m.path.name: (m.present, m.verified) for m in models.status(config)}
-    assert found["melspectrogram.onnx"] == (True, False)
-    assert found["hey_jarvis_v0.1.onnx"] == (False, False)
+    path = tmp_path / "silero" / "silero_vad.onnx"
+    assert [(m.present, m.verified) for m in models.status(path)] == [(False, False)]
+    path.parent.mkdir()
+    path.write_bytes(b"not the real file")
+    assert [(m.present, m.verified) for m in models.status(path)] == [(True, False)]
 
 
-def test_download_saves_only_files_that_match_their_pinned_hash(
+def test_download_saves_only_a_file_that_matches_its_pinned_hash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = _config_in(tmp_path)
-    content = {name: f"model {name}".encode() for name in models.SHA256}
-    monkeypatch.setattr(
-        models, "SHA256", {n: hashlib.sha256(c).hexdigest() for n, c in content.items()}
-    )
+    content = b"the model"
+    monkeypatch.setattr(models, "SHA256", {"silero_vad.onnx": hashlib.sha256(content).hexdigest()})
     wheel = io.BytesIO()
     with zipfile.ZipFile(wheel, "w") as zf:
-        zf.writestr(models.SILERO_MEMBER, content["silero_vad.onnx"])
+        zf.writestr(models.SILERO_MEMBER, content)
     wheel_bytes = wheel.getvalue()
     meta = {
         "urls": [
@@ -55,21 +43,19 @@ def test_download_saves_only_files_that_match_their_pinned_hash(
     }
 
     def fetch(url: str, timeout: float = 60.0) -> bytes:
-        if url.endswith("/json"):
-            return json.dumps(meta).encode()
-        if url == "https://files/wheel":
-            return wheel_bytes
-        return content[url.rsplit("/", 1)[1]]
+        return json.dumps(meta).encode() if url.endswith("/json") else wheel_bytes
 
     monkeypatch.setattr(models, "_fetch", fetch)
-    assert all(m.verified for m in models.download(config))
+    path = tmp_path / "silero" / "silero_vad.onnx"
+    assert all(m.verified for m in models.download(path))
+    assert path.read_bytes() == content
 
 
 def test_a_file_that_changed_upstream_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = _config_in(tmp_path)
     monkeypatch.setattr(models, "_fetch", lambda url, timeout=60.0: b"something else entirely")
-    with pytest.raises(RuntimeError, match="pinned SHA-256"):
-        models.download(config)
-    assert not (tmp_path / "oww" / "melspectrogram.onnx").exists()
+    path = tmp_path / "silero" / "silero_vad.onnx"
+    with pytest.raises(RuntimeError):
+        models.download(path)
+    assert not path.exists()

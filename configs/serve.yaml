@@ -13,17 +13,12 @@ asr:
   # The office recognisers, English and Urdu (qwen3-asr and whisper-urdu),
   # both hearing every question so the language is decided each turn. Their
   # addresses are in the file named by `endpoints`.
-  # `engine: whisper` goes back to the local, English-only model below.
   engine: endpoints
   endpoints: configs/assistant.yaml
-  model_name: openai/whisper-base.en
-  device: cpu
-  language: en
 
 tts:
   # The office voices: qwen3-tts for English, OmniVoice for Urdu, chosen by
-  # the reply's own script and played by the page. `engine: browser` goes back
-  # to the browser's own synthesiser, which has no Urdu voice.
+  # the reply's own script and played by the page.
   engine: endpoints
   endpoints: configs/assistant.yaml
 
@@ -56,7 +51,7 @@ database:
   statement_timeout_ms: 5000
   lock_timeout_ms: 3000
 
-# How provider calls are cut off and retried; see ERROR_HANDLING.md.
+# How provider calls are cut off and retried; see README.md, "When something fails".
 resilience:
   turn_budget_s: 20.0        # every model round of one turn, together
   retry_base_s: 0.2          # backoff: up to 0.2 s, 0.4 s ... with jitter

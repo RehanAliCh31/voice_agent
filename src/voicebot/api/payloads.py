@@ -88,10 +88,9 @@ class TurnPayload(BaseModel):
     # and a reason; the PIN itself never travels in either direction.
     pin_request: dict[str, str] | None = None
     latency_ms: dict[str, float] = Field(default_factory=dict)
-    # Null when the page is doing the speaking. Nullable rather than absent so
-    # a client can tell "no audio" from "field missing".
+    # Null when the voice made nothing. Nullable rather than absent so a
+    # client can tell "no audio" from "field missing".
     audio_b64: str | None = None
-    speak_client_side: bool = False
     audio_sample_rate: int = 16_000
     # How many more pieces of the reply's audio follow audio_b64, and the id
     # to ask for them by: GET /v1/sessions/{session_id}/audio/{audio_id}/{n},
@@ -155,16 +154,6 @@ class ConfirmRequest(SessionRequest):
     pin: str | None = None
 
 
-class SpeakRequest(BaseModel):
-    text: str
-
-
-class AudioPayload(BaseModel):
-    audio_b64: str
-    sample_rate: int
-    duration_s: float
-
-
 class HealthPayload(BaseModel):
     status: str
     version: str
@@ -175,7 +164,6 @@ class ReadyPayload(BaseModel):
     asr: str
     llm: str
     tts: str
-    device: str
     sessions: int
     # What each dependency says: the database, every provider's circuit, the
     # audit queue, whether the service is shutting down.
@@ -523,7 +511,6 @@ def ledger_payload(bank: Bank) -> LedgerPayload:
 def turn_payload(
     session_id: str,
     result: TurnResult,
-    speaks_client_side: bool,
     awaiting_confirmation: bool = False,
     bank: Bank | None = None,
 ) -> TurnPayload:
@@ -531,8 +518,7 @@ def turn_payload(
 
     Audio is base64-encoded WAV inside the JSON rather than a second request
     for a binary body. One round trip per turn keeps the client simple, and a
-    reply is a few hundred kilobytes. With browser speech there is no audio at
-    all, and `speak_client_side` tells the page to say the words itself.
+    reply is a few hundred kilobytes.
     """
     # A voice that failed is never handed to the browser's own: it may be
     # the other gender, and has no Urdu. The pipeline has already put the
@@ -572,7 +558,6 @@ def turn_payload(
         pin_request=result.agent.pin_request,
         latency_ms={key: round(value, 2) for key, value in result.latency.as_dict().items()},
         audio_b64=audio_b64,
-        speak_client_side=speaks_client_side,
         audio_sample_rate=result.audio.sample_rate,
         audio_more=result.rest.count if result.rest is not None else 0,
         audio_id=result.rest.id if result.rest is not None else None,

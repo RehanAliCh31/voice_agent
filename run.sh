@@ -39,7 +39,7 @@ ok "python $("$PYTHON" -c 'import sys; print(".".join(map(str, sys.version_info[
 MISSING=$("$PYTHON" - <<'PY'
 import importlib.util
 needed = {
-    "fastapi": "serve", "uvicorn": "serve", "torch": "core", "transformers": "core",
+    "fastapi": "serve", "uvicorn": "serve",
     "httpx": "assistant", "scipy": "assistant",
 }
 print(" ".join(n for n in needed if importlib.util.find_spec(n) is None))

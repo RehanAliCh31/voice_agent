@@ -18,26 +18,17 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# Each engine names its own device: running ASR on the GPU and TTS on the
-# CPU is a real tuning choice when VRAM is tight.
+# Engines default to "fake" so a bare AppConfig() reaches nothing. Naming a
+# real engine is always a deliberate act.
 class ASRConfig(_Strict):
     engine: str = "fake"
-    model_name: str = "openai/whisper-small"
-    device: str = "auto"
-    language: str = "en"
     # `engine: endpoints` uses the office recognisers, English and Urdu, as
     # listed in this file -- the one place their addresses are kept.
     endpoints: str = "configs/assistant.yaml"
 
 
-# Engines default to "fake" so a bare AppConfig() downloads nothing and
-# needs no GPU. Naming a real engine is always a deliberate act.
 class TTSConfig(_Strict):
     engine: str = "fake"
-    model_name: str = "facebook/mms-tts-eng"
-    speaker_index: int = 0
-    sample_rate: int = 16000
-    device: str = "auto"
     # `engine: endpoints` uses the office voices, English and Urdu, as listed
     # in this file.
     endpoints: str = "configs/assistant.yaml"
@@ -133,7 +124,7 @@ class LiveConfig(_Strict):
     """The hands-free session: how speech is found, ended and interrupted.
 
     Probabilities are Silero VAD's, per 32 ms frame. Durations are of audio,
-    so they hold whatever the network does. See HANDS_FREE.md for tuning.
+    so they hold whatever the network does. See README.md, "Hands-free live voice", for tuning.
     """
 
     vad_model_path: str = "models/silero/silero_vad.onnx"
@@ -147,7 +138,7 @@ class LiveConfig(_Strict):
     pre_roll_ms: int = Field(default=300, ge=0)
     # The silence that ends a turn. Shorter answers sooner and cuts more
     # people off mid-thought; speech that resumes before the reply is heard
-    # joins the same turn whatever this is (see HANDS_FREE.md).
+    # joins the same turn whatever this is (see README.md).
     end_silence_ms: int = Field(default=400, ge=200, le=2000)
     # Recognition starts once the silence is as long as an utterance keeps of
     # it (~0.2 s), on what will be the utterance if nothing more is said: by
@@ -168,7 +159,7 @@ class LiveConfig(_Strict):
     # -- what the echo was measured to be on this call, or `echo_prior_db`
     # below the playback until it has been -- and 6 dB more when the browser
     # says it is not cancelling echo. Chosen on real speech and the real VAD
-    # (scripts/barge_in_eval.py): no false stop in 30 replies down to -20 dB
+    # (measured offline): no false stop in 30 replies down to -20 dB
     # of echo; a caller as loud as the bot, or 10 dB quieter, stops it.
     barge_in_echo_gate: bool = True
     barge_in_echo_margin_db: float = Field(default=6.0, ge=0, le=40)
@@ -178,7 +169,7 @@ class LiveConfig(_Strict):
     # counts only if it is this many dB louder than the room reaches without
     # the caller (learnt on this call): the caller, close to the microphone,
     # is; a voice across the room is not. Applies whether the bot is speaking
-    # or not. How the room is learnt: HANDS_FREE.md, "Noisy rooms".
+    # or not. How the room is learnt: README.md, "Noisy rooms".
     near_voice_gate: bool = True
     near_voice_margin_db: float = Field(default=6.0, ge=0, le=30)
     # An interruption no longer than this whose words are only "mm-hmm",

@@ -14,10 +14,10 @@ def test_defaults_select_fake_engines():
 
 def test_load_config_overrides_only_given_keys(tmp_path):
     path = tmp_path / "app.yaml"
-    path.write_text(yaml.safe_dump({"seed": 7, "asr": {"engine": "whisper"}}))
+    path.write_text(yaml.safe_dump({"seed": 7, "asr": {"engine": "endpoints"}}))
     cfg = load_config(path)
     assert cfg.seed == 7
-    assert cfg.asr.engine == "whisper"
+    assert cfg.asr.engine == "endpoints"
     assert cfg.llm.engine == "fake"  # untouched default survives
 
 
@@ -81,7 +81,7 @@ def test_the_api_key_is_named_not_stored(tmp_path):
     assert not hasattr(cfg.llm, "api_key")
 
 
-def test_browser_is_a_valid_tts_engine(tmp_path):
+def test_endpoints_is_a_valid_tts_engine(tmp_path):
     path = tmp_path / "app.yaml"
-    path.write_text(yaml.safe_dump({"tts": {"engine": "browser"}}))
-    assert load_config(path).tts.engine == "browser"
+    path.write_text(yaml.safe_dump({"tts": {"engine": "endpoints"}}))
+    assert load_config(path).tts.engine == "endpoints"

@@ -27,7 +27,6 @@ CONFIG = VadConfig(
     min_speech_ms=96,
     end_silence_ms=320,
     max_utterance_s=1.0,
-    no_speech_timeout_s=0.5,
 )
 SPEECH, QUIET, UNSURE = 0.9, 0.1, 0.4
 
@@ -35,7 +34,7 @@ SPEECH, QUIET, UNSURE = 0.9, 0.1, 0.4
 def run(probs: list[float], endpointer: Endpointer | None = None):  # type: ignore[no-untyped-def]
     endpointer = endpointer or Endpointer(CONFIG)
     if endpointer.phase == "done":
-        endpointer.start(CONFIG.no_speech_timeout_s if endpointer is None else None)
+        endpointer.start()
     events = []
     for i, p in enumerate(probs):
         event = endpointer.process(np.full(FRAME, i, dtype=np.int16), p)

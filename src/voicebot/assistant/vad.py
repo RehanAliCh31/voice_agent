@@ -79,10 +79,6 @@ class Utterance:
     speech_ms: int
     ended_by: Literal["silence", "max_length"]
 
-    @property
-    def duration_ms(self) -> int:
-        return len(self.audio) * 1000 // 16000
-
 
 @dataclass(frozen=True)
 class SpeechStarted:

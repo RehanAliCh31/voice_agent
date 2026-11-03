@@ -1,8 +1,7 @@
 # The server, with the real engines available.
 #
 # Two stages so the toolchain that builds the wheels does not ship with
-# them. CPU wheels for torch throughout: nothing here uses a GPU, and the
-# CUDA build is an order of magnitude larger.
+# them.
 #
 # The model endpoint and the PostgreSQL bank are both reached over the
 # network at runtime, so a container needs to be able to see them:
@@ -35,7 +34,6 @@ COPY src ./src
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/venv/bin/pip install --no-cache-dir \
-        --extra-index-url https://download.pytorch.org/whl/cpu \
         ".[serve]" -c constraints.txt
 
 FROM python:3.12-slim
@@ -50,16 +48,14 @@ COPY --chown=voicebot:voicebot src ./src
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    HF_HOME=/app/data/models
+    PYTHONDONTWRITEBYTECODE=1
 
 RUN mkdir -p /app/data && chown voicebot:voicebot /app/data
 USER voicebot
 
 EXPOSE 8000
 
-# Readiness, not liveness: /ready answers only once the engines have loaded,
-# and Whisper takes a while on first run while it downloads.
+# Readiness, not liveness: /ready answers only once the engines have loaded.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
     CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/ready',timeout=4)"
 

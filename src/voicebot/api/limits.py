@@ -36,7 +36,6 @@ FAILED: frozenset[str] = frozenset(
         "nothing_said",
         "not_caught",
         "speech_unavailable",
-        "bad_audio",
         "not_looked_up",
         "unverified",
         "tool_failed",

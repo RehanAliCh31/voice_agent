@@ -59,7 +59,7 @@ class _Recogniser:
 
 
 def _router(en: Heard | Exception, ur: Heard | Exception) -> LanguageRouter:
-    return LanguageRouter("auto", _Recogniser(en), _Recogniser(ur))  # type: ignore[arg-type]
+    return LanguageRouter(_Recogniser(en), _Recogniser(ur))  # type: ignore[arg-type]
 
 
 def test_urdu_speech_comes_back_in_urdu_and_says_so() -> None:
@@ -240,6 +240,5 @@ def test_both_engines_are_built_from_the_assistants_file() -> None:
     asr = EndpointsASREngine.from_config(CONFIG)
 
     assert set(tts.voices) == {"en", "ur"}
-    assert tts.speaks_client_side is False
     assert asr.config == CONFIG.asr
     asr.router.close()

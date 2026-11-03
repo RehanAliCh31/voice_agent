@@ -17,8 +17,7 @@ from voicebot.assistant.asr_client import (
     normalise,
     to_wav,
 )
-from voicebot.assistant.commands import match_command
-from voicebot.assistant.config import AsrEndpoint, load_assistant_config
+from voicebot.assistant.config import AsrEndpoint
 from voicebot.assistant.language import (
     LanguageRouter,
     choose,
@@ -252,8 +251,8 @@ def test_when_nobody_heard_anything_the_session_language_stands() -> None:
     assert (decision.language, decision.text) == ("ur", "")
 
 
-# What the two recognisers returned for the same clip, measured by
-# scripts/benchmark.py: (qwen3-asr's text, whisper's text, whisper's verdict).
+# What the two recognisers returned for the same clip, measured:
+# (qwen3-asr's text, whisper's text, whisper's verdict).
 ENGLISH_THAT_WHISPER_CALLED_URDU = [
     # In Urdu letters, with English's small words spelled out.
     ("Can you show my transactions for last week?", "کین یو شو مائی ٹرانزیکشنز فور لاسٹ ویک"),
@@ -340,60 +339,20 @@ class _Fake:
         return self.result
 
 
-def test_auto_mode_asks_both_and_whisper_is_not_told_the_language() -> None:
+def test_the_router_asks_both_and_whisper_is_not_told_the_language() -> None:
     en, ur = _Fake(UR_SPEECH_BY_QWEN), _Fake(UR_SPEECH_BY_WHISPER)
-    router = LanguageRouter("auto", en, ur)  # type: ignore[arg-type]
+    router = LanguageRouter(en, ur)  # type: ignore[arg-type]
     decision = router.transcribe(b"wav", "en")
     router.close()
     assert decision.language == "ur" and en.languages == ["en"] and ur.languages == [None]
 
 
-def test_auto_mode_carries_on_when_one_recogniser_is_down() -> None:
-    router = LanguageRouter("auto", _Fake(AsrError("en down")), _Fake(UR_SPEECH_BY_WHISPER))  # type: ignore[arg-type]
+def test_the_router_carries_on_when_one_recogniser_is_down() -> None:
+    router = LanguageRouter(_Fake(AsrError("en down")), _Fake(UR_SPEECH_BY_WHISPER))  # type: ignore[arg-type]
     assert router.transcribe(b"wav", "en").language == "ur"
 
 
-def test_auto_mode_fails_only_when_both_are_down() -> None:
-    router = LanguageRouter("auto", _Fake(AsrError("en down")), _Fake(AsrError("ur down")))  # type: ignore[arg-type]
+def test_the_router_fails_only_when_both_are_down() -> None:
+    router = LanguageRouter(_Fake(AsrError("en down")), _Fake(AsrError("ur down")))  # type: ignore[arg-type]
     with pytest.raises(AsrError, match="en down; ur down"):
         router.transcribe(b"wav", "en")
-
-
-@pytest.mark.parametrize(("mode", "asked"), [("en", "en"), ("ur", "ur")])
-def test_a_fixed_language_asks_only_its_own_recogniser(mode: str, asked: str) -> None:
-    en, ur = _Fake(EN_SPEECH), _Fake(UR_SPEECH_BY_WHISPER)
-    decision = LanguageRouter(mode, en, ur).transcribe(b"wav", "en")  # type: ignore[arg-type]
-    assert decision.language == mode
-    assert (en.languages, ur.languages) == (([asked], []) if mode == "en" else ([], [asked]))
-    assert mode in decision.heard
-
-
-# --- the commands --------------------------------------------------------------------
-
-COMMANDS = load_assistant_config().session.commands
-
-
-@pytest.mark.parametrize(
-    ("said", "command"),
-    [
-        ("Stop.", "stop"),
-        ("please stop", "stop"),
-        ("Cancel!", "stop"),
-        ("never mind", "stop"),
-        ("Goodbye.", "goodbye"),
-        ("ok bye", "goodbye"),
-        ("thank you goodbye", "goodbye"),
-        ("بس کرو۔", "stop"),
-        ("رک جاؤ", "stop"),
-        ("خدا حافظ", "goodbye"),
-        ("جی اللہ حافظ", "goodbye"),
-        ("بس شکریہ", "goodbye"),
-        ("how do I stop a payment", None),
-        ("stop my card", None),
-        ("what is my balance", None),
-        ("بس اتنا بتا دیں کہ میرا بیلنس کیا ہے", None),
-        ("", None),
-    ],
-)
-def test_commands_only_when_said_on_their_own(said: str, command: str | None) -> None:
-    assert match_command(said, COMMANDS) == command

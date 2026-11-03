@@ -12,12 +12,10 @@ from collections.abc import Iterator
 import pytest
 
 from voicebot.errors import (
-    AuthFailure,
     ErrorCode,
     InvalidInput,
     ProviderTimeout,
     ProviderUnavailable,
-    RateLimited,
     VoicebotError,
     call_context,
     code_for_status,
@@ -93,9 +91,9 @@ def test_an_http_status_names_its_kind_of_failure(status: int, code: ErrorCode) 
 def test_only_temporary_failures_are_retryable() -> None:
     assert ProviderTimeout("x").retryable
     assert ProviderUnavailable("x").retryable
-    assert RateLimited("x").retryable
+    assert ProviderUnavailable("x", code=ErrorCode.RATE_LIMITED).retryable
     assert not InvalidInput("x").retryable
-    assert not AuthFailure("x").retryable
+    assert not ProviderUnavailable("x", code=ErrorCode.AUTH_FAILURE).retryable
     # A provider error can carry any code, and its code decides.
     assert not ProviderUnavailable("x", code=ErrorCode.INVALID_INPUT).retryable
 
@@ -206,6 +204,11 @@ def _flaky(*errors: VoicebotError, result: str = "ok"):  # type: ignore[no-untyp
     return attempt, calls
 
 
+def _rate_limited(retry_after: float) -> ProviderUnavailable:
+    """A 429, as a provider client raises it."""
+    return ProviderUnavailable("429", code=ErrorCode.RATE_LIMITED, retry_after=retry_after)
+
+
 def test_a_temporary_failure_is_retried_and_succeeds() -> None:
     attempt, calls = _flaky(ProviderUnavailable("500", component="llm"))
     slept: list[float] = []
@@ -244,8 +247,8 @@ def test_each_attempt_gets_only_what_the_deadline_has_left() -> None:
 
 def test_no_retry_when_the_wait_would_outlast_the_deadline() -> None:
     clock = Clock()
-    attempt, calls = _flaky(RateLimited("429", retry_after=30))
-    with pytest.raises(RateLimited):
+    attempt, calls = _flaky(_rate_limited(retry_after=30))
+    with pytest.raises(ProviderUnavailable):
         call_with_retry(
             attempt,
             component="llm",
@@ -258,7 +261,7 @@ def test_no_retry_when_the_wait_would_outlast_the_deadline() -> None:
 
 
 def test_retry_after_is_honoured_when_there_is_time() -> None:
-    attempt, _ = _flaky(RateLimited("429", retry_after=0.75))
+    attempt, _ = _flaky(_rate_limited(retry_after=0.75))
     slept: list[float] = []
     call_with_retry(
         attempt,

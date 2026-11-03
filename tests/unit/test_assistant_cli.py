@@ -68,7 +68,7 @@ def test_check_reports_models_and_endpoints(
         lambda config: [health.Check("LLM", "http://x", True, 5, "serving m")],
     )
     monkeypatch.setattr(
-        cli.models, "status", lambda config: [models.ModelFile(Path("m.onnx"), True, True)]
+        cli.models, "status", lambda: [models.ModelFile(Path("m.onnx"), True, True)]
     )
     assert cli.main(["check"]) == 0
     out = capsys.readouterr().out
@@ -80,21 +80,10 @@ def test_check_fails_when_a_model_is_missing(
 ) -> None:
     monkeypatch.setattr(cli.health, "check_all", lambda config: [])
     monkeypatch.setattr(
-        cli.models, "status", lambda config: [models.ModelFile(Path("m.onnx"), False, False)]
+        cli.models, "status", lambda: [models.ModelFile(Path("m.onnx"), False, False)]
     )
     assert cli.main(["check"]) == 1
     assert "voicebot.assistant setup" in capsys.readouterr().out
-
-
-def test_run_refuses_to_start_without_its_models(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(cli.health, "check_all", lambda config: [])
-    monkeypatch.setattr(
-        cli.models, "status", lambda config: [models.ModelFile(Path("vad.onnx"), False, False)]
-    )
-    assert cli.main(["run", "--lang", "ur", "--echo", "headphones"]) == 1
-    assert "setup" in capsys.readouterr().out
 
 
 def test_an_unknown_command_is_refused() -> None:
