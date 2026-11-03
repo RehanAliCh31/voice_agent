@@ -59,6 +59,7 @@ from voicebot.asr.base import ASRUnavailable
 from voicebot.assistant.config import VadConfig
 from voicebot.assistant.vad import (
     FRAME,
+    FRAME_MS,
     KEEP_TRAILING_MS,
     Endpointer,
     NoSpeech,
@@ -101,6 +102,23 @@ ECHO_FRAMES = 300
 ECHO_MIN_FRAMES = 30
 # However loud the echo, speech as loud as the playback itself counts.
 ECHO_CAP = 1.0
+# How loud the room is without the caller: the loud end (ROOM_PERCENTILE) of
+# the last ~8 s of it -- what was heard while nobody was speaking and nothing
+# played, and the voices of people across the room.
+ROOM_FRAMES = 250
+ROOM_PERCENTILE = 90
+# For the first ~2 s, every frame, speech too: in a room that talks all the
+# time its voices are always speech, and nothing else would teach it the
+# room. The gate waits for them.
+ROOM_START_FRAMES = 62
+# The caller is the loudest voice the microphone hears. The room is never
+# taken to be within ROOM_VOICE_MARGINS margins of the loudest of the last few
+# utterances -- so the caller's words, even said first, cannot make it deaf to
+# them -- and an utterance that far below the loudest was someone else, and
+# is learnt as the room. Only an utterance followed by quiet is counted among
+# the voices: one the room's own talk went on after was the room's.
+VOICES_KEPT = 8
+ROOM_VOICE_MARGINS = 2
 # A short interruption whose words are mostly the reply's own, near where
 # it stopped, was the bot's own voice coming back through the speaker.
 ECHO_MAX_WORDS = 8
@@ -235,6 +253,26 @@ class LiveSession:
         self._far: deque[float] = deque(maxlen=FAR_WINDOW_CHUNKS)
         self._echo: deque[float] = deque(maxlen=ECHO_FRAMES)
         self.echo_gated = 0  # frames of speech over the bot taken for its echo
+        # How loud the room is without the caller (the near-voice gate).
+        self._room: deque[float] = deque(maxlen=ROOM_FRAMES)
+        # Frames between utterances that may yet begin one: whether they are
+        # the room is known only once it is clear. With each, whether it was
+        # no voice at all.
+        self._room_held: list[tuple[float, bool]] = []
+        # The utterance being heard: each frame's loudness, whether it was
+        # voiced, whether the gate held it back, and whether it is in the
+        # room already (heard in the first seconds).
+        self._utterance: list[tuple[float, bool, bool, bool]] = []
+        # The first seconds, every frame, with the utterance it was part of
+        # (0: none). An utterance that turns out to be the caller's is taken
+        # back out of them.
+        self._room_start: list[tuple[float, int]] = []
+        self._tag = 1  # the utterance being heard, or the next
+        self._room_spoke = 0  # the last frame of the first seconds that was speech
+        self._voice_tags: set[int] = set()
+        self._voices: deque[float] = deque(maxlen=VOICES_KEPT)  # how loud each utterance was
+        self._room_heard = 0  # frames heard with nothing playing
+        self.room_gated = 0  # frames of speech taken for the room's, not the caller's
         # Recognition started early, on the utterance as it would end now.
         self._early: tuple[np.ndarray, concurrent.futures.Future[Any]] | None = None
         self.early_heard = 0  # turns whose words were in before their end was certain
@@ -438,10 +476,14 @@ class LiveSession:
         with self._lock:
             if self.state in (State.IDLE, State.ENDED):
                 return
+            level, heard = _rms(frame), prob
+            prob = self._near_voice_gate(level, prob)
+            held_back = heard >= self._active.config.threshold > prob
             # Whenever the page is playing anything -- a reply, or one to a
             # button through the page's own player -- not only while it speaks.
-            prob = self._echo_gate(frame, prob)
+            prob = self._echo_gate(level, prob)
             event = self._active.process(frame, prob)
+            self._learn_room(level, heard, held_back)
             if self.state is State.USER_SPEAKING:
                 self._recognise_early()
             if event is None:
@@ -491,7 +533,7 @@ class LiveSession:
         self._early = (audio, future)
         self._spawn(lambda: _in_context(self.session_id, recognise), "live-hear")
 
-    def _echo_gate(self, frame: np.ndarray, prob: float) -> float:
+    def _echo_gate(self, level: float, prob: float) -> float:
         """Speech over the bot counts only if louder than the bot coming back. Under the lock.
 
         The page says how loud it is playing. Voice activity alone cannot
@@ -505,8 +547,7 @@ class LiveSession:
         far = max(self._far)
         if far < FAR_SILENT:
             return prob  # nothing is playing: nothing to come back
-        mic = float(np.sqrt(np.mean((frame.astype(np.float64) / 32768) ** 2)))
-        ratio = mic / far
+        ratio = level / far
         margin_db = self.config.barge_in_echo_margin_db
         if self.mic.get("echoCancellation") is False:
             # The browser is not cancelling it: it comes back louder, and less evenly.
@@ -523,6 +564,124 @@ class LiveSession:
         # interruption nor ends one being counted -- the caller's softer
         # syllables, under the bot's voice, must not start their count again.
         return (ears.neg_threshold + ears.threshold) / 2
+
+    def _near_voice_gate(self, level: float, prob: float) -> float:
+        """Speech counts only if clearly louder than the room. Under the lock.
+
+        Voice activity finds any voice -- the caller's, or someone talking
+        across the room -- and cannot tell them apart. Loudness can: the
+        caller is close to the microphone, the room's voices are not. Speech
+        no louder than the room is heard as silence, so it neither starts a
+        turn nor holds one open; speech between that and the margin above it
+        -- the caller's softer syllables -- neither counts nor breaks a count.
+        """
+        room = self._room_level()
+        if not self.config.near_voice_gate or room <= 0:
+            return prob
+        ears = self._active.config  # the barge-in listener's, or the plain one's
+        if prob < ears.neg_threshold:
+            return prob  # not speech either way
+        if level >= room * 10 ** (self.config.near_voice_margin_db / 20):
+            return prob  # clearly louder than the room: it may be the caller
+        if prob >= ears.threshold:
+            self.room_gated += 1
+        if level < room:
+            return 0.0  # as loud as the room's voices: someone else
+        return (ears.neg_threshold + ears.threshold) / 2
+
+    def _learn_room(self, level: float, prob: float, held_back: bool) -> None:
+        """How loud the room is, from a frame the listener has just heard. Under the lock.
+
+        Not while the bot plays: its voice coming back is not the room. For
+        the first seconds, every frame. Then never the caller, whose words
+        would teach it the room is as loud as they are: an utterance is the
+        room only if it was a voice well below the loudest (`_utterance_heard`),
+        and the frames that may begin one are held until it is clear whether
+        they do. Nor, between utterances, what is twice the margin louder than
+        the room, or a cough or a door: loud, no voice, and a few would raise
+        the gate over the caller's own.
+        """
+        if self._far and max(self._far) >= FAR_SILENT:
+            return
+        self._room_heard += 1
+        starting = self._room_heard <= ROOM_START_FRAMES
+        ears = self._active.config
+        voiced = prob >= ears.threshold
+        if starting:
+            # Speech, what may have begun it -- the caller's breath and first
+            # soft syllables -- and what comes within a second of it belongs
+            # to the utterance it is part of.
+            if voiced or self._active.phase == "speech" or self._active.holding:
+                self._room_spoke = self._room_heard
+            near = self._room_spoke and self._room_heard - self._room_spoke < ROOM_START_FRAMES // 2
+            self._room_start.append((level, self._tag if near else 0))
+        if self._active.phase == "speech":
+            self._utterance.append((level, voiced, held_back, starting))
+            self._room_held.clear()  # they began it: part of the utterance
+            return
+        if self._utterance:
+            self._utterance_heard()
+        if starting:
+            return
+        self._room_held.append((level, prob < ears.neg_threshold))
+        if self._active.holding:
+            return  # it may yet begin speech
+        room = self._room_level()
+        margin = 10 ** (self.config.near_voice_margin_db / 20)
+        for held, knock in self._room_held:
+            if room <= 0 or held < room * (margin if knock else margin**2):
+                self._room.append(held)
+        self._room_held.clear()
+
+    def _utterance_heard(self) -> None:
+        """An utterance has ended: the room's, if it was a voice well below the caller's."""
+        heard, self._utterance = self._utterance, []
+        voiced = [level for level, was_voiced, _, _ in heard if was_voiced]
+        if not voiced:
+            return
+        loudness = float(np.percentile(voiced, ROOM_PERCENTILE))
+        loudest = max(self._voices, default=0.0)
+        tag, self._tag = self._tag, self._tag + 1
+        below = 10 ** (ROOM_VOICE_MARGINS * self.config.near_voice_margin_db / 20)
+        if loudness * below <= loudest:
+            # Someone well below the caller: the room.
+            self._room.extend(level for level, _, _, learnt in heard if not learnt)
+            return
+        # A voice is followed by quiet: the caller stops, and waits for the
+        # answer. The room's voices, held back by the gate or just pausing,
+        # go on -- what ended them is more of them, not two margins below.
+        after = self.config.end_silence_ms // FRAME_MS
+        ending = [level for level, _, _, _ in heard[-after:]]
+        if float(np.median(ending)) * below <= loudness:
+            self._voices.append(loudness)
+            if any(learnt for _, _, _, learnt in heard):
+                self._voice_tags.add(tag)  # a voice, though heard in the first seconds
+
+    def _room_level(self) -> float:
+        """How loud the room gets without the caller (RMS, full scale 1); 0 until known.
+
+        Read by the turn's metrics as well as the audio thread, so under the lock.
+        """
+        with self._lock:
+            if self._room_heard < ROOM_START_FRAMES:
+                return 0.0
+            heard = list(self._room)
+            if len(heard) < ROOM_FRAMES:  # the first seconds, until heard over
+                heard += [level for level, tag in self._room_start if tag not in self._voice_tags]
+            loudest = max(self._voices, default=0.0)
+            # An utterance begun in the first seconds and still going on may
+            # be the caller's: the middle of what was heard, which they cannot
+            # move unless they spoke for most of it, until it ends and is
+            # known.
+            going_on = bool(self._utterance) or self._active.holding
+            undecided = going_on and any(tag == self._tag for _, tag in self._room_start)
+        if not heard:
+            return 0.0
+        room = float(np.percentile(heard, 50 if undecided else ROOM_PERCENTILE))
+        if loudest:
+            below = 10 ** (ROOM_VOICE_MARGINS * self.config.near_voice_margin_db / 20)
+            room = min(room, loudest / below)
+        return room
 
     def _echo_level(self) -> float:
         """How loud the bot's voice comes back, as a share of how loud it plays.
@@ -940,6 +1099,10 @@ class LiveSession:
             "echo_return_db": round(20 * np.log10(max(self._echo_level(), 1e-6)), 1),
             "echo_gated_frames": self.echo_gated,
             "echo_cancellation": self.mic.get("echoCancellation"),
+            # How loud the room is without the caller, and how much speech
+            # was taken for the room's: what to look at when it answers others.
+            "room_db": round(20 * np.log10(max(self._room_level(), 1e-6)), 1),
+            "room_gated_frames": self.room_gated,
         }
         stop = getattr(self, "_barge_stop_ms", None)
         if stop is not None:
@@ -1140,6 +1303,11 @@ def _payload_audio(payload: Any) -> AudioBuffer | None:
         return decode_wav(base64.b64decode(payload.audio_b64))
     except Exception:  # unreadable: the reply is still shown
         return None
+
+
+def _rms(frame: np.ndarray) -> float:
+    """A frame's loudness: RMS, full scale 1."""
+    return float(np.sqrt(np.mean((frame.astype(np.float64) / 32768) ** 2)))
 
 
 def _words(text: str) -> list[str]:

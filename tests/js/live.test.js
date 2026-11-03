@@ -178,10 +178,11 @@ async function replyOf(socket, id, pieces) {
 test("one click opens the microphone with echo cancellation and starts the session", async () => {
   const h = harness();
   const socket = await live(h);
+  // No automatic gain: the room's voices must stay quieter than the caller's.
   assert.deepStrictEqual(h.log.constraints.audio, {
     echoCancellation: true,
     noiseSuppression: true,
-    autoGainControl: true,
+    autoGainControl: false,
     channelCount: 1,
   });
   // The start says what the browser applied to the microphone, and that

@@ -51,6 +51,15 @@ class LevelVad:
         pass
 
 
+class VoiceVad(LevelVad):
+    """Speech at any loudness, as Silero hears it: a voice across the room is speech too."""
+
+    def __call__(self, frame: np.ndarray) -> float:
+        self.frames += 1
+        level = float(np.sqrt(np.mean(frame.astype(np.float64) ** 2)))
+        return 0.95 if level > 100 else 0.02
+
+
 class ScriptedASR(ASREngine):
     """Hears what it is told to, in order; can be slow, or down."""
 
@@ -226,11 +235,14 @@ def settle(page: Page, state: str, timeout: float = 5.0) -> bool:
 
 
 __all__ = [
+    "LOUD",
+    "MURMUR",
     "ASRUnavailable",
     "Page",
     "PiecesVoice",
     "ScriptedASR",
     "SlowLLM",
+    "VoiceVad",
     "open_session",
     "quiet",
     "services_for",

@@ -173,6 +173,14 @@ class LiveConfig(_Strict):
     barge_in_echo_gate: bool = True
     barge_in_echo_margin_db: float = Field(default=6.0, ge=0, le=40)
     barge_in_echo_prior_db: float = Field(default=-25.0, ge=-60, le=0)
+    # The near-voice gate. Voice activity finds any voice, so in a noisy room
+    # other people talking, or a television, were taken for the caller. Speech
+    # counts only if it is this many dB louder than the room reaches without
+    # the caller (learnt on this call): the caller, close to the microphone,
+    # is; a voice across the room is not. Applies whether the bot is speaking
+    # or not. How the room is learnt: HANDS_FREE.md, "Noisy rooms".
+    near_voice_gate: bool = True
+    near_voice_margin_db: float = Field(default=6.0, ge=0, le=30)
     # An interruption no longer than this whose words are only "mm-hmm",
     # "ok", "جی" ... was not one: the reply carries on where it stopped. So
     # does one with no words at all, however long, and one whose words are

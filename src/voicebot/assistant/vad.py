@@ -125,6 +125,11 @@ class Endpointer:
         return self._speech_ms if self._phase == "speech" else self._voiced_ms
 
     @property
+    def holding(self) -> bool:
+        """Whether frames that may yet start speech are held, waiting to see if they do."""
+        return self._phase == "waiting" and bool(self._candidate)
+
+    @property
     def silence_ms(self) -> int:
         """How long the silence after the last voiced frame has lasted."""
         return self._silence_ms

@@ -43,11 +43,14 @@
   // What the browser applied to the microphone, told to the service.
   var SETTINGS = ["echoCancellation", "noiseSuppression", "autoGainControl", "sampleRate"];
 
+  // No automatic gain: it turns the microphone up while the caller is
+  // quiet, so a voice across the room comes in as loud as theirs, and the
+  // service tells the caller from the room by how loud each is.
   var CONSTRAINTS = {
     audio: {
       echoCancellation: true,
       noiseSuppression: true,
-      autoGainControl: true,
+      autoGainControl: false,
       channelCount: 1,
     },
   };

@@ -5,9 +5,12 @@ from __future__ import annotations
 import time
 
 from tests.live_support import (
+    LOUD,
     MURMUR,
     Page,
     SlowLLM,
+    VoiceVad,
+    drained,
     open_session,
     quiet,
     services_for,
@@ -150,6 +153,59 @@ def test_noise_that_recognises_to_nothing_is_ignored_without_a_word() -> None:
         assert page.wait(lambda p: p.states()[-1:] == ["listening"] and len(p.states()) > 2)
         assert not page.of("reply") and not page.of("say")
         assert session.false_starts == 1
+    finally:
+        session.close()
+
+
+# Voice activity hears a voice across the room as speech, as surely as the
+# caller's (VoiceVad, as Silero does): only how loud it is tells them apart.
+ROOM_VOICE = 600  # ~22 dB below the caller
+
+
+def test_a_voice_across_the_room_is_learnt_from_and_then_ignored() -> None:
+    services = services_for(
+        [("what is my balance", "en"), ("someone else", "en"), ("and my savings", "en")],
+        [Reply(text="Fine."), Reply(text="Sorry?"), Reply(text="Also fine.")],
+    )
+    services.live_vad_factory = VoiceVad
+    page = Page()
+    session = open_session(services, page)
+    try:
+        speak(session, tone(900), quiet(700))
+        assert page.wait(lambda p: len(p.of("reply")) == 1)
+        assert settle(page, "listening")
+        # Someone across the room, before anything is known of the room: a
+        # turn, but a voice far below the caller's, so the room's from now on.
+        speak(session, tone(900, ROOM_VOICE), quiet(700))
+        assert page.wait(lambda p: len(p.of("reply")) == 2)
+        assert settle(page, "listening")
+        turns = page.states().count("user_speaking")
+        for _ in range(4):
+            speak(session, tone(900, ROOM_VOICE), quiet(700))
+        assert drained(session)
+        assert page.states().count("user_speaking") == turns
+        assert session.room_gated > 0
+        # The caller, as loud as before, is heard over it.
+        speak(session, tone(900), quiet(700))
+        assert page.wait(lambda p: len(p.of("reply")) == 3)
+        assert page.of("metrics")[-1]["room_db"] < -30
+    finally:
+        session.close()
+
+
+def test_the_callers_own_voice_never_becomes_the_room() -> None:
+    sentences = [(f"question {n}", "en") for n in range(5)]
+    services = services_for(sentences, [Reply(text="Yes.")] * 5)
+    services.live_vad_factory = VoiceVad
+    page = Page()
+    session = open_session(services, page)
+    try:
+        # Speaking from the first moment and most of the time, then 6 dB softer.
+        for n, loudness in enumerate((LOUD, LOUD, LOUD, LOUD, LOUD // 2)):
+            speak(session, tone(1500, loudness), quiet(500))
+            assert page.wait(lambda p, n=n: len(p.of("reply")) == n + 1), n
+            assert settle(page, "listening")
+        assert session.room_gated == 0
     finally:
         session.close()
 
