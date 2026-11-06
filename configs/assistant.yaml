@@ -10,11 +10,11 @@
 
 asr:
   en:
-    url: http://localhost:8092/v1/audio/transcriptions
+    url: ${VOICEBOT_QWEN_ASR_URL:-http://localhost:8092}/v1/audio/transcriptions
     model: qwen3-asr
     response_format: json            # verbose_json is refused by qwen3-asr
   ur:
-    url: http://localhost:8104/v1/audio/transcriptions
+    url: ${VOICEBOT_WHISPER_URDU_URL:-http://localhost:8104}/v1/audio/transcriptions
     model: whisper-urdu
     response_format: verbose_json    # carries the language heard and a confidence
   # Both answered a short question in 0.3-0.6 s, measured. A recogniser that
@@ -73,14 +73,14 @@ agent:
   voices:
     female:
       en:
-        url: http://localhost:8094/v1/audio/speech
+        url: ${VOICEBOT_QWEN_TTS_URL:-http://localhost:8094}/v1/audio/speech
         model: qwen3-tts             # the server lists itself as Qwen3-TTS-12Hz-0.6B-Base; both names work
         gender: female
         label: qwen3-tts, its one built-in voice
         first_chunk_words: 5
         chunk_growth: 1.6
       ur:
-        url: http://localhost:8091/v1/audio/speech
+        url: ${VOICEBOT_OMNIVOICE_URL:-http://localhost:8091}/v1/audio/speech
         model: k2-fsa/OmniVoice
         extra: {speed: 1.15}
         voice: assistant-pk          # FLEURS ur_pk reference, CC-BY-4.0: attribution required
@@ -94,7 +94,7 @@ agent:
         chunk_growth: 1.6
     male:
       en:
-        url: http://localhost:8091/v1/audio/speech
+        url: ${VOICEBOT_OMNIVOICE_URL:-http://localhost:8091}/v1/audio/speech
         model: k2-fsa/OmniVoice      # qwen3-tts has no male voice
         extra: {speed: 1.15}
         voice: urdu_male5
@@ -107,7 +107,7 @@ agent:
         spoken_word_s: 0.32
         chunk_growth: 1.6
       ur:
-        url: http://localhost:8091/v1/audio/speech
+        url: ${VOICEBOT_OMNIVOICE_URL:-http://localhost:8091}/v1/audio/speech
         model: k2-fsa/OmniVoice
         extra: {speed: 1.15}
         voice: urdu_male5
@@ -125,7 +125,7 @@ agent:
   backup_voices:
     female:
       en:
-        url: http://localhost:8091/v1/audio/speech
+        url: ${VOICEBOT_OMNIVOICE_URL:-http://localhost:8091}/v1/audio/speech
         model: k2-fsa/OmniVoice
         extra: {speed: 1.15}
         voice: assistant-en
@@ -138,7 +138,7 @@ agent:
         spoken_word_s: 0.32
         chunk_growth: 1.6
       ur:
-        url: http://localhost:8091/v1/audio/speech
+        url: ${VOICEBOT_OMNIVOICE_URL:-http://localhost:8091}/v1/audio/speech
         model: k2-fsa/OmniVoice
         extra: {speed: 1.15}
         voice: assistant-ur
@@ -162,5 +162,5 @@ tts:
 llm:
   # Where the model is, for `check`. The service's own model settings are in
   # configs/serve.yaml.
-  url: http://localhost:8001/v1/chat/completions
+  url: ${VOICEBOT_LLM_URL:-http://localhost:8001}/v1/chat/completions
   model: qwen3.6-35b-a3b-fp8

@@ -11,6 +11,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from voicebot.utils.env import expand
+
 
 class _Strict(BaseModel):
     """Base that rejects unknown keys, so a typo in YAML fails loudly."""
@@ -291,7 +293,7 @@ def load_config(path: str | Path) -> AppConfig:
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"Config file not found: {path}")
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    raw = yaml.safe_load(expand(path.read_text(encoding="utf-8"), str(path))) or {}
     if not isinstance(raw, dict):
         raise ValueError(
             f"Config file {path} must contain a YAML mapping, got {type(raw).__name__}"

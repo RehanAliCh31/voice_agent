@@ -208,9 +208,12 @@ and per-stage timings.
 
 ## 4. The office services
 
-The recognisers, the voices and the model are served on the office network
-(`office`). Their addresses, the voices and who the bot is are in
-`configs/assistant.yaml`; none is in code.
+The recognisers, the voices and the model are served on the office network.
+Their addresses are kept in `.env`, which is never committed: the configs name
+them (`VOICEBOT_LLM_URL`, `VOICEBOT_QWEN_ASR_URL`, `VOICEBOT_WHISPER_URDU_URL`,
+`VOICEBOT_QWEN_TTS_URL`, `VOICEBOT_OMNIVOICE_URL`) and `.env.example` lists
+them. The voices and who the bot is are in `configs/assistant.yaml`; none is in
+code.
 
 ```bash
 .venv/Scripts/python -m voicebot.assistant setup    # the voice activity model

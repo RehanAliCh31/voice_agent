@@ -20,6 +20,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from voicebot.profile import AgentProfile, Gender
+from voicebot.utils.env import expand
 
 Language = Literal["en", "ur"]
 LANGUAGES: tuple[Language, ...] = ("en", "ur")
@@ -298,7 +299,7 @@ def load_assistant_config(path: str | Path | None = None) -> AssistantConfig:
     file = config_path(path)
     if not file.is_file():
         raise FileNotFoundError(f"assistant config not found: {file}")
-    raw = yaml.safe_load(file.read_text(encoding="utf-8")) or {}
+    raw = yaml.safe_load(expand(file.read_text(encoding="utf-8"), str(file))) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"{file} must contain a YAML mapping")
     try:

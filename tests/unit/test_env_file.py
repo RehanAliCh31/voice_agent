@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import os
 
-from voicebot.utils.env import load_env_file
+import pytest
+
+from voicebot.utils.env import expand, load_env_file
 
 
 def write(tmp_path, text: str):
@@ -80,3 +82,42 @@ def test_an_empty_value_is_treated_as_unset(tmp_path, monkeypatch) -> None:
     load_env_file(write(tmp_path, "VB_TEST_KEY=\n"))
 
     assert "VB_TEST_KEY" not in os.environ
+
+
+# --- a config's ${NAME}: the office addresses live in .env, not in the configs
+
+
+def test_a_placeholder_is_filled_from_the_env_file(tmp_path) -> None:
+    env = write(tmp_path, "VB_TEST_URL=http://10.0.0.5:8001\n")
+
+    assert (
+        expand("url: ${VB_TEST_URL}/v1", env_file=env, environ={}) == "url: http://10.0.0.5:8001/v1"
+    )
+
+
+def test_the_environment_wins_over_the_file(tmp_path) -> None:
+    env = write(tmp_path, "VB_TEST_URL=http://from-file\n")
+
+    filled = expand("${VB_TEST_URL}", env_file=env, environ={"VB_TEST_URL": "http://exported"})
+
+    assert filled == "http://exported"
+
+
+def test_the_default_is_used_when_nothing_sets_it(tmp_path) -> None:
+    filled = expand("${VB_TEST_URL:-http://localhost:8001}", env_file=tmp_path / "none", environ={})
+
+    assert filled == "http://localhost:8001"
+
+
+def test_a_placeholder_nothing_sets_names_the_variable(tmp_path) -> None:
+    with pytest.raises(ValueError, match=r"serve.yaml needs VB_TEST_URL"):
+        expand("${VB_TEST_URL}", "serve.yaml", env_file=tmp_path / "none", environ={})
+
+
+def test_reading_a_config_does_not_change_the_environment(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("VB_TEST_URL", raising=False)
+    env = write(tmp_path, "VB_TEST_URL=http://from-file\n")
+
+    expand("${VB_TEST_URL}", env_file=env)
+
+    assert "VB_TEST_URL" not in os.environ

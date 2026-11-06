@@ -20,7 +20,7 @@ def test_the_committed_config_loads_and_names_every_service() -> None:
         config.tts.ur.url,
         config.llm.url,
     ]
-    assert all(u.startswith("http://") for u in urls)
+    assert all(u.startswith("http://") and "${" not in u for u in urls)
 
 
 def test_another_file_can_be_named_in_the_environment(

@@ -90,8 +90,8 @@ def report(checks: list[Check]) -> str:
         lines.append(f"  {mark} {c.service:<12} {c.url:<28} {latency}  {c.detail}")
     if any(not c.ok for c in checks):
         lines.append(
-            "\n  An endpoint is unreachable. These services are on the office office network:"
-            "\n  check this machine is connected to it (or to the VPN)."
+            "\n  An endpoint is unreachable. These services are on the office network:"
+            "\n  check this machine is connected to it (or to the VPN), and the addresses in .env."
         )
     return "\n".join(lines)
 

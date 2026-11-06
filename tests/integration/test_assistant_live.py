@@ -1,6 +1,6 @@
 """The office services against the real endpoints. Deselected by default: pytest -m live
 
-They need the office office network and the model file from
+They need the office network, its addresses in .env, and the model file from
 `python -m voicebot.assistant setup`. Speech is made by the voices themselves,
 so no microphone is involved and the runs can be repeated exactly.
 """
