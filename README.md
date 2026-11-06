@@ -18,6 +18,44 @@ move money without going through code that can refuse.
 This file is the project's only document. It covers how to run it, how it
 works, how to configure and tune it, how it fails, and what is still open.
 
+## Screenshots
+
+The agent answering for real: a balance in English, the same question typed in
+Roman Urdu and answered in Urdu, and a general question in Urdu script. The
+balance and bills sit on the left, the voice in the middle, the conversation on
+the right.
+
+![The assistant mid-conversation, in English and Urdu](assets/screenshots/conversation.png)
+
+The voice button shows, by its light, what the bot is doing. While it hears you
+the glow grows with your voice; while it thinks the ring races; while it speaks
+the glow breathes, and talking over it stops the reply.
+
+![The voice button listening, hearing you, thinking and speaking](assets/screenshots/voice-states.png)
+
+Nothing moves money without asking. The bot reads the transfer back, and only
+*Yes, confirm* (or a spoken yes) carries it out.
+
+![A transfer waiting for confirmation](assets/screenshots/confirmation.png)
+
+<table>
+  <tr>
+    <td width="33%"><img src="assets/screenshots/transactions.png" alt="Transactions: the month's money in and out"></td>
+    <td width="33%"><img src="assets/screenshots/cards.png" alt="Cards: the card, its actions and what it may be used for"></td>
+    <td width="33%"><img src="assets/screenshots/monthly.png" alt="Monthly: what is committed this month and what is left"></td>
+  </tr>
+  <tr>
+    <td align="center">Transactions</td>
+    <td align="center">Cards</td>
+    <td align="center">Monthly</td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="assets/screenshots/phone.png" alt="The assistant on a phone" width="300"><br>
+  On a phone: the voice first, then the conversation.
+</p>
+
 ## Contents
 
 1. [Quick start](#1-quick-start)
@@ -943,6 +981,7 @@ and room measured), `error` (with its sentence key), `ended`, `pong`.
 | `configs/` | `serve.yaml` (the real service), `app.yaml` (all fake), `assistant.yaml` (the office services) |
 | `scripts/` | `migrate_sqlite_to_postgres.py` |
 | `tests/` | Unit, integration and JavaScript tests |
+| `assets/screenshots/` | The pictures in this README |
 
 Every engine sits behind an abstract base class with a registry, so swapping
 a recogniser, a voice or the model endpoint is a config change. The front end
