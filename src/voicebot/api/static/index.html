@@ -4,18 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Voice Banking</title>
-<meta name="description" content="A speech-to-speech banking assistant: Whisper transcribes, a language model answers through tools, and every figure it speaks comes from the database.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%2327847E'/%3E%3Cpath d='M16 7a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0v-6a3 3 0 0 0-3-3zm7 9v1a7 7 0 0 1-14 0v-1' stroke='%23fff' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<meta name="description" content="A speech-to-speech banking assistant in English and Urdu: a language model answers through tools, and every figure it speaks comes from the database.">
+<meta name="theme-color" content="#0C0E22">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%237C6CFF'/%3E%3Cpath d='M16 7a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0v-6a3 3 0 0 0-3-3zm7 9v1a7 7 0 0 1-14 0v-1' stroke='%23fff' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Noto+Nastaliq+Urdu:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <!-- One stylesheet per thing on the screen, in the order the cascade
      expects: the ground first, then each screen, then the dialogues that
      sit above all of them. -->
 <link rel="stylesheet" href="base.css">
 <link rel="stylesheet" href="ledger.css">
 <link rel="stylesheet" href="conversation.css">
-<link rel="stylesheet" href="dock.css">
+<link rel="stylesheet" href="stage.css">
 <link rel="stylesheet" href="statement.css">
 <link rel="stylesheet" href="cards.css">
 <link rel="stylesheet" href="monthly.css">
@@ -45,11 +46,12 @@
 
 <main class="views" id="views">
 
-  <!-- Assistant: the conversation, and the balances it talks about. -->
+  <!-- Assistant, in three columns: the money on the left, the voice in the
+       middle, the conversation on the right. -->
   <section class="view view--assistant" id="viewAssistant">
     <aside class="ledger" aria-label="Your accounts">
       <section class="block">
-        <h2 class="block__title">Accounts</h2>
+        <h2 class="block__title">Balance</h2>
         <div class="accounts" id="accounts">
           <div class="account account--waiting">
             <span class="account__name">—</span>
@@ -64,58 +66,54 @@
           <p class="block__empty">Loading…</p>
         </div>
       </section>
-
-      <button class="reset" id="resetButton" type="button">New conversation</button>
     </aside>
 
+    <!-- The voice: one large button that shows, by its light, whether the
+         bot is listening, hearing you, thinking or speaking. -->
+    <section class="stage" aria-label="Voice">
+      <button class="mic" id="micButton" type="button" data-state="idle" aria-label="Start a conversation">
+        <span class="mic__halo" aria-hidden="true"></span>
+        <span class="mic__ring" aria-hidden="true"></span>
+        <span class="mic__face" aria-hidden="true">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>
+          </svg>
+        </span>
+      </button>
+
+      <div class="status" aria-live="polite">
+        <p class="status__label" id="statusLabel">Ready</p>
+        <p class="status__hint" id="statusHint">Tap the microphone to start a conversation</p>
+      </div>
+      <div class="level" aria-hidden="true"><span class="level__fill" id="levelFill"></span></div>
+    </section>
+
     <section class="talk" aria-label="Conversation">
+      <header class="talk__top">
+        <h2 class="talk__title">Conversation</h2>
+        <button class="reset" id="resetButton" type="button">New conversation</button>
+      </header>
+
       <div class="conversation" id="conversation" tabindex="-1">
         <div class="empty" id="empty">
-          <span class="empty__icon" aria-hidden="true">
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>
-            </svg>
-          </span>
-          <p class="empty__text">Press the microphone and ask about a balance, a transfer, or a bill.</p>
+          <p class="empty__text">Ask about a balance, a transfer, or a bill. What you say and what the bot answers appear here.</p>
         </div>
       </div>
 
-    <!-- Part of the conversation card, under the messages: the confirmation
-         and the microphone belong to the exchange above them, and sit in the
-         same column rather than across the window. -->
-    <div class="confirm" id="confirm" hidden>
-      <p class="confirm__text">This moves money. Say yes, or choose below.</p>
-      <div class="confirm__buttons">
-        <button class="button button--go" id="confirmYes" type="button">Yes, confirm</button>
-        <button class="button button--stop" id="confirmNo" type="button">Cancel</button>
-      </div>
-    </div>
-
-    <div class="dock">
-      <div class="dock__row">
-        <button class="mic" id="micButton" type="button" data-state="idle" aria-label="Start a conversation">
-          <span class="mic__ring" aria-hidden="true"></span>
-          <span class="mic__face" aria-hidden="true">
-            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round">
-              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>
-            </svg>
-          </span>
-        </button>
-
-        <div class="status">
-          <p class="status__label" id="statusLabel">Ready</p>
-          <p class="status__hint" id="statusHint">Tap the microphone to start a conversation</p>
-          <div class="level" aria-hidden="true"><span class="level__fill" id="levelFill"></span></div>
+      <!-- Under the messages: what it asks about is the exchange above it. -->
+      <div class="confirm" id="confirm" hidden>
+        <p class="confirm__text">This moves money. Say yes, or choose below.</p>
+        <div class="confirm__buttons">
+          <button class="button button--go" id="confirmYes" type="button">Yes, confirm</button>
+          <button class="button button--stop" id="confirmNo" type="button">Cancel</button>
         </div>
       </div>
 
       <form class="say" id="sayForm" autocomplete="off">
         <label class="say__label" for="sayInput">Type instead</label>
-        <input class="say__input" id="sayInput" type="text" dir="auto" placeholder="what is my checking balance">
-        <button class="button button--quiet" type="submit">Send</button>
+        <input class="say__input" id="sayInput" type="text" dir="auto" placeholder="What is my checking balance?">
+        <button class="button button--go" type="submit">Send</button>
       </form>
-    </div>
-
     </section>
   </section>
 

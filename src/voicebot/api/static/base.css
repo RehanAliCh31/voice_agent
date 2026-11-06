@@ -6,57 +6,73 @@
 
 /* Voice Banking — the interface.
  *
- * A retail banking look: the customer's money is on screen before they say
- * anything, and it moves as they speak. The conversation sits beside the
- * accounts rather than replacing them, so what the bot is talking about is
- * always visible.
+ * Dark, and lit by three colours that blend into each other: teal, violet
+ * and magenta. The voice in the middle of the assistant screen is where
+ * they meet; everywhere else they stay in the background, so the figures
+ * keep the contrast.
  *
- * One palette, defined once below. Nothing anywhere else uses a literal
- * colour, so a change here changes the whole page.
+ * The older token names (--paper, --card, --brand ...) are kept, so the
+ * screens that use them follow the new palette without being rewritten.
  */
 
 :root {
-  /* paper and ink */
-  --paper: #F6F4EF;
-  --card: #FFFFFF;
-  --ink: #1A1917;
-  --ink-soft: #5F5A50;
-  --ink-faint: #8E8679;
-  --line: #E7E2D8;
-  --line-soft: #F0ECE4;
+  /* the three colours, and their blend */
+  --teal: #2DD4BF;
+  --violet: #7C6CFF;
+  --magenta: #E255A8;
+  --mix: linear-gradient(115deg, var(--teal), var(--violet) 52%, var(--magenta));
+  /* the same blend, deep enough for white text on it */
+  --mix-deep: linear-gradient(115deg, #0E8A7E, #5444D8 52%, #A8357A);
 
-  /* the bank's own colour */
-  --brand: #1C6F6A;
-  --brand-bright: #27847E;
-  --brand-wash: #E3EFEE;
-  --brand-deep: #14504C;
+  /* night and ink */
+  --night: #0C0E22;
+  --paper: #10132D;
+  --card: #161939;
+  --glass: rgba(22, 25, 57, 0.72);
+  --ink: #ECECFB;
+  --ink-soft: #B0B2D8;
+  --ink-faint: #7D80AA;
+  --line: #282C57;
+  --line-soft: #1D2148;
+
+  /* the bank's own colour: violet, with teal for what has moved */
+  --brand: #7C6CFF;
+  --brand-bright: #2DD4BF;
+  --brand-wash: rgba(124, 108, 255, 0.16);
+  --brand-deep: #C9C1FF;
 
   /* states */
-  --warn: #A96F22;
-  --warn-wash: #FBF2E4;
-  --bad: #A3402F;
-  --bad-wash: #FBEDEA;
+  --warn: #F2B661;
+  --warn-wash: rgba(242, 182, 97, 0.13);
+  --bad: #FF7088;
+  --bad-wash: rgba(255, 112, 136, 0.13);
 
-  --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Manrope has no Urdu letters, so Urdu falls through to Nastaliq: the
+     script Urdu is read in, rather than whatever the system has. */
+  --sans: "Manrope", "Noto Nastaliq Urdu", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
 
-  --radius: 14px;
-  --radius-sm: 10px;
-  --shadow-card: 0 2px 8px -4px rgba(60, 50, 30, 0.18);
-  --shadow-lift: 0 8px 26px -14px rgba(60, 50, 30, 0.38);
+  --radius: 16px;
+  --radius-sm: 11px;
+  --shadow-card: 0 14px 34px -22px rgba(0, 0, 0, 0.9);
+  --shadow-lift: 0 22px 48px -22px rgba(0, 0, 0, 0.95);
 
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
 
 html, body { height: 100%; }
 
-/* A column, so the dock and any pending confirmation stay put while the
-   screen between them changes. Only `.views` scrolls. */
+/* A column, so the header stays put while the screen under it changes.
+   Only `.views` scrolls. The three colours glow from three corners. */
 body {
   margin: 0;
-  background: var(--paper);
+  background:
+    radial-gradient(55% 50% at 0% 0%, rgba(45, 212, 191, 0.15), transparent 62%),
+    radial-gradient(50% 50% at 100% 0%, rgba(226, 85, 168, 0.15), transparent 62%),
+    radial-gradient(70% 60% at 50% 115%, rgba(124, 108, 255, 0.24), transparent 64%),
+    var(--night);
   color: var(--ink);
   font-family: var(--sans);
   font-size: 15px;
@@ -78,8 +94,8 @@ body {
 }
 .skip:focus { left: 0; }
 
-:where(button, input, [tabindex]):focus-visible {
-  outline: 2px solid var(--brand);
+:where(button, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--teal);
   outline-offset: 2px;
 }
 
@@ -92,8 +108,9 @@ body {
   gap: 16px;
   flex-wrap: wrap;
   padding: 14px 24px;
-  background: var(--card);
+  background: rgba(12, 14, 34, 0.6);
   border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(12px);
 }
 
 .brand { display: flex; align-items: center; gap: 11px; }
@@ -102,21 +119,17 @@ body {
   width: 32px;
   height: 32px;
   border-radius: var(--radius-sm);
-  background: linear-gradient(145deg, var(--brand-bright), var(--brand-deep));
+  background: var(--mix-deep);
   display: grid;
   place-items: center;
-  box-shadow: 0 4px 12px -5px rgba(20, 80, 76, 0.65);
 }
 
-.brand__name { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; }
+.brand__name { font-weight: 700; font-size: 16px; letter-spacing: -0.01em; }
 
-/* Which engines are loaded was useful while building and is noise to a
-   customer. Whether the server is reachable at all still matters, and the
-   dock already says so, so nothing was lost by taking the chips out. */
 .screens {
   display: flex;
   gap: 4px;
-  padding: 3px;
+  padding: 4px;
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -125,7 +138,7 @@ body {
 .screens__tab {
   font: inherit;
   font-size: 13.5px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--ink-soft);
   background: none;
   border: 0;
@@ -139,14 +152,8 @@ body {
 .screens__tab:hover { color: var(--ink); }
 
 .screens__tab[aria-current="page"] {
-  background: var(--brand);
+  background: var(--mix-deep);
   color: #fff;
-  box-shadow: var(--shadow-card);
-}
-
-.screens__tab:focus-visible {
-  outline: 2px solid var(--brand-bright);
-  outline-offset: 2px;
 }
 
 /* --- the screens ---------------------------------------------------------- */
@@ -159,28 +166,53 @@ body {
 }
 
 .view {
-  max-width: 1320px;
+  max-width: 1440px;
   margin: 0 auto;
 }
 
 .view[hidden] { display: none; }
 
-/* Assistant: the ledger beside the conversation. */
+/* Assistant: the money, the voice, the conversation. The page fills the
+   window and the conversation scrolls inside its own column, so the voice
+   never scrolls out of sight. */
 .view--assistant {
   display: grid;
-  grid-template-columns: 310px minmax(0, 1fr);
+  grid-template-columns: 290px minmax(280px, 0.9fr) minmax(360px, 1.15fr);
+  grid-template-areas: "ledger stage talk";
   gap: 18px;
-  align-items: start;
+  height: 100%;
+  min-height: 560px;
 }
 
-@media (max-width: 920px) {
-  .view--assistant { grid-template-columns: minmax(0, 1fr); }
+.ledger { grid-area: ledger; }
+.stage { grid-area: stage; }
+.talk { grid-area: talk; }
+
+/* Narrower: the voice above the money, the conversation beside both. */
+@media (max-width: 1120px) {
+  .view--assistant {
+    grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "stage talk"
+      "ledger talk";
+  }
+}
+
+/* A phone: one column, the voice first, the money last. */
+@media (max-width: 760px) {
+  .view--assistant {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-template-areas: "stage" "talk" "ledger";
+    height: auto;
+  }
 }
 
 @media (max-width: 560px) {
   .top { padding: 12px 16px; }
   .views { padding: 14px 16px 20px; }
-  .screens__tab { padding: 7px 12px; font-size: 13px; }
+  .screens__tab { padding: 7px 11px; font-size: 13px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

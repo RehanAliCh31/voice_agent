@@ -1,19 +1,23 @@
-/* The accounts and bills beside the conversation.
+/* The balance and bills, in the left column.
 
-   It sits next to what is being said so a figure the bot speaks can be
-   read at the same time, and the account whose balance just moved is
-   marked. */
+   Beside the conversation so a figure the bot speaks can be read at the
+   same time, and the account whose balance just moved is marked. */
 
-.ledger { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.ledger {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
 
 .block { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 
 .block__title {
   margin: 0;
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
   color: var(--ink-faint);
 }
 
@@ -22,28 +26,41 @@
 .accounts { display: flex; flex-direction: column; gap: 10px; }
 
 .account {
-  background: var(--card);
+  position: relative;
+  background: var(--glass);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 15px 16px;
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
   gap: 4px;
   box-shadow: var(--shadow-card);
+  backdrop-filter: blur(14px);
   min-width: 0;
+  overflow: hidden;
+}
+
+/* A thin line of the three colours along the top: the one decoration an
+   account card has. */
+.account::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--mix);
+  opacity: 0.7;
 }
 
 .account__name {
-  font-size: 11.5px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  text-transform: capitalize;
 }
 
 .account__amount {
-  font-size: 26px;
-  font-weight: 600;
+  font-size: 28px;
+  font-weight: 700;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
@@ -53,65 +70,49 @@
 /* The account a turn just changed. Marked rather than merely updated, so the
    customer can see which figure moved without comparing two numbers. */
 .account--moved {
-  border-color: var(--brand-bright);
-  box-shadow: 0 0 0 3px var(--brand-wash), var(--shadow-lift);
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.18), var(--shadow-lift);
 }
 
 .account__delta {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--brand);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--teal);
   font-variant-numeric: tabular-nums;
 }
 
-/* Stacked, the two account cards are the tallest thing on the page and push
-   the microphone off a phone screen. Side by side they keep the glance at the
-   money without burying the control that starts a turn. These must stay below
-   the rules they override: at equal specificity the later rule wins, media
-   query or not. */
-@media (max-width: 920px) {
+/* Narrower than the three columns, the two accounts sit side by side so they
+   do not push the conversation down. These must stay below the rules they
+   override: at equal specificity the later rule wins, media query or not. */
+@media (max-width: 1120px) {
   .accounts { flex-direction: row; }
-  .account { flex: 1 1 0; padding: 12px 13px; }
-  .account__amount { font-size: 21px; }
+  .account { flex: 1 1 0; padding: 13px 14px; }
+  .account__amount { font-size: 22px; }
 }
 
 .bills {
-  background: var(--card);
+  background: var(--glass);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 14px 18px;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 10px;
   box-shadow: var(--shadow-card);
+  backdrop-filter: blur(14px);
   min-width: 0;
 }
 
 .bill { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 14px; }
-.bill__name { text-transform: capitalize; min-width: 0; }
-.bill__amount { font-variant-numeric: tabular-nums; font-weight: 500; flex-shrink: 0; }
+.bill__name { text-transform: capitalize; min-width: 0; color: var(--ink-soft); }
+.bill__amount { font-variant-numeric: tabular-nums; font-weight: 600; flex-shrink: 0; }
 
 .bill--paid .bill__name { color: var(--ink-faint); }
-.bill--paid .bill__amount { color: var(--brand); font-weight: 600; }
+.bill--paid .bill__amount { color: var(--teal); }
 
 .bill__paid {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--brand);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--teal);
   flex-shrink: 0;
 }
-
-.reset {
-  appearance: none;
-  background: none;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  color: var(--ink-soft);
-  font-family: var(--sans);
-  font-size: 13.5px;
-  padding: 9px 14px;
-  cursor: pointer;
-}
-.reset:hover { border-color: var(--ink-faint); color: var(--ink); }

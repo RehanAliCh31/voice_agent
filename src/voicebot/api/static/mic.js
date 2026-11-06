@@ -78,6 +78,7 @@ function onLiveState(name) {
     state.route = null;
     el.micButton.setAttribute("aria-label", "Start a conversation");
     el.levelFill.style.width = "0%";
+    el.micButton.style.setProperty("--level", "0");
     hideThinking();
     idle();
     return;
@@ -147,7 +148,10 @@ function onLiveEvent(event) {
 }
 
 function onLiveLevel(level) {
-  el.levelFill.style.width = Math.min(100, Math.round(level * 400)) + "%";
+  var shown = Math.min(1, level * 4);
+  el.levelFill.style.width = Math.round(shown * 100) + "%";
+  // The glow behind the microphone grows with the voice it hears.
+  el.micButton.style.setProperty("--level", shown.toFixed(3));
 }
 
 // Each in the conversation's language, said in the bot's own recorded voice.

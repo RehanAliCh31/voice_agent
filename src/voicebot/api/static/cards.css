@@ -43,7 +43,7 @@
   border-radius: 18px;
   padding: 22px;
   color: #fff;
-  background: linear-gradient(135deg, var(--brand-deep), var(--brand-bright));
+  background: var(--mix-deep);
   box-shadow: var(--shadow-lift);
   display: flex;
   flex-direction: column;
@@ -165,7 +165,7 @@
   width: 44px;
   height: 25px;
   border-radius: 999px;
-  background: #CFCBC2;
+  background: var(--line);
   position: relative;
   flex-shrink: 0;
 }

@@ -1,0 +1,136 @@
+/* The voice, in the middle column: one large button, its status, and how
+   loud the microphone hears you.
+
+   The button is where the three colours meet. A ring of them turns, and a
+   glow of them behind it shows the state: dim while waiting, brighter when
+   listening, full and moving with your voice while it hears you, the ring
+   racing while it thinks, and breathing while it speaks. */
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  min-width: 0;
+  padding: 24px 12px;
+  text-align: center;
+}
+
+.mic {
+  appearance: none;
+  position: relative;
+  width: 184px;
+  height: 184px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  /* Set by the page from the microphone's level, 0 to 1. */
+  --level: 0;
+}
+
+.mic__halo {
+  position: absolute;
+  inset: -34px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--teal), var(--violet), var(--magenta), var(--teal));
+  filter: blur(30px);
+  opacity: 0.32;
+  scale: calc(0.92 + var(--level) * 0.7);
+  transition: opacity 0.4s, scale 0.08s linear;
+  animation: turn 18s linear infinite;
+}
+
+.mic__ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--teal), var(--violet), var(--magenta), var(--teal));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+  animation: turn 18s linear infinite;
+}
+
+.mic__face {
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 35% 30%, #272B5E, #12153A 72%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  transition: transform 0.2s;
+}
+.mic:hover .mic__face { transform: scale(1.03); }
+.mic:focus-visible { outline-offset: 10px; }
+
+.mic[data-state="listening"] .mic__halo { opacity: 0.55; animation-duration: 10s; }
+.mic[data-state="listening"] .mic__ring { animation-duration: 8s; }
+
+.mic[data-state="hearing"] .mic__halo { opacity: 0.9; animation-duration: 4s; }
+.mic[data-state="hearing"] .mic__ring { animation-duration: 3s; }
+
+.mic[data-state="thinking"] .mic__halo { opacity: 0.45; }
+.mic[data-state="thinking"] .mic__ring { animation-duration: 1.3s; }
+
+.mic[data-state="speaking"] .mic__halo { animation: turn 6s linear infinite, breathe 1.6s ease-in-out infinite; }
+.mic[data-state="speaking"] .mic__ring { animation-duration: 5s; }
+
+@keyframes turn { to { rotate: 360deg; } }
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.9; }
+}
+
+.status { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 32ch; }
+
+.status__label {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Busy: the label takes the three colours, as the button does. */
+.status__label[data-tone="busy"] {
+  background: var(--mix);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.status__label[data-tone="done"] { color: var(--ink); }
+.status__label[data-tone="error"] { color: var(--bad); }
+
+.status__hint { margin: 0; font-size: 14px; color: var(--ink-faint); }
+
+.level {
+  width: min(220px, 80%);
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+
+.level__fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--mix);
+  transition: width 0.06s linear;
+}
+
+/* Narrower, the voice sits above the money and needs less height. */
+@media (max-width: 1120px) {
+  .stage { gap: 18px; padding: 18px 12px; }
+  .mic { width: 136px; height: 136px; }
+  .mic__halo { inset: -24px; }
+}
+
+@media (max-width: 760px) {
+  .mic { width: 112px; height: 112px; }
+  .status__label { font-size: 19px; }
+}

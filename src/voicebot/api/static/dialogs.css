@@ -35,7 +35,7 @@
 .ask > .details__warn,
 .ask > .ask__buttons { flex-shrink: 0; }
 
-.ask::backdrop { background: rgba(26, 25, 23, 0.42); }
+.ask::backdrop { background: rgba(5, 6, 18, 0.72); backdrop-filter: blur(3px); }
 
 .ask__title {
   margin: 0 0 14px;

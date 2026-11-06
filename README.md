@@ -196,8 +196,11 @@ words and answered in Urdu script, which is what the Urdu voice reads. It
 answers questions about the world from what it knows, in one or two short
 sentences, and explains the bank from its data.
 
-The page has four screens — Assistant, Transactions, Cards and Monthly — and
-the ledger of balances and bills beside the conversation. A turn returns the
+The page has four screens — Assistant, Transactions, Cards and Monthly — in a
+dark theme lit by teal, violet and magenta. The Assistant screen has three
+columns: the balance and bills on the left, the voice in the middle (one
+large button whose light shows listening, hearing you, thinking or
+speaking), and the conversation on the right. Urdu is set in Nastaliq. A turn returns the
 reply, every tool call with its arguments and result, whether a guard fired,
 and per-stage timings.
 
